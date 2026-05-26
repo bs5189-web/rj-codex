@@ -32,16 +32,79 @@ test("renderer wires thread sorting and robust DOM adapters", () => {
   assert.match(source, /function messageAuthorOf\(/);
   assert.match(source, /data-app-action-sidebar-thread-row/);
   assert.match(source, /data-app-action-sidebar-thread-title/);
-  assert.match(source, /data-app-action-sidebar-project-row/);
-  assert.match(source, /data-app-action-sidebar-project-label/);
   assert.match(source, /data-testid\*='conversation-turn'/);
-  assert.match(source, /data-testid\*='project'/);
   assert.match(source, /data-turn-key/);
   assert.match(source, /data-content-search-turn-key/);
   assert.match(source, /function threadScrollElement\(/);
   assert.match(source, /data-app-action-timeline-scroll/);
   assert.match(source, /RUIZHI_SETTINGS_VERSION_FIX_V1/);
   assert.match(source, /function installSettingsVersionFix\(/);
+});
+
+test("page enhance menu follows Codex surface and text tokens", () => {
+  for (const scriptPath of [
+    "resources/renderer/ruizhi-page-enhance.js",
+    "overrides/windows-app/asar/.vite/build/preload.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /#ruizhi-page-enhance-menu \[data-trigger\]/, `${scriptPath} should style the trigger explicitly`);
+    assert.match(source, /background:var\(--token-main-surface-primary,#fff/, `${scriptPath} should use Codex surface tokens with a light fallback`);
+    assert.match(source, /color:var\(--token-text-primary,var\(--token-foreground,#0d0d0d\)\)/, `${scriptPath} should use Codex readable text tokens`);
+    assert.match(source, /input\[type="checkbox"\]\{accent-color:var\(--token-text-link-foreground,#1f6feb\)/, `${scriptPath} should use Codex link accent for checks`);
+    assert.doesNotMatch(source, /#ruizhi-page-enhance-menu button\{[^}]*#202123/, `${scriptPath} should not force the enhance menu into a dark fallback`);
+    assert.doesNotMatch(source, /#ruizhi-page-enhance-menu \[data-panel\]\{[^}]*#202123/, `${scriptPath} should not force the enhance panel into a dark fallback`);
+  }
+});
+
+test("session action click guard does not block action handlers", () => {
+  for (const scriptPath of [
+    "resources/renderer/ruizhi-page-enhance.js",
+    "overrides/windows-app/asar/.vite/build/preload.js",
+  ]) {
+    const source = read(scriptPath);
+    const start = source.indexOf("function actionButton(");
+    assert.notEqual(start, -1, `${scriptPath} should define actionButton`);
+    const end = source.indexOf("async function exportMarkdown", start);
+    assert.notEqual(end, -1, `${scriptPath} should define exportMarkdown after actionButton`);
+    const actionButtonSource = source.slice(start, end);
+
+    assert.match(actionButtonSource, /event\.preventDefault\(\)/, `${scriptPath} should keep sidebar rows from navigating when action buttons are clicked`);
+    assert.match(actionButtonSource, /event\.stopPropagation\(\)/, `${scriptPath} should keep action clicks local to the injected button`);
+    assert.doesNotMatch(actionButtonSource, /stopImmediatePropagation/, `${scriptPath} should not suppress the action button's own click handler`);
+    assert.match(actionButtonSource, /button\.addEventListener\("click", handler, true\)/, `${scriptPath} should still invoke the action handler on click`);
+  }
+});
+
+test("session actions only expose compact Markdown export", () => {
+  for (const scriptPath of [
+    "resources/renderer/ruizhi-page-enhance.js",
+    "overrides/windows-app/asar/.vite/build/preload.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /sessionDelete:\s*false/, `${scriptPath} should retire session delete by default`);
+    assert.match(source, /projectMove:\s*false/, `${scriptPath} should retire session migration by default`);
+    assert.match(source, /\.ruizhi-session-actions button\{width:20px;height:20px/, `${scriptPath} should use a smaller export button`);
+    assert.match(source, /group\.appendChild\(actionButton\("导出", "⇩", \(\) => exportMarkdown\(ref\)\)\)/, `${scriptPath} should keep Markdown export`);
+    assert.doesNotMatch(source, />删除会话<input type="checkbox" data-feature="sessionDelete"/, `${scriptPath} should not show the delete toggle`);
+    assert.doesNotMatch(source, />项目移动<input type="checkbox" data-feature="projectMove"/, `${scriptPath} should not show the migration toggle`);
+    assert.doesNotMatch(source, /openProjectMove\(ref\)/, `${scriptPath} should not append migration actions`);
+    assert.doesNotMatch(source, /deleteSession\(ref\)/, `${scriptPath} should not append delete actions`);
+    assert.doesNotMatch(source, /function openProjectMove\(/, `${scriptPath} should not include the retired migration overlay`);
+  }
+});
+
+test("session export action leaves room for native pin and timestamp controls", () => {
+  for (const scriptPath of [
+    "resources/renderer/ruizhi-page-enhance.js",
+    "overrides/windows-app/asar/.vite/build/preload.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /\.ruizhi-session-actions\{[^}]*right:72px/, `${scriptPath} should move export left of native pin and time controls`);
+    assert.match(source, /\.ruizhi-session-actions\{[^}]*z-index:1/, `${scriptPath} should not overlay native row controls with a high z-index`);
+    assert.match(source, /pointer-events:none/, `${scriptPath} should keep the injected action layer from intercepting native controls`);
+    assert.match(source, /\.ruizhi-session-actions button\{[^}]*pointer-events:auto/, `${scriptPath} should keep the export button itself clickable`);
+    assert.doesNotMatch(source, /right:28px/, `${scriptPath} should not place export in the native control area`);
+  }
 });
 
 test("packaging preload hides update error text instead of rendering 更新失败", () => {
@@ -64,6 +127,35 @@ test("preload update integration leaves the native settings menu item untouched"
     assert.doesNotMatch(source, /ruizhi-update-status/, `${scriptPath} should not append update status into Settings`);
     assert.doesNotMatch(source, /设置\|Settings\|Preferences\|setting/, `${scriptPath} should not scan Settings labels`);
   }
+});
+
+test("first launch skips the APIKey prompt when Codex config already exists", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "overrides/windows-app/asar/.vite/build/bootstrap.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /function hasExistingCodexConfig\(/, `${scriptPath} should detect existing ~/.codex configuration`);
+    assert.match(source, /config\.toml/, `${scriptPath} should treat config.toml as an existing Codex configuration marker`);
+    assert.match(source, /RUIZHI_EXISTING_CODEX_CONFIG/, `${scriptPath} should preserve whether config.toml existed before Ruizhi writes defaults`);
+    assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from an API key or Codex config`);
+    assert.match(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} should skip the APIKey prompt when Codex config exists`);
+  }
+
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "overrides/windows-app/asar/.vite/build/preload.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /ruizhi:auth:get-sync/, `${scriptPath} should expose cached auth status before the renderer mounts`);
+    assert.match(source, /getCached:\(\)=>cachedAuthStatus/, `${scriptPath} should let the login bundle read cached auth status synchronously`);
+  }
+
+  const loginRoute = read("overrides/windows-app/asar/webview/assets/login-route-CUyUF9yR.js");
+  assert.match(loginRoute, /window\.ruizhiDesktop\?\.auth\?\.getCached\?\.\(\)\?\.configured!==!0/);
+  assert.doesNotMatch(loginRoute, /\[H,U\]=\(0,G\.useState\)\(!0\)/);
 });
 
 test("page enhance preload loads the renderer module without CSP-blocked eval or inline script injection", () => {
@@ -104,7 +196,7 @@ test("page enhance bootstrap carries the Ruizhi app version for settings display
   }
 });
 
-test("enhance service returns appVersion so renderer does not lose Ruizhi settings version", () => {
+test("enhance service returns appVersion and retires destructive session routes", async () => {
   const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "ruizhi-enhance-"));
   try {
     const { createRuizhiEnhanceService } = require(path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs"));
@@ -120,7 +212,14 @@ test("enhance service returns appVersion so renderer does not lose Ruizhi settin
     });
 
     assert.equal(service.settings().appVersion, "0.1.24");
-    assert.equal(service.writeSettings({ features: { timeline: true } }).appVersion, "0.1.24");
+    assert.equal(service.settings().features.sessionDelete, false);
+    assert.equal(service.settings().features.projectMove, false);
+    const nextSettings = service.writeSettings({ features: { timeline: true, sessionDelete: true, projectMove: true } });
+    assert.equal(nextSettings.appVersion, "0.1.24");
+    assert.equal(nextSettings.features.sessionDelete, false);
+    assert.equal(nextSettings.features.projectMove, false);
+    assert.equal((await service.call("/delete", { session_id: "thread-1" })).status, "disabled");
+    assert.equal((await service.call("/move-thread-workspace", { session_id: "thread-1", target_cwd: "/tmp" })).status, "disabled");
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
@@ -166,7 +265,7 @@ test("macOS application menu keeps native Settings and Automations actions visib
   assert.match(source, /enabled=!0/);
 });
 
-test("packaging opens Codex native webview gates for sidebar Automations and profile Settings", () => {
+test("packaging opens Codex native settings gates including in-app Browser", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -176,6 +275,137 @@ test("packaging opens Codex native webview gates for sidebar Automations and pro
     assert.match(source, /ruizhiNativeFeatureGateValue/, `${scriptPath} should patch native feature gates`);
     assert.match(source, /3075919032/, `${scriptPath} should keep Codex native Automations nav visible`);
     assert.match(source, /4166894088/, `${scriptPath} should keep Codex native profile Settings visible`);
+    assert.match(source, /410262010/, `${scriptPath} should make in-app Browser controls available`);
+    assert.doesNotMatch(source, /1506311413/, `${scriptPath} should leave Computer Use controls to Codex defaults`);
+    assert.doesNotMatch(source, /410065390/, `${scriptPath} should leave Google Chrome controls to Codex defaults`);
     assert.doesNotMatch(source, /querySelectorAll\([^)]*(自动化|Automations|settingsPage|general-settings)/, `${scriptPath} should not fake native sidebar/profile buttons with DOM insertion`);
+  }
+});
+
+test("packaging enables Codex native Browser desktop availability without Browser runtime patches", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchNativeBrowserDesktopFeatureAvailability/, `${scriptPath} should patch desktop Browser availability`);
+    assert.match(source, /ruizhiNativeBrowserDesktopFeatureAvailability/, `${scriptPath} should keep the Browser availability patch scoped`);
+    assert.match(source, /browserPane:!0/, `${scriptPath} should allow the native Browser pane`);
+    assert.match(source, /inAppBrowserUse:!0/, `${scriptPath} should enable the native in-app Browser backend`);
+    assert.match(source, /inAppBrowserUseAllowed:!0/, `${scriptPath} should allow in-app Browser use`);
+    assert.doesNotMatch(source, /ruizhiBrowserSettingsAvailability/, `${scriptPath} should not override Browser settings availability`);
+    assert.doesNotMatch(source, /patchBrowserDesktopFeaturePayload/, `${scriptPath} should not patch Browser feature payloads`);
+    assert.doesNotMatch(source, /patchBrowserSettingsAvailabilitySource/, `${scriptPath} should not patch Browser settings availability`);
+  }
+
+  const mainSource = read("overrides/windows-app/asar/.vite/build/main-Bnxe1qAn.js");
+  assert.match(mainSource, /ruizhiNativeBrowserDesktopFeatureAvailability/, "Windows main override should enable native Browser desktop availability");
+  assert.match(mainSource, /browserPane:!0/, "Windows main override should allow the native Browser pane");
+  assert.match(mainSource, /inAppBrowserUse:!0/, "Windows main override should enable the native in-app Browser backend");
+  assert.match(mainSource, /inAppBrowserUseAllowed:!0/, "Windows main override should allow in-app Browser use");
+
+  for (const assetPath of [
+    "overrides/windows-app/asar/webview/assets/browser-use-settings-CJBdA4SJ.js",
+    "overrides/windows-app/asar/webview/assets/app-main-DeAkLLF9.js",
+  ]) {
+    const source = read(assetPath);
+    assert.doesNotMatch(source, /ruizhiBrowser(Settings|Feature)Availability/, `${assetPath} should not carry Browser unlock patches`);
+  }
+});
+
+test("packaging uses current OpenAI bundled plugin ids for Browser automation", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+    "overrides/windows-app/asar/.vite/build/bootstrap.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /\{\s*(?:"name"|name)\s*:\s*"browser"\s*,\s*(?:"path"|path)\s*:\s*"\.\/plugins\/browser"/, `${scriptPath} should bundle the current Browser plugin id`);
+    assert.match(source, /\{\s*(?:"name"|name)\s*:\s*"latex"\s*,\s*(?:"path"|path)\s*:\s*"\.\/plugins\/latex"/, `${scriptPath} should bundle the current LaTeX plugin id`);
+    assert.doesNotMatch(source, /\{\s*(?:"name"|name)\s*:\s*"browser-use"\s*,\s*(?:"path"|path)\s*:\s*"\.\/plugins\/browser-use"/, `${scriptPath} should not generate the retired browser-use plugin id`);
+    assert.doesNotMatch(source, /\{\s*(?:"name"|name)\s*:\s*"latex-tectonic"\s*,\s*(?:"path"|path)\s*:\s*"\.\/plugins\/latex-tectonic"/, `${scriptPath} should not generate the retired latex-tectonic plugin id`);
+  }
+});
+
+test("packaging enables bundled Browser plugins in managed defaults", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /for \(const plugin of openAIBundledPluginDefinitions\)/, `${scriptPath} should enable all bundled OpenAI plugins by default`);
+    assert.match(source, /\[plugins\."\$\{plugin\.name\}@openai-bundled"\]/, `${scriptPath} should write plugin enablement blocks`);
+    assert.match(source, /enabled = true/, `${scriptPath} should mark bundled plugins enabled`);
+  }
+
+  const bootstrapSource = read("overrides/windows-app/asar/.vite/build/bootstrap.js");
+  assert.ok(bootstrapSource.includes('[plugins.\\"browser@openai-bundled\\"]'), "bootstrap should enable the native Browser plugin id");
+  assert.ok(bootstrapSource.includes('[plugins.\\"chrome@openai-bundled\\"]'), "bootstrap should enable the native Chrome plugin id");
+  assert.ok(bootstrapSource.includes('[plugins.\\"latex@openai-bundled\\"]'), "bootstrap should enable the native LaTeX plugin id");
+});
+
+test("bootstrap injects managed Browser defaults into existing unmanaged Codex config", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "overrides/windows-app/asar/.vite/build/bootstrap.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /stripManagedConfigConflicts/, `${scriptPath} should remove stale managed sections before injecting defaults`);
+    assert.match(source, /managedSectionNames/, `${scriptPath} should know which managed TOML sections can conflict`);
+    assert.match(source, /names\.push\("marketplaces\."\+spec\.name\)/, `${scriptPath} should replace stale managed marketplace config`);
+    assert.match(source, /plugin\.name\+"@openai-bundled/, `${scriptPath} should replace stale bundled plugin config`);
+    assert.match(source, /const rest=stripManagedConfigConflicts\(existing\)/, `${scriptPath} should strip stale managed defaults from unmanaged configs`);
+    assert.match(source, /return withFinalNewline\(\[managedBlock\.trimEnd\(\), rest\.trimStart\(\)\]\.filter\(Boolean\)\.join\("(?:\\\\n\\\\n|\\n\\n)"\)\)/, `${scriptPath} should prepend managed defaults to unmanaged configs`);
+    assert.doesNotMatch(source, /kept unmanaged config\.toml unchanged/, `${scriptPath} should not leave existing config.toml without managed Browser defaults`);
+  }
+});
+
+test("packaging updates Codex bundled Browser native-pipe trust only", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.doesNotMatch(source, /patchBrowserNativePipeStartup/, `${scriptPath} should not force Browser native pipe startup`);
+    assert.doesNotMatch(source, /patchOpenAIBundledBrowserRuntime/, `${scriptPath} should not patch bundled Browser runtime scripts`);
+    assert.match(source, /patchTrustedBrowserClientHashes/, `${scriptPath} should refresh Browser client trusted hashes`);
+    assert.doesNotMatch(source, /ruizhiIabSessionFallback/, `${scriptPath} should not inject Browser IAB session fallback logic`);
+  }
+
+  const overrideSource = read("scripts/windows-asar-overrides.mjs");
+  assert.doesNotMatch(overrideSource, /patchJsonFile\(path\.join\(pluginsRoot,\s*"browser"/, "Browser plugin.json should remain the official Codex file");
+  assert.doesNotMatch(overrideSource, /writeTranslatedOpenAIPluginSkill\(\s*path\.join\(pluginsRoot,\s*"browser"/, "Browser SKILL.md should remain the official Codex file");
+  assert.doesNotMatch(overrideSource, /const browserSkill = `# Browser/, "Browser skill previews should remain official");
+});
+
+test("packaging logs Browser native-pipe availability boundaries", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /ruizhiBrowserNativePipeLog/, `${scriptPath} should log Browser desktop availability input and output`);
+    const nativePipeLogger = scriptPath === "scripts/build-windows.mjs"
+      ? /patchBrowserNativePipeDiagnostics/
+      : /ruizhiBrowserNativePipeEnabled/;
+    assert.match(source, nativePipeLogger, `${scriptPath} should log Browser native pipe enable state`);
+  }
+});
+
+test("bootstrap refreshes cached bundled Browser runtime scripts on launch", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /copyPluginCacheFiles/, `${scriptPath} should refresh existing plugin cache files`);
+    assert.match(source, /runtimePluginNames=new Set\(\["browser","chrome"\]\)/, `${scriptPath} should refresh Browser runtime plugin caches`);
+    assert.match(source, /entry\.name==="scripts"&&runtimePluginNames\.has\(pluginName\)/, `${scriptPath} should copy scripts only for Browser runtimes`);
   }
 });

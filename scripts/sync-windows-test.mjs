@@ -205,7 +205,7 @@ async function syncWindowsTestApp() {
   log("解包官方 asar");
   extractAsar(officialAsarPath(), extractedDir);
   applyWindowsAsarOverrides(extractedDir, { log });
-  refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log });
+  refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log, resourcesDir: path.join(testAppRoot, "resources") });
   patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
   copyUpdaterRuntimeDependenciesTo(extractedDir, { log });
 

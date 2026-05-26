@@ -48,7 +48,7 @@
   "runtime": {
     "homeEnv": "RUIZHI_HOME",
     "defaultHomeDirName": ".codex",
-    "electronUserDataDirName": "Codex"
+    "electronUserDataDirName": "锐智"
   },
   "models": {
     "enabled": true,
@@ -109,9 +109,9 @@
       "menu": true,
       "pluginEntryUnlock": true,
       "forcePluginInstall": true,
-      "sessionDelete": true,
+      "sessionDelete": false,
       "markdownExport": true,
-      "projectMove": true,
+      "projectMove": false,
       "timeline": true,
       "threadScrollRestore": true,
       "threadSort": true,

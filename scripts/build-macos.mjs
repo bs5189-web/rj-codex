@@ -24,10 +24,11 @@ const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex"
 const imageGenerationConfig = config.imageGeneration ?? {};
 const modelBridgeConfig = config.modelBridge ?? {};
 const openAIBundledPluginDefinitions = [
-  { name: "browser-use", path: "./plugins/browser-use", category: "浏览器" },
-  { name: "chrome", path: "./plugins/chrome", category: "实验性" },
-  { name: "latex-tectonic", path: "./plugins/latex-tectonic", category: "研究" }
+  { name: "browser", path: "./plugins/browser", category: "Engineering" },
+  { name: "chrome", path: "./plugins/chrome", category: "Productivity" },
+  { name: "latex", path: "./plugins/latex", category: "Research" }
 ];
+const browserRuntimePluginNames = ["browser", "chrome"];
 
 const distDir = resolveProjectPath("dist");
 const macDistDir = resolveProjectPath(path.join("dist", "macos"));
@@ -298,9 +299,9 @@ function pageEnhanceFeatures() {
     menu: true,
     pluginEntryUnlock: true,
     forcePluginInstall: true,
-    sessionDelete: true,
+    sessionDelete: false,
     markdownExport: true,
-    projectMove: true,
+    projectMove: false,
     timeline: true,
     threadScrollRestore: true,
     threadSort: true,
@@ -580,6 +581,12 @@ function defaultConfigTomlLines(marketplaceSourceValues = {}) {
     lines.push("");
   }
 
+  for (const plugin of openAIBundledPluginDefinitions) {
+    lines.push(`[plugins."${plugin.name}@openai-bundled"]`);
+    lines.push("enabled = true");
+    lines.push("");
+  }
+
   return lines;
 }
 
@@ -748,7 +755,7 @@ function patchNativeWebviewFeatureGates() {
   if (!statsigFile) {
     throw new Error("Statsig webview gate 补丁目标不存在");
   }
-  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const source = fs.readFileSync(statsigFile, "utf8");
   if (source.includes("ruizhiNativeFeatureGateValue")) {
     log("已存在 Codex 原生 webview gate 补丁");
@@ -762,6 +769,193 @@ function patchNativeWebviewFeatureGates() {
   );
   fs.writeFileSync(statsigFile, patched, "utf8");
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
+}
+
+function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
+  if (source.includes("function ruizhiNativeBrowserDesktopFeatureAvailability(")) {
+    return source;
+  }
+
+  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const replacements = [
+    [
+      "function xe(e,{buildFlavor:n=t.O.resolve(),env:r=f.default.env,platform:i=f.default.platform}={}){let a=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.O.Dev?Se(r):null;return o==null?a:{...a,...o}}",
+      `${helper}function xe(e,{buildFlavor:n=t.O.resolve(),env:r=f.default.env,platform:i=f.default.platform}={}){let a=i===\`win32\`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.O.Dev?Se(r):null;return ruizhiNativeBrowserDesktopFeatureAvailability(o==null?a:{...a,...o})}`
+    ],
+    [
+      "function ve(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}",
+      `${helper}function ve(e,{env:t=process.env,platform:n=process.platform}={}){let r=n!==\`win32\`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==\`1\`?e:{...e,computerUse:!0,computerUseNodeRepl:!0};return ruizhiNativeBrowserDesktopFeatureAvailability(r)}`
+    ]
+  ];
+
+  for (const [from, to] of replacements) {
+    if (source.includes(from)) {
+      return source.replace(from, to);
+    }
+  }
+
+  throw new Error("补丁点不存在：Codex 原生 Browser 桌面能力");
+}
+
+function patchNativeBrowserDesktopFeatureAvailability() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchNativeBrowserDesktopFeatureAvailabilitySource(source);
+  if (patched === source) {
+    log(`已存在 Codex 原生 Browser 桌面能力补丁：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已打开 Codex 原生 Browser 桌面能力：${path.basename(mainFile)}`);
+}
+
+function patchBrowserNativePipeDiagnosticsSource(source) {
+  if (source.includes("ruizhiBrowserNativePipeEnabled")) {
+    return source;
+  }
+  const pattern = /function ([A-Za-z_$][\w$]*)\(\{setBrowserUseNativePipeEnabled:([A-Za-z_$][\w$]*)\}\)\{return\{setDesktopFeatureAvailability:([A-Za-z_$][\w$]*)=>\{\3\.inAppBrowserUse!=null&&\2\(\3\.inAppBrowserUse\)\},dispose:\(\)=>\{\2\(!1\)\}\}\}/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：Browser nativePipe 诊断日志");
+  }
+  return source.replace(pattern, (match, functionName, setterName, availabilityName) => {
+    return `function ${functionName}({setBrowserUseNativePipeEnabled:${setterName}}){let ruizhiSetNativePipe=${availabilityName}=>{try{console.info(\`[ruizhi][browser] ruizhiBrowserNativePipeEnabled\`,{enabled:${availabilityName}})}catch{}${setterName}(${availabilityName})};return{setDesktopFeatureAvailability:${availabilityName}=>{${availabilityName}.inAppBrowserUse!=null&&ruizhiSetNativePipe(${availabilityName}.inAppBrowserUse)},dispose:()=>{ruizhiSetNativePipe(!1)}}}`;
+  });
+}
+
+function patchBrowserNativePipeDiagnostics() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchBrowserNativePipeDiagnosticsSource(source);
+  if (patched === source) {
+    log(`已存在 Browser nativePipe 诊断日志：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已注入 Browser nativePipe 诊断日志：${path.basename(mainFile)}`);
+}
+
+function browserNativePipePeerAuthorizerLoggerName(source) {
+  const markerIndex = source.indexOf("browser-use-native-pipe-peer-authorizer");
+  if (markerIndex < 0) {
+    return null;
+  }
+  const nearbySource = source.slice(Math.max(0, markerIndex - 240), markerIndex + 120);
+  const match = nearbySource.match(/var ([A-Za-z_$][\w$]*)=[^;]*`browser-use-native-pipe-peer-authorizer`/);
+  return match?.[1] ?? null;
+}
+
+function patchBrowserNativePipePeerAuthorizationSource(source) {
+  if (source.includes("ruizhiBrowserNativePipePeerAuthorizationDisabled")) {
+    return source;
+  }
+
+  const pattern = /function ([A-Za-z_$][\w$]*)\(\)\{if\(process\.platform!==`darwin`\)return\(\)=>\(\{authorized:!0\}\);[\s\S]*?(?=function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\{let [A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\._handle\?\.fd;)/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：Browser nativePipe peer authorization");
+  }
+
+  const loggerName = browserNativePipePeerAuthorizerLoggerName(source);
+  return source.replace(pattern, (match, functionName) => {
+    const logCall = loggerName
+      ? `try{${loggerName}().info(\`browser-use native pipe peer authorization disabled by Ruizhi\`,{safe:{reason:\`ruizhiBrowserNativePipePeerAuthorizationDisabled\`},sensitive:{}})}catch{}`
+      : "";
+    return `function ${functionName}(){${logCall}return()=>({authorized:!0})}`;
+  });
+}
+
+function patchBrowserNativePipePeerAuthorization() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchBrowserNativePipePeerAuthorizationSource(source);
+  if (patched === source) {
+    log(`已存在 Browser nativePipe peer authorization 补丁：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已禁用 Browser nativePipe peer authorization 签名门禁：${path.basename(mainFile)}`);
+}
+
+function patchTrustedBrowserClientHashesSource(source, hashes) {
+  const normalizedHashes = [...new Set(hashes.map((hash) => String(hash).trim().toLowerCase()))].sort();
+  if (normalizedHashes.length === 0) {
+    throw new Error("缺少 Browser client nativePipe 信任哈希");
+  }
+  for (const hash of normalizedHashes) {
+    if (!/^[a-f0-9]{64}$/.test(hash)) {
+      throw new Error(`Browser client nativePipe 信任哈希无效：${hash}`);
+    }
+  }
+
+  const literal = normalizedHashes.map((hash) => `\`${hash}\``).join(",");
+  const defaultParamMatch = source.match(/trustedBrowserClientSha256s:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)/);
+  const hashVariableFromDefault = defaultParamMatch?.[2];
+  const trustedHashArrayPatterns = [
+    ...(hashVariableFromDefault
+      ? [new RegExp(`var (${escapeRegExp(hashVariableFromDefault)})=\\[(?:\\\`[a-f0-9]{64}\\\`(?:,)?)*\\]`, "g")]
+      : []),
+    /var ([A-Za-z_$][\w$]*)=\[(?:`[a-f0-9]{64}`(?:,)?)*\],([A-Za-z_$][\w$]*)=class/g,
+  ];
+
+  let replaced = false;
+  let patched = source;
+  for (const pattern of trustedHashArrayPatterns) {
+    patched = patched.replace(pattern, (match, hashVariable, classVariable) => {
+      replaced = true;
+      const suffix = typeof classVariable === "string" && /^[A-Za-z_$][\w$]*$/.test(classVariable)
+        ? `,${classVariable}=class`
+        : "";
+      return `var ${hashVariable}=[${literal}]${suffix}`;
+    });
+    if (replaced) {
+      break;
+    }
+  }
+
+  if (!replaced) {
+    throw new Error("补丁点不存在：Browser client nativePipe 信任哈希");
+  }
+
+  return patched;
+}
+
+function browserClientHashesFromResourcesDir(resourcesDir) {
+  const hashes = [];
+  for (const pluginName of browserRuntimePluginNames) {
+    const clientPath = path.join(
+      resourcesDir,
+      "plugins",
+      "openai-bundled",
+      "plugins",
+      pluginName,
+      "scripts",
+      "browser-client.mjs"
+    );
+    if (fs.existsSync(clientPath)) {
+      hashes.push(sha256File(clientPath));
+    }
+  }
+  if (hashes.length === 0) {
+    throw new Error(`运行态缺少 Browser client 脚本：${path.join(resourcesDir, "plugins", "openai-bundled")}`);
+  }
+  return [...new Set(hashes)].sort();
+}
+
+function patchTrustedBrowserClientHashes() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const hashes = browserClientHashesFromResourcesDir(appResourcesDir());
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchTrustedBrowserClientHashesSource(source, hashes);
+  const hashSummary = hashes.map((hash) => hash.slice(0, 12)).join(",");
+  if (patched === source) {
+    log(`已存在 Browser client nativePipe 信任哈希：${hashSummary}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已更新 Browser client nativePipe 信任哈希：${hashSummary}`);
 }
 
 function patchOnboardingApiKeyTexts() {
@@ -793,8 +987,8 @@ function patchLoginRoute() {
 
   writePatchedFile(loginRouteFile, (source) => {
     let next = source;
-    next = replaceExactIfPresent(next, ",[F,z]=(0,G.useState)(!1),[H,U]=", ",[F,z]=(0,G.useState)(!0),[H,U]=", "桌面登录页默认展示 APIKey 表单");
-    next = replaceExactIfPresent(next, "ce=()=>{F&&Z(`api_key_cancel`),z(!1),Y(!1),q(``)}", "ce=()=>{F&&Z(`api_key_cancel`),z(!0),Y(!1),q(``)}", "APIKey 表单取消后不回到 ChatGPT 登录选择");
+    next = replaceExactIfPresent(next, ",[F,z]=(0,G.useState)(!1),[H,U]=", ",[F,z]=(0,G.useState)(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),[H,U]=", "桌面登录页根据已有 Codex 配置决定是否展示 APIKey 表单");
+    next = replaceExactIfPresent(next, "ce=()=>{F&&Z(`api_key_cancel`),z(!1),Y(!1),q(``)}", "ce=()=>{F&&Z(`api_key_cancel`),z(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),Y(!1),q(``)}", "APIKey 表单取消后遵循已有 Codex 配置状态");
     next = replaceExactIfPresent(next, "let g=h;if(a&&!r){", "let g=!1;if(a&&!r){", "隐藏 ChatGPT 方案徽标");
     next = replaceAllIfPresent(next, "https://platform.openai.com/api-keys", config.openai.tokenUrl);
     next = replaceAllIfPresent(next, "defaultMessage:`Welcome to Codex`", "defaultMessage:`欢迎使用锐智`");
@@ -1385,12 +1579,19 @@ function ruizhiInit(){
       const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
       return String(manifest.version||"").trim()||null;
     }
-    function copyPluginDisplayFiles(sourceRoot,targetRoot){
-      const entries=[[".codex-plugin"],["assets"],["skills"]];
+    function copyPluginCacheFiles(pluginName,sourceRoot,targetRoot){
+      const runtimePluginNames=new Set(["browser","chrome"]);
+      const entries=[
+        {name:".codex-plugin",parts:[".codex-plugin"]},
+        {name:"assets",parts:["assets"]},
+        {name:"skills",parts:["skills"]},
+        {name:"scripts",parts:["scripts"]}
+      ];
       for(const entry of entries){
-        const source=path.join(sourceRoot,...entry);
+        if(entry.name==="scripts"&&runtimePluginNames.has(pluginName)===false)continue;
+        const source=path.join(sourceRoot,...entry.parts);
         if(!fs.existsSync(source))continue;
-        const target=path.join(targetRoot,...entry);
+        const target=path.join(targetRoot,...entry.parts);
         fs.mkdirSync(path.dirname(target),{recursive:true});
         fs.cpSync(source,target,{recursive:true,force:true});
       }
@@ -1407,7 +1608,7 @@ function ruizhiInit(){
           const sourceRoot=path.join(sourcePluginsRoot,entry.name);
           const version=readPluginVersion(sourceRoot);
           if(!version)continue;
-          copyPluginDisplayFiles(sourceRoot,path.join(pluginCacheRoot,version));
+          copyPluginCacheFiles(entry.name,sourceRoot,path.join(pluginCacheRoot,version));
         }catch(error){
           console.error("ruizhi OpenAI plugin cache sync failed",entry.name,error);
         }
@@ -1499,6 +1700,36 @@ function ruizhiInit(){
       }
       return "";
     }
+    function managedConfigSectionNames(){
+      const names=["features","model_providers.ruizhi"];
+      for(const spec of marketplaceSpecs){
+        names.push("marketplaces."+spec.name);
+      }
+      for(const plugin of hardcodedOpenAIBundledPlugins){
+        names.push("plugins.\\""+plugin.name+"@openai-bundled\\"");
+      }
+      return new Set(names);
+    }
+    function stripManagedConfigConflicts(text){
+      const managedSectionNames=managedConfigSectionNames();
+      const output=[];
+      let sawSection=false;
+      let inManagedSection=false;
+      for(const rawLine of String(text??"").split(/\\r?\\n/)){
+        const section=rawLine.trim().match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
+        if(section){
+          sawSection=true;
+          inManagedSection=managedSectionNames.has(section[1].trim());
+          if(inManagedSection)continue;
+          output.push(rawLine);
+          continue;
+        }
+        if(inManagedSection)continue;
+        if(!sawSection&&/^\\s*(model|model_provider|model_reasoning_effort|openai_base_url)\\s*=/.test(rawLine))continue;
+        output.push(rawLine);
+      }
+      return output.join("\\n").trim();
+    }
     function mergeManagedConfig(existing){
       if(!existing.trim())return managedBlock;
       const beginIndex=existing.indexOf(managedBegin);
@@ -1513,15 +1744,14 @@ function ruizhiInit(){
         const rest=stripLegacyManagedPrefix(existing);
         return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\\n\\n"));
       }
-      if(!/^\\s*\\[/m.test(existing)){
-        return withFinalNewline([existing.trimEnd(),managedBlock.trimEnd()].filter(Boolean).join("\\n\\n"));
-      }
-      console.warn("ruizhi bootstrap kept unmanaged config.toml unchanged");
-      return existing;
+      const rest=stripManagedConfigConflicts(existing);
+      return withFinalNewline([managedBlock.trimEnd(), rest.trimStart()].filter(Boolean).join("\\n\\n"));
     }
 
     const configPath=path.join(codexHome,"config.toml");
-    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+    const existingCodexConfig=fs.existsSync(configPath);
+    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
+    const existing=existingCodexConfig?fs.readFileSync(configPath,"utf8"):"";
     const next=rewriteRuntimeModelProviderBaseUrl(mergeManagedConfig(existing));
     if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
   }catch(e){
@@ -1594,6 +1824,47 @@ function ruizhiStartBackgroundUpdateCheck(){
     const explicit=(process.env[${jsonLiteral(ruizhiHomeEnvName)}]||"").trim()||(process.env.CODEX_HOME||"").trim();
     return explicit||path.join(home,${jsonLiteral(ruizhiDefaultHomeDirName)});
   }
+  function authHome(){
+    return ruizhiEnhanceCodexHome();
+  }
+  function authPath(){
+    return path.join(authHome(),"auth.json");
+  }
+  function hasExistingCodexConfig(){
+    const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
+    if(marker==="1")return true;
+    if(marker==="0")return false;
+    const filePath=path.join(authHome(),"config.toml");
+    try{
+      return fs.existsSync(filePath)&&fs.statSync(filePath).isFile();
+    }catch{
+      return false;
+    }
+  }
+  function maskApiKey(key){
+    const value=String(key||"").trim();
+    if(!value)return "";
+    if(value.length<=18)return value.slice(0,4)+"*******"+value.slice(-4);
+    return value.slice(0,10)+"*******"+value.slice(-7);
+  }
+  function readApiKeyStatus(){
+    const filePath=authPath();
+    let key="";
+    const existingConfig=hasExistingCodexConfig();
+    try{
+      if(fs.existsSync(filePath)){
+        const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
+        key=String(auth.OPENAI_API_KEY||"").trim();
+      }
+    }catch(error){
+      return {configured:existingConfig,masked:"",configuredBy:existingConfig?"codex-config":"none",error:String(error?.message||error),version:n.app.getVersion()};
+    }
+    return {configured:key.length>0||existingConfig,masked:maskApiKey(key),configuredBy:key.length>0?"api-key":existingConfig?"codex-config":"none",version:n.app.getVersion()};
+  }
+  function registerRuizhiAuthIpc(){
+    n.ipcMain.on("ruizhi:auth:get-sync",event=>{event.returnValue=readApiKeyStatus();});
+    n.ipcMain.handle("ruizhi:auth:get",()=>readApiKeyStatus());
+  }
   function registerRuizhiEnhanceIpc(){
     if(global.__RUIZHI_ENHANCE_IPC_REGISTERED__)return;
     global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
@@ -1624,6 +1895,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       setImmediate(()=>autoUpdater.quitAndInstall());
       return {ok:true};
     });
+    registerRuizhiAuthIpc();
     registerRuizhiEnhanceIpc();
   }
   function configureUpdater(){
@@ -1725,11 +1997,16 @@ ${pageEnhanceRendererInstallerSource()}
   }
   globalThis[integrationKey]={dispose};
   let updateState={status:"idle",currentVersion:appVersion,version:null,progress:0,message:""};
+  const cachedAuthStatus=(()=>{try{return ipcRenderer.sendSync("ruizhi:auth:get-sync");}catch{return {configured:false,masked:"",configuredBy:"unavailable",version:appVersion};}})();
 
   const api={
     update:{
       getState:()=>ipcRenderer.invoke("ruizhi:update:get-state"),
       installNow:()=>ipcRenderer.invoke("ruizhi:update:install-now")
+    },
+    auth:{
+      getCached:()=>cachedAuthStatus,
+      get:()=>ipcRenderer.invoke("ruizhi:auth:get")
     },
     enhance:{
       call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
@@ -1855,6 +2132,10 @@ async function repackAppAsar() {
 
   patchPluginAccountGate();
   patchNativeWebviewFeatureGates();
+  patchNativeBrowserDesktopFeatureAvailability();
+  patchBrowserNativePipeDiagnostics();
+  patchBrowserNativePipePeerAuthorization();
+  patchTrustedBrowserClientHashes();
   patchOnboardingApiKeyTexts();
   patchLoginRoute();
   patchWebviewLocales();
@@ -1909,6 +2190,8 @@ async function patchFuses() {
 
 function patchInfoPlist() {
   const plist = path.join(appOutRoot, "Contents", "Info.plist");
+  // Electron derives the macOS helper app names from CFBundleName.
+  // Keep this aligned with Codex Helper.app while branding via CFBundleDisplayName.
   execLogged("plutil", ["-replace", "CFBundleName", "-string", "Codex", plist]);
   execLogged("plutil", ["-replace", "CFBundleDisplayName", "-string", config.productName, plist]);
   execLogged("plutil", ["-replace", "CFBundleIdentifier", "-string", "cn.ruizhi.desktop", plist]);

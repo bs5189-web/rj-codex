@@ -34,9 +34,9 @@
     menu: true,
     pluginEntryUnlock: true,
     forcePluginInstall: true,
-    sessionDelete: true,
+    sessionDelete: false,
     markdownExport: true,
-    projectMove: true,
+    projectMove: false,
     timeline: true,
     threadScrollRestore: true,
     threadSort: true,
@@ -66,7 +66,7 @@
     const features = value && typeof value === "object" && value.features && typeof value.features === "object" ? value.features : {};
     return {
       enabled: value?.enabled !== false,
-      features: { ...defaultFeatures, ...features },
+      features: { ...defaultFeatures, ...features, sessionDelete: false, projectMove: false },
       appVersion: typeof value?.appVersion === "string" ? value.appVersion.trim() : ""
     };
   }
@@ -101,7 +101,7 @@
       }
     }
     document.querySelectorAll("#ruizhi-page-enhance-style,#ruizhi-page-enhance-menu,.ruizhi-enhance-toast,.ruizhi-conversation-timeline").forEach((node) => node.remove());
-    document.querySelectorAll(".ruizhi-session-actions,.ruizhi-project-move-overlay").forEach((node) => node.remove());
+    document.querySelectorAll(".ruizhi-session-actions").forEach((node) => node.remove());
   }
 
   function injectStyle() {
@@ -109,22 +109,21 @@
     const style = document.createElement("style");
     style.id = "ruizhi-page-enhance-style";
     style.textContent = `
-      #ruizhi-page-enhance-menu{position:fixed;right:14px;bottom:14px;z-index:99998;font:13px system-ui,sans-serif}
-      #ruizhi-page-enhance-menu button{border:1px solid rgba(127,127,127,.35);border-radius:7px;background:var(--token-main-surface-primary,#202123);color:var(--token-text-primary,#fff);padding:7px 10px;box-shadow:0 8px 24px rgba(0,0,0,.18);cursor:pointer}
-      #ruizhi-page-enhance-menu [data-panel]{position:absolute;right:0;bottom:38px;min-width:220px;border:1px solid rgba(127,127,127,.35);border-radius:8px;background:var(--token-main-surface-primary,#202123);box-shadow:0 16px 40px rgba(0,0,0,.24);padding:8px;display:none}
+      #ruizhi-page-enhance-menu{position:fixed;right:14px;bottom:14px;z-index:99998;font:13px system-ui,sans-serif;color:var(--token-text-primary,var(--token-foreground,#0d0d0d))}
+      #ruizhi-page-enhance-menu [data-trigger]{border:1px solid var(--token-border-light,var(--token-border,#d9d9e3));border-radius:7px;background:var(--token-main-surface-secondary,var(--token-main-surface-primary,#fff));color:var(--token-text-primary,var(--token-foreground,#0d0d0d));padding:7px 10px;box-shadow:0 8px 24px rgba(0,0,0,.12);cursor:pointer}
+      #ruizhi-page-enhance-menu [data-trigger]:hover{background:var(--token-main-surface-tertiary,rgba(127,127,127,.10))}
+      #ruizhi-page-enhance-menu [data-trigger]:focus-visible{outline:0;box-shadow:0 0 0 2px var(--token-focus-border,rgba(16,163,127,.35)),0 8px 24px rgba(0,0,0,.12)}
+      #ruizhi-page-enhance-menu [data-panel]{position:absolute;right:0;bottom:38px;min-width:220px;border:1px solid var(--token-border-light,var(--token-border,#d9d9e3));border-radius:8px;background:var(--token-main-surface-primary,#fff);color:var(--token-text-primary,var(--token-foreground,#0d0d0d));box-shadow:0 16px 40px rgba(0,0,0,.16);padding:8px;display:none}
       #ruizhi-page-enhance-menu[data-open="true"] [data-panel]{display:grid;gap:6px}
-      #ruizhi-page-enhance-menu label{display:flex;align-items:center;justify-content:space-between;gap:12px;color:inherit}
+      #ruizhi-page-enhance-menu label{display:flex;align-items:center;justify-content:space-between;gap:12px;color:inherit;padding:3px 2px}
+      #ruizhi-page-enhance-menu input[type="checkbox"]{accent-color:var(--token-text-link-foreground,#1f6feb);width:16px;height:16px}
       .ruizhi-enhance-toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:99999;max-width:min(560px,calc(100vw - 32px));border-radius:8px;background:#111827;color:#fff;padding:10px 12px;font:13px system-ui,sans-serif;box-shadow:0 12px 32px rgba(0,0,0,.25)}
       .ruizhi-enhance-toast button{margin-left:10px;color:#93c5fd;background:transparent;border:0;cursor:pointer}
-      .ruizhi-session-actions{position:absolute;right:28px;top:50%;transform:translateY(-50%);display:flex;gap:4px;opacity:0;z-index:10}
+      .ruizhi-session-actions{position:absolute;right:72px;top:50%;transform:translateY(-50%);display:flex;gap:4px;opacity:0;z-index:1;pointer-events:none}
       [data-ruizhi-session-row="true"]{position:relative}
       [data-ruizhi-session-row="true"]:hover .ruizhi-session-actions,.ruizhi-session-actions:focus-within{opacity:1}
-      .ruizhi-session-actions button{width:24px;height:24px;display:grid;place-items:center;border:1px solid rgba(127,127,127,.35);border-radius:6px;background:var(--token-main-surface-primary,#fff);color:inherit;cursor:pointer;padding:0}
+      .ruizhi-session-actions button{width:20px;height:20px;display:grid;place-items:center;border:1px solid rgba(127,127,127,.35);border-radius:5px;background:var(--token-main-surface-primary,#fff);color:inherit;cursor:pointer;padding:0;font-size:11px;line-height:1;pointer-events:auto}
       .codex-force-install-unlocked{pointer-events:auto!important;cursor:pointer!important;opacity:1!important}
-      .ruizhi-project-move-overlay{position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,.18)}
-      .ruizhi-project-move-panel{position:absolute;right:18px;top:72px;width:min(360px,calc(100vw - 36px));max-height:min(520px,calc(100vh - 96px));overflow:auto;border:1px solid rgba(127,127,127,.35);border-radius:8px;background:var(--token-main-surface-primary,#202123);color:inherit;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.24)}
-      .ruizhi-project-move-panel button{display:block;width:100%;text-align:left;border:0;border-radius:6px;background:transparent;color:inherit;padding:8px;cursor:pointer}
-      .ruizhi-project-move-panel button:hover{background:rgba(127,127,127,.13)}
       .ruizhi-conversation-timeline{position:fixed;right:8px;top:96px;bottom:96px;width:18px;z-index:9999}
       .ruizhi-conversation-timeline-track{position:absolute;left:8px;top:0;bottom:0;width:2px;background:rgba(127,127,127,.3)}
       .ruizhi-conversation-timeline-marker{position:absolute;left:3px;width:12px;height:12px;border-radius:999px;border:2px solid #10a37f;background:var(--token-main-surface-primary,#fff);cursor:pointer}
@@ -165,9 +164,7 @@
       <div data-panel>
         <label>插件入口<input type="checkbox" data-feature="pluginEntryUnlock"></label>
         <label>强制安装<input type="checkbox" data-feature="forcePluginInstall"></label>
-        <label>删除会话<input type="checkbox" data-feature="sessionDelete"></label>
         <label>Markdown<input type="checkbox" data-feature="markdownExport"></label>
-        <label>项目移动<input type="checkbox" data-feature="projectMove"></label>
         <label>Timeline<input type="checkbox" data-feature="timeline"></label>
         <label>滚动恢复<input type="checkbox" data-feature="threadScrollRestore"></label>
         <label>排序修正<input type="checkbox" data-feature="threadSort"></label>
@@ -368,12 +365,8 @@
     return { session_id: id, title };
   }
 
-  function buttonSvg(pathData) {
-    return `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${pathData}"></path></svg>`;
-  }
-
   function installSessionActions() {
-    if (!feature("sessionDelete") && !feature("markdownExport") && !feature("projectMove")) return;
+    if (!feature("markdownExport")) return;
     sessionRows().forEach((row) => {
       if (row.querySelector(".ruizhi-session-actions")) return;
       const ref = sessionRefFromRow(row);
@@ -382,9 +375,7 @@
       const group = document.createElement("div");
       group.className = "ruizhi-session-actions";
       group.dataset.ruizhiSessionActions = markers.sessionActions;
-      if (feature("projectMove")) group.appendChild(actionButton("移动", "↗", () => openProjectMove(ref)));
       if (feature("markdownExport")) group.appendChild(actionButton("导出", "⇩", () => exportMarkdown(ref)));
-      if (feature("sessionDelete")) group.appendChild(actionButton("删除", buttonSvg("M3 6h18 M8 6V4h8v2 M19 6l-1 14H6L5 6"), () => deleteSession(ref), true));
       row.appendChild(group);
     });
   }
@@ -445,18 +436,10 @@
       button.addEventListener(eventName, (event) => {
         event.preventDefault();
         event.stopPropagation();
-        event.stopImmediatePropagation?.();
       }, true);
     });
     button.addEventListener("click", handler, true);
     return button;
-  }
-
-  async function deleteSession(ref) {
-    if (!confirm(`删除“${ref.title || ref.session_id}”？`)) return;
-    const result = await bridgeCall("/delete", ref);
-    toast(result.message || (result.status === "local_deleted" ? "删除成功" : "删除失败"), result.undo_token);
-    scheduleScan();
   }
 
   async function exportMarkdown(ref) {
@@ -472,60 +455,6 @@
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
     toast(result.message || "导出失败");
-  }
-
-  function projectTargets() {
-    const targets = [];
-    document.querySelectorAll("[data-app-action-sidebar-project-row],[data-app-action-sidebar-project-id],[data-app-action-sidebar-project-label],[data-app-action-sidebar-project-list-id],[data-app-action-sidebar-select-project],[data-testid*='project'],[data-testid*='workspace'],[data-workspace-root],[data-cwd],a[href*='project'],button[aria-label*='项目'],button[aria-label*='Project']").forEach((node) => {
-      const row = node.closest("[data-app-action-sidebar-project-row]") || node;
-      const label = (row.getAttribute("data-app-action-sidebar-project-label") || row.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
-      const pathText = row.getAttribute("data-workspace-root")
-        || row.getAttribute("data-cwd")
-        || row.getAttribute("data-path")
-        || projectPathFromId(row.getAttribute("data-app-action-sidebar-project-id") || row.getAttribute("data-app-action-sidebar-project-list-id") || "")
-        || row.getAttribute("aria-label")?.match(/(\/[^，,]+)/)?.[1]
-        || row.title
-        || "";
-      if (label && pathText) targets.push({ label, path: pathText });
-    });
-    targets.push({ label: "普通对话", path: "" });
-    return targets.filter((item, index, all) => item.label && all.findIndex((other) => other.label === item.label && other.path === item.path) === index);
-  }
-
-  function projectPathFromId(value) {
-    const text = String(value || "").trim();
-    if (!text) return "";
-    const normalized = text.replace(/^local:/, "").replace(/^file:\/\//, "");
-    try {
-      return decodeURIComponent(normalized);
-    } catch {
-      return normalized;
-    }
-  }
-
-  function openProjectMove(ref) {
-    document.querySelectorAll(".ruizhi-project-move-overlay").forEach((node) => node.remove());
-    const overlay = document.createElement("div");
-    overlay.className = "ruizhi-project-move-overlay";
-    const panel = document.createElement("div");
-    panel.className = "ruizhi-project-move-panel";
-    projectTargets().forEach((target) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = target.label;
-      button.addEventListener("click", async () => {
-        overlay.remove();
-        const result = await bridgeCall("/move-thread-workspace", { ...ref, target_cwd: target.path });
-        toast(result.message || (result.status === "moved" ? "移动成功" : "移动失败"));
-        scheduleScan();
-      });
-      panel.appendChild(button);
-    });
-    overlay.addEventListener("click", (event) => {
-      if (event.target === overlay) overlay.remove();
-    });
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
   }
 
   function timelineRoot() {

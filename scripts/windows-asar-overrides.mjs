@@ -19,16 +19,17 @@ const pageEnhanceServiceSourcePath = path.join(projectRoot, "resources", "bridge
 const enableWindowsPluginTextPatches = process.env.RUIZHI_ENABLE_PLUGIN_TEXT_PATCHES !== "0";
 const windowsVcRedistFileName = "vc_redist.x64.exe";
 const openAIBundledPluginDefinitions = [
-  { name: "browser-use", path: "./plugins/browser-use", category: "浏览器" },
-  { name: "chrome", path: "./plugins/chrome", category: "实验性" },
-  { name: "latex-tectonic", path: "./plugins/latex-tectonic", category: "研究" }
+  { name: "browser", path: "./plugins/browser", category: "Engineering" },
+  { name: "chrome", path: "./plugins/chrome", category: "Productivity" },
+  { name: "latex", path: "./plugins/latex", category: "Research" }
 ];
+const browserRuntimePluginNames = ["browser", "chrome"];
 const openAIRecommendedPluginIds = [
   "computer-use",
-  "browser-use",
+  "browser",
   "chrome",
   "chrome-internal",
-  "latex-tectonic",
+  "latex",
   "github",
   "gmail",
   "slack",
@@ -85,6 +86,10 @@ function jsonLiteral(value) {
         return char;
     }
   });
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function pageEnhanceRendererInstallerSource() {
@@ -174,9 +179,9 @@ function pageEnhanceFeatures(config) {
     menu: true,
     pluginEntryUnlock: true,
     forcePluginInstall: true,
-    sessionDelete: true,
+    sessionDelete: false,
     markdownExport: true,
-    projectMove: true,
+    projectMove: false,
     timeline: true,
     threadScrollRestore: true,
     threadSort: true,
@@ -221,7 +226,7 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
     log("已存在 Codex 原生 webview gate 补丁");
     return;
   }
-  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const from = targetGateSource;
   if (!original.includes(from)) {
     throw new Error("Codex 原生 webview gate 补丁点不存在");
@@ -229,6 +234,223 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   const next = original.replace(from, `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||i(Z,e)}`);
   fs.writeFileSync(statsigFile, next, "utf8");
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
+}
+
+function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
+  if (source.includes("function ruizhiNativeBrowserDesktopFeatureAvailability(")) {
+    return source;
+  }
+
+  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const replacements = [
+    [
+      "function xe(e,{buildFlavor:n=t.O.resolve(),env:r=f.default.env,platform:i=f.default.platform}={}){let a=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.O.Dev?Se(r):null;return o==null?a:{...a,...o}}",
+      `${helper}function xe(e,{buildFlavor:n=t.O.resolve(),env:r=f.default.env,platform:i=f.default.platform}={}){let a=i===\`win32\`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.O.Dev?Se(r):null;return ruizhiNativeBrowserDesktopFeatureAvailability(o==null?a:{...a,...o})}`
+    ],
+    [
+      "function ve(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}",
+      `${helper}function ve(e,{env:t=process.env,platform:n=process.platform}={}){let r=n!==\`win32\`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==\`1\`?e:{...e,computerUse:!0,computerUseNodeRepl:!0};return ruizhiNativeBrowserDesktopFeatureAvailability(r)}`
+    ]
+  ];
+
+  for (const [from, to] of replacements) {
+    if (source.includes(from)) {
+      return source.replace(from, to);
+    }
+  }
+
+  throw new Error("补丁点不存在：Codex 原生 Browser 桌面能力");
+}
+
+export function patchTrustedBrowserClientHashesSource(source, hashes) {
+  const normalizedHashes = [...new Set(hashes.map((hash) => String(hash).trim().toLowerCase()))].sort();
+  if (normalizedHashes.length === 0) {
+    throw new Error("缺少 Browser client nativePipe 信任哈希");
+  }
+  for (const hash of normalizedHashes) {
+    if (!/^[a-f0-9]{64}$/.test(hash)) {
+      throw new Error(`Browser client nativePipe 信任哈希无效：${hash}`);
+    }
+  }
+
+  const literal = normalizedHashes.map((hash) => `\`${hash}\``).join(",");
+  const defaultParamMatch = source.match(/trustedBrowserClientSha256s:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)/);
+  const hashVariableFromDefault = defaultParamMatch?.[2];
+  const trustedHashArrayPatterns = [
+    ...(hashVariableFromDefault
+      ? [new RegExp(`var (${escapeRegExp(hashVariableFromDefault)})=\\[(?:\\\`[a-f0-9]{64}\\\`(?:,)?)*\\]`, "g")]
+      : []),
+    /var ([A-Za-z_$][\w$]*)=\[(?:`[a-f0-9]{64}`(?:,)?)*\],([A-Za-z_$][\w$]*)=class/g,
+  ];
+
+  let replaced = false;
+  let patched = source;
+  for (const pattern of trustedHashArrayPatterns) {
+    patched = patched.replace(pattern, (match, hashVariable, classVariable) => {
+      replaced = true;
+      const suffix = typeof classVariable === "string" && /^[A-Za-z_$][\w$]*$/.test(classVariable)
+        ? `,${classVariable}=class`
+        : "";
+      const replacement = `var ${hashVariable}=[${literal}]${suffix}`;
+      return replacement === match ? match : replacement;
+    });
+    if (replaced) {
+      break;
+    }
+  }
+
+  if (!replaced) {
+    throw new Error("补丁点不存在：Browser client nativePipe 信任哈希");
+  }
+
+  return patched;
+}
+
+export function browserClientHashesFromResourcesDir(resourcesDir) {
+  const hashes = [];
+  for (const pluginName of browserRuntimePluginNames) {
+    const clientPath = path.join(
+      resourcesDir,
+      "plugins",
+      "openai-bundled",
+      "plugins",
+      pluginName,
+      "scripts",
+      "browser-client.mjs"
+    );
+    if (fs.existsSync(clientPath)) {
+      hashes.push(sha256File(clientPath));
+    }
+  }
+  if (hashes.length === 0) {
+    throw new Error(`运行态缺少 Browser client 脚本：${path.join(resourcesDir, "plugins", "openai-bundled")}`);
+  }
+  return [...new Set(hashes)].sort();
+}
+
+export function patchTrustedBrowserClientHashes(extractedAppDir, resourcesDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const mainFile = fs.readdirSync(buildDir)
+    .filter((name) => /^main-.*\.js$/.test(name))
+    .map((name) => path.join(buildDir, name));
+  if (mainFile.length !== 1) {
+    throw new Error(`Electron main bundle 匹配数量异常：${mainFile.length}`);
+  }
+
+  const hashes = browserClientHashesFromResourcesDir(resourcesDir);
+  const source = fs.readFileSync(mainFile[0], "utf8");
+  const patched = patchTrustedBrowserClientHashesSource(source, hashes);
+  const hashSummary = hashes.map((hash) => hash.slice(0, 12)).join(",");
+  if (patched === source) {
+    log(`已存在 Browser client nativePipe 信任哈希：${hashSummary}`);
+    return { changed: false, hashes };
+  }
+  fs.writeFileSync(mainFile[0], patched, "utf8");
+  log(`已更新 Browser client nativePipe 信任哈希：${hashSummary}`);
+  return { changed: true, hashes };
+}
+
+function patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const mainFile = fs.readdirSync(buildDir)
+    .filter((name) => /^main-.*\.js$/.test(name))
+    .map((name) => path.join(buildDir, name));
+  if (mainFile.length !== 1) {
+    throw new Error(`Electron main bundle 匹配数量异常：${mainFile.length}`);
+  }
+
+  const source = fs.readFileSync(mainFile[0], "utf8");
+  const patched = patchNativeBrowserDesktopFeatureAvailabilitySource(source);
+  if (patched === source) {
+    log(`已存在 Codex 原生 Browser 桌面能力补丁：${path.basename(mainFile[0])}`);
+    return;
+  }
+  fs.writeFileSync(mainFile[0], patched, "utf8");
+  log(`已打开 Codex 原生 Browser 桌面能力：${path.basename(mainFile[0])}`);
+}
+
+export function patchBrowserNativePipeDiagnosticsSource(source) {
+  if (source.includes("ruizhiBrowserNativePipeEnabled")) {
+    return source;
+  }
+  const pattern = /function ([A-Za-z_$][\w$]*)\(\{setBrowserUseNativePipeEnabled:([A-Za-z_$][\w$]*)\}\)\{return\{setDesktopFeatureAvailability:([A-Za-z_$][\w$]*)=>\{\3\.inAppBrowserUse!=null&&\2\(\3\.inAppBrowserUse\)\},dispose:\(\)=>\{\2\(!1\)\}\}\}/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：Browser nativePipe 诊断日志");
+  }
+  return source.replace(pattern, (match, functionName, setterName, availabilityName) => {
+    return `function ${functionName}({setBrowserUseNativePipeEnabled:${setterName}}){let ruizhiSetNativePipe=${availabilityName}=>{try{console.info(\`[ruizhi][browser] ruizhiBrowserNativePipeEnabled\`,{enabled:${availabilityName}})}catch{}${setterName}(${availabilityName})};return{setDesktopFeatureAvailability:${availabilityName}=>{${availabilityName}.inAppBrowserUse!=null&&ruizhiSetNativePipe(${availabilityName}.inAppBrowserUse)},dispose:()=>{ruizhiSetNativePipe(!1)}}}`;
+  });
+}
+
+export function patchBrowserNativePipeDiagnostics(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const mainFile = fs.readdirSync(buildDir)
+    .filter((name) => /^main-.*\.js$/.test(name))
+    .map((name) => path.join(buildDir, name));
+  if (mainFile.length !== 1) {
+    throw new Error(`Electron main bundle 匹配数量异常：${mainFile.length}`);
+  }
+
+  const source = fs.readFileSync(mainFile[0], "utf8");
+  const patched = patchBrowserNativePipeDiagnosticsSource(source);
+  if (patched === source) {
+    log(`已存在 Browser nativePipe 诊断日志：${path.basename(mainFile[0])}`);
+    return;
+  }
+  fs.writeFileSync(mainFile[0], patched, "utf8");
+  log(`已注入 Browser nativePipe 诊断日志：${path.basename(mainFile[0])}`);
+}
+
+function browserNativePipePeerAuthorizerLoggerName(source) {
+  const markerIndex = source.indexOf("browser-use-native-pipe-peer-authorizer");
+  if (markerIndex < 0) {
+    return null;
+  }
+  const nearbySource = source.slice(Math.max(0, markerIndex - 240), markerIndex + 120);
+  const match = nearbySource.match(/var ([A-Za-z_$][\w$]*)=[^;]*`browser-use-native-pipe-peer-authorizer`/);
+  return match?.[1] ?? null;
+}
+
+export function patchBrowserNativePipePeerAuthorizationSource(source) {
+  if (source.includes("ruizhiBrowserNativePipePeerAuthorizationDisabled")) {
+    return source;
+  }
+
+  const pattern = /function ([A-Za-z_$][\w$]*)\(\)\{if\(process\.platform!==`darwin`\)return\(\)=>\(\{authorized:!0\}\);[\s\S]*?(?=function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\{let [A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\._handle\?\.fd;)/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：Browser nativePipe peer authorization");
+  }
+
+  const loggerName = browserNativePipePeerAuthorizerLoggerName(source);
+  return source.replace(pattern, (match, functionName) => {
+    const logCall = loggerName
+      ? `try{${loggerName}().info(\`browser-use native pipe peer authorization disabled by Ruizhi\`,{safe:{reason:\`ruizhiBrowserNativePipePeerAuthorizationDisabled\`},sensitive:{}})}catch{}`
+      : "";
+    return `function ${functionName}(){${logCall}return()=>({authorized:!0})}`;
+  });
+}
+
+export function patchBrowserNativePipePeerAuthorization(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const mainFile = fs.readdirSync(buildDir)
+    .filter((name) => /^main-.*\.js$/.test(name))
+    .map((name) => path.join(buildDir, name));
+  if (mainFile.length !== 1) {
+    throw new Error(`Electron main bundle 匹配数量异常：${mainFile.length}`);
+  }
+
+  const source = fs.readFileSync(mainFile[0], "utf8");
+  const patched = patchBrowserNativePipePeerAuthorizationSource(source);
+  if (patched === source) {
+    log(`已存在 Browser nativePipe peer authorization 补丁：${path.basename(mainFile[0])}`);
+    return;
+  }
+  fs.writeFileSync(mainFile[0], patched, "utf8");
+  log(`已禁用 Browser nativePipe peer authorization 签名门禁：${path.basename(mainFile[0])}`);
 }
 
 function managedConfigTomlLinesForBootstrap(config) {
@@ -276,6 +498,12 @@ function managedConfigTomlLinesForBootstrap(config) {
     lines.push(`[marketplaces.${marketplace.name}]`);
     lines.push(`source_type = "local"`);
     lines.push(`source = ${marketplaceSourceToken(marketplace.name)}`);
+    lines.push("");
+  }
+
+  for (const plugin of openAIBundledPluginDefinitions) {
+    lines.push(`[plugins."${plugin.name}@openai-bundled"]`);
+    lines.push("enabled = true");
     lines.push("");
   }
 
@@ -889,28 +1117,6 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
     };
   });
 
-  patchJsonFile(path.join(pluginsRoot, "browser-use", ".codex-plugin", "plugin.json"), (plugin) => {
-    plugin.description = [
-      "Browser / browser-use 插件",
-      "",
-      "别名：@browser、@browser-use、browser-use、Browser、in-app browser。",
-      "",
-      "当用户要求打开、检查、导航、测试、点击、输入或截图 localhost、127.0.0.1、::1、file://、当前 Codex 内置浏览器标签页，或 Codex 中并排显示的网站时，使用 Browser 这个 Codex 内置浏览器。",
-      "",
-      "本地应用有重要前端改动后，如果相关本地地址明确，使用 Browser 打开目标进行验证；除非用户指定其他浏览器工具。",
-      "",
-      "例如 “open localhost:3000” 或 “open to localhost:4000”，导航到对应的 http://localhost:3000 或 http://localhost:4000。",
-      "",
-      "用户明确指定 @browser 或 @browser-use 时，不要用 macOS `open`、shell 命令或通用网页浏览替代；除非用户要求其他浏览器工具或批准 fallback。"
-    ].join("\n");
-    plugin.interface = plugin.interface ?? {};
-    plugin.interface.shortDescription = "用 Codex 控制内置浏览器";
-    plugin.interface.longDescription = "Browser 让 Codex 打开并控制内置浏览器，主要用于本地开发页面和文件。可用于导航、检查、点击、输入和截图，在 Codex 内完成页面测试。";
-    plugin.interface.category = "浏览器";
-    plugin.interface.defaultPrompt = ["测试 localhost 上的结账流程"];
-    return plugin;
-  });
-
   patchJsonFile(path.join(pluginsRoot, "chrome", ".codex-plugin", "plugin.json"), (plugin) => {
     plugin.description = "Chrome 自动化插件，用于远程 URL、需要登录态或浏览器配置的页面、已有 Chrome 标签页、cookies、扩展，以及 Codex Chrome Extension 设置。";
     plugin.interface = plugin.interface ?? {};
@@ -925,36 +1131,37 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
     return plugin;
   });
 
-  patchJsonFile(path.join(pluginsRoot, "latex-tectonic", ".codex-plugin", "plugin.json"), (plugin) => {
-    plugin.description = "使用内置 Tectonic 引擎编译 LaTeX 和 TeX 文档。";
+  patchJsonFile(path.join(pluginsRoot, "latex", ".codex-plugin", "plugin.json"), (plugin) => {
+    plugin.description = "使用内置 Tectonic、TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。";
     plugin.interface = plugin.interface ?? {};
-    plugin.interface.shortDescription = "内置 LaTeX 编译器";
-    plugin.interface.longDescription = "LaTeX Tectonic 提供内置 Tectonic 可执行文件，Codex 可用它编译 LaTeX 和 TeX 文档，无需依赖系统级 TeX 安装。";
+    plugin.interface.shortDescription = "LaTeX 编译与环境检查";
+    plugin.interface.longDescription = "LaTeX 插件优先使用内置 Tectonic 编译简单项目，也可回退到系统 TeX Live 或 MacTeX，并在需要时安装 Codex 托管的完整 TeX Live runtime。";
     plugin.interface.category = "研究";
     plugin.interface.defaultPrompt = [
-      "用 Tectonic 编译这个 LaTeX 文件",
-      "把我的 TeX 文档构建成 PDF"
+      "检查这台机器是否可以编译 LaTeX",
+      "编译这个项目里的主 TeX 文件",
+      "在没有可用 TeX Live 时安装托管 runtime"
     ];
     return plugin;
   });
 
-  writeTranslatedOpenAIPluginSkill(
-    path.join(pluginsRoot, "browser-use", "skills", "browser", "SKILL.md"),
-    "browser",
-    "Browser 自动化能力，用于 Codex 内置浏览器。适用于打开、导航、检查、测试、点击、输入、截图或验证 localhost、127.0.0.1、::1、file://、当前内置浏览器标签页，以及 Codex 中并排显示的网站。",
-    "/openai-bundled/plugins/browser-use/skills/browser/SKILL.md"
-  );
   writeTranslatedOpenAIPluginSkill(
     path.join(pluginsRoot, "chrome", "skills", "chrome", "SKILL.md"),
     "Chrome",
     "用户 Chrome 浏览器自动化。适用于需要 cookies、登录态、已有标签页、扩展，或远程认证网站的浏览器任务。",
     "/openai-bundled/plugins/chrome/skills/chrome/SKILL.md"
   );
-  writeTranslatedOpenAIPluginSkill(
-    path.join(pluginsRoot, "latex-tectonic", "skills", "latex-tectonic", "SKILL.md"),
-    "LaTeX Tectonic",
-    "使用内置 Tectonic 可执行文件编译 LaTeX 和 TeX 文档。",
-    "/openai-bundled/plugins/latex-tectonic/skills/latex-tectonic/SKILL.md"
+  patchSkillDescription(
+    path.join(pluginsRoot, "latex", "skills", "latex-compile", "SKILL.md"),
+    "使用内置 Tectonic、系统 TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。"
+  );
+  patchSkillDescription(
+    path.join(pluginsRoot, "latex", "skills", "latex-doctor", "SKILL.md"),
+    "检查本机 LaTeX 编译环境，判断 Tectonic、TeX Live、MacTeX 或托管 runtime 是否可用。"
+  );
+  patchSkillDescription(
+    path.join(pluginsRoot, "latex", "skills", "texlive-runtime-installer", "SKILL.md"),
+    "在没有可用系统 LaTeX 环境时安装 Codex 托管的 TeX Live runtime。"
   );
 
   log("已中文化 OpenAI 内置插件描述文案");
@@ -966,6 +1173,10 @@ function patchHardcodedOpenAIRecommendedPluginList(source) {
 
   next = next.replace(
     "S=[...n.flatMap(e=>[`computer-use@${e}`,`browser-use@${e}`,`chrome@${e}`,`chrome-internal@${e}`]),`spreadsheets@openai-primary-runtime`,`presentations@openai-primary-runtime`];",
+    `S=${recommendedList};`
+  );
+  next = next.replace(
+    "S=[...n.flatMap(e=>[`computer-use@${e}`,`browser@${e}`,`chrome@${e}`,`chrome-internal@${e}`]),`spreadsheets@openai-primary-runtime`,`presentations@openai-primary-runtime`];",
     `S=${recommendedList};`
   );
   next = next.replace(
@@ -992,7 +1203,7 @@ function patchPluginSelectorsBundle(filePath) {
   if (next.includes(selectorDescriptionTarget) && !next.includes("function ruizhiOpenAIPluginDescription(")) {
     next = next.replace(
       selectorDescriptionTarget,
-      "function ruizhiOpenAIPluginDescription(e){let t=[e?.plugin?.id,e?.plugin?.name,e?.displayName,e?.summary?.id,e?.summary?.name].map(e=>String(e??``).toLowerCase()).join(` `),n=[e?.marketplaceName,e?.marketplaceDisplayName,e?.remoteMarketplaceName,e?.plugin?.id,e?.summary?.id].map(e=>String(e??``).toLowerCase()).join(` `);if(!/(openai|codex official)/.test(n)||/(ruijie|local plugins?)/.test(n))return null;if(t.includes(`google-calendar`))return`Google 日历：查看日程、安排会议和管理日历。`;if(t.includes(`google-drive`))return`Google 云端硬盘：访问 Drive、Docs、Sheets 和 Slides 文件。`;if(t.includes(`gmail`))return`Gmail：读取、搜索、撰写和管理邮件。`;if(t.includes(`slack`))return`Slack：搜索消息、查看频道并处理协作对话。`;if(t.includes(`linear`))return`Linear：查找和引用 issue、项目与工作流。`;if(t.includes(`github`))return`GitHub：查看仓库、PR、issue 和代码协作内容。`;if(t.includes(`figma`))return`Figma：读取设计文件、生成实现计划和处理设计系统。`;if(t.includes(`notion`))return`Notion：检索知识库、整理资料和写入页面。`;if(t.includes(`canva`))return`Canva：搜索、创建和编辑设计。`;if(t.includes(`openai-developers`))return`OpenAI Developers：构建 OpenAI API、Agents SDK 和 ChatGPT Apps。`;if(t.includes(`outlook-calendar`))return`Outlook 日历：查看日程、安排会议和管理日历。`;if(t.includes(`outlook-email`))return`Outlook 邮箱：读取、搜索、撰写和管理邮件。`;if(t.includes(`sharepoint`))return`SharePoint：访问团队文档和协作文件。`;if(t.includes(`teams`))return`Microsoft Teams：查看和处理团队协作内容。`;if(t.includes(`computer-use`))return`Computer Use：操作浏览器或桌面界面，用于点击、输入和读取屏幕内容。`;if(t.includes(`browser-use`)||t.includes(`browser`))return`Browser：控制内置浏览器，用于页面导航、点击、输入和截图。`;if(t.includes(`chrome`))return`Chrome：控制用户 Chrome 浏览器，适用于需要登录态、cookies 或已有标签页的任务。`;if(t.includes(`latex-tectonic`))return`LaTeX Tectonic：使用内置 Tectonic 编译 LaTeX 和 TeX 文档。`;if(t.includes(`build-macos-apps`))return`Build macOS Apps：构建、运行、测试、签名和排查 macOS 应用。`;if(t.includes(`spreadsheets`))return`Spreadsheets：读取、编辑和整理电子表格数据。`;if(t.includes(`presentations`))return`Presentations：读取、编辑和整理演示文稿。`;return null}function h(e,t){let n=p(e);if(n!=null)return t.formatMessage(f[n]);let r=ruizhiOpenAIPluginDescription(e);if(r!=null)return r;let i=l(e.plugin.interface?.defaultPrompt);if(i!=null)return i;let a=e.description?.trim();return a==null||a.length===0?null:a}"
+      "function ruizhiOpenAIPluginDescription(e){let t=[e?.plugin?.id,e?.plugin?.name,e?.displayName,e?.summary?.id,e?.summary?.name].map(e=>String(e??``).toLowerCase()).join(` `),n=[e?.marketplaceName,e?.marketplaceDisplayName,e?.remoteMarketplaceName,e?.plugin?.id,e?.summary?.id].map(e=>String(e??``).toLowerCase()).join(` `);if(!/(openai|codex official)/.test(n)||/(ruijie|local plugins?)/.test(n))return null;if(t.includes(`google-calendar`))return`Google 日历：查看日程、安排会议和管理日历。`;if(t.includes(`google-drive`))return`Google 云端硬盘：访问 Drive、Docs、Sheets 和 Slides 文件。`;if(t.includes(`gmail`))return`Gmail：读取、搜索、撰写和管理邮件。`;if(t.includes(`slack`))return`Slack：搜索消息、查看频道并处理协作对话。`;if(t.includes(`linear`))return`Linear：查找和引用 issue、项目与工作流。`;if(t.includes(`github`))return`GitHub：查看仓库、PR、issue 和代码协作内容。`;if(t.includes(`figma`))return`Figma：读取设计文件、生成实现计划和处理设计系统。`;if(t.includes(`notion`))return`Notion：检索知识库、整理资料和写入页面。`;if(t.includes(`canva`))return`Canva：搜索、创建和编辑设计。`;if(t.includes(`openai-developers`))return`OpenAI Developers：构建 OpenAI API、Agents SDK 和 ChatGPT Apps。`;if(t.includes(`outlook-calendar`))return`Outlook 日历：查看日程、安排会议和管理日历。`;if(t.includes(`outlook-email`))return`Outlook 邮箱：读取、搜索、撰写和管理邮件。`;if(t.includes(`sharepoint`))return`SharePoint：访问团队文档和协作文件。`;if(t.includes(`teams`))return`Microsoft Teams：查看和处理团队协作内容。`;if(t.includes(`computer-use`))return`Computer Use：操作浏览器或桌面界面，用于点击、输入和读取屏幕内容。`;if(t.includes(`chrome`))return`Chrome：控制用户 Chrome 浏览器，适用于需要登录态、cookies 或已有标签页的任务。`;if(t.includes(`latex-tectonic`))return`LaTeX Tectonic：使用内置 Tectonic 编译 LaTeX 和 TeX 文档。`;if(t.includes(`build-macos-apps`))return`Build macOS Apps：构建、运行、测试、签名和排查 macOS 应用。`;if(t.includes(`spreadsheets`))return`Spreadsheets：读取、编辑和整理电子表格数据。`;if(t.includes(`presentations`))return`Presentations：读取、编辑和整理演示文稿。`;return null}function h(e,t){let n=p(e);if(n!=null)return t.formatMessage(f[n]);let r=ruizhiOpenAIPluginDescription(e);if(r!=null)return r;let i=l(e.plugin.interface?.defaultPrompt);if(i!=null)return i;let a=e.description?.trim();return a==null||a.length===0?null:a}"
     );
   }
 
@@ -1052,8 +1263,8 @@ function patchPluginSelectorsBundle(filePath) {
 
 function openAIPluginDescriptions(kind = "short") {
   const short = {
-    "browser-use": "控制内置浏览器，用于页面导航、点击、输入和截图。",
     "chrome": "控制用户 Chrome 浏览器，适用于需要登录态、cookies 或已有标签页的任务。",
+    "latex": "使用内置 Tectonic、TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。",
     "latex-tectonic": "使用内置 Tectonic 编译 LaTeX 和 TeX 文档。",
     "hugging-face": "检索模型、数据集、Spaces 和推理资源。",
     "netlify": "部署项目、管理发布流程和站点配置。",
@@ -1182,8 +1393,8 @@ function openAIPluginDescriptions(kind = "short") {
   };
   const long = {
     ...short,
-    "browser-use": "Browser 让 Codex 打开并控制内置浏览器，主要用于本地开发页面和文件。它可以导航、检查页面、点击、输入和截图，并在 Codex 内完成页面验证。",
     "chrome": "Chrome 让 Codex 使用你的 Chrome 浏览器处理需要现有浏览器状态的任务，包括已打开的标签页、cookies、扩展和已经登录的网站。它可以导航、查看页面、点击、输入和截图。",
+    "latex": "LaTeX 插件优先使用内置 Tectonic 编译简单项目，也可回退到系统 TeX Live 或 MacTeX，并在需要时安装 Codex 托管的完整 TeX Live runtime。",
     "latex-tectonic": "LaTeX Tectonic 提供内置 Tectonic 可执行文件，Codex 可用它编译 LaTeX 和 TeX 文档，无需依赖系统级 TeX 安装。",
     "hugging-face": "Hugging Face 可用于检索和检查模型、数据集、Spaces、推理端点和相关资源，帮助完成模型选型、资料查找和机器学习项目调研。",
     "netlify": "Netlify 可用于部署项目、查看站点和发布状态、管理构建与发布流程，并协助处理 Web 项目上线相关任务。",
@@ -1222,100 +1433,6 @@ function openAIPluginDescriptionFunctionSource(functionName, kind = "short") {
 }
 
 function openAIPluginSkillPreviewFunctionSource() {
-  const browserSkill = `# Browser
-
-用于让 Codex 控制内置浏览器。适用场景包括打开页面、导航、检查页面状态、测试本地应用、点击、输入、截图，以及读取当前可见页面内容。完成初始化后应选择 \`iab\` 浏览器后端。
-
-如果本插件在会话中可用，浏览器相关任务应优先使用本技能。不要因为其他浏览器工具看起来更直接，就绕过本技能。
-
-首次在当前会话使用前，需要完整读取本技能说明，不能只读取片段。
-
-## 初始化
-
-这些步骤属于内部初始化流程。需要用插件提供的浏览器后端建立连接，确认页面列表、当前标签页、截图和 DOM 快照可用；如果初始化失败，应先按本技能的排查步骤处理，再考虑其他方案。
-
-## 故障排查
-
-浏览器不可用时，先确认插件后端是否启动、当前页面是否可访问、目标 URL 是否受限制、页面是否仍在加载、选择器是否稳定。不要用空结果掩盖失败；如果页面无法操作，要明确说明失败点。
-
-## 运行行为
-
-浏览器操作应基于可见页面状态执行。读取页面、点击、输入、截图、导航都必须等待页面达到可交互状态。对会修改用户数据、提交表单、删除内容、付款或发送消息的操作，要遵守确认策略。
-
-### node_repl
-
-需要脚本化页面检查时，可以使用 Node REPL 中的浏览器 API。优先读取 DOM、role、文本、placeholder、URL 和可访问名称；不要依赖脆弱坐标。
-
-## API 使用方式
-
-### API 使用步骤
-
-使用浏览器 API 时，先获取当前页面和快照，再根据页面结构选择最稳定的定位方式。操作后要重新读取状态确认结果。
-
-### 通用建议
-
-优先使用语义化定位。只在 DOM 信息不足时才考虑坐标。对弹窗、抽屉、虚拟列表和 iframe，要先确认当前焦点和可见区域。
-
-## Playwright
-
-### 快照规范
-
-操作前读取快照，操作后再次读取快照。不要假设页面状态已经改变。
-
-### 当前运行环境中的 Playwright 约束
-
-不要随意启动新的独立浏览器 profile。不要绕过插件提供的浏览器上下文。不要在未确认页面状态时执行破坏性操作。
-
-### 必要交互流程
-
-先定位元素，再确认元素可见和可用，然后执行点击、输入或导航，最后读取结果。
-
-### 定位策略
-
-优先级：role、label、placeholder、text、URL、稳定属性、DOM 结构。避免使用易变 class、纯坐标和过深 CSS 路径。
-
-### 使用 \`getByRole(..., { name })\`
-
-按钮、链接、输入框、菜单项优先用 role 和名称定位。名称可来自可见文本、aria-label 或关联 label。
-
-### 交互最佳实践
-
-等待页面稳定；输入前清空目标字段；点击前确认不会误触；提交前核对表单内容。
-
-### 错误恢复
-
-如果定位失败，重新读取页面快照并改用更稳定定位方式。不要反复执行同一个失败操作。
-
-### 回退策略
-
-只有在插件浏览器确实不可用，且用户允许时，才使用其他浏览器方案。
-
-## 浏览器安全
-
-浏览器可能包含登录态和敏感数据。不要读取或输出与任务无关的隐私信息。执行有副作用的操作前按策略请求确认。
-
-## 浏览器操作确认策略
-
-### 适用范围
-
-适用于提交表单、发送消息、购买、删除、授权、修改账号、下载或上传文件等会影响用户状态的操作。
-
-### 定义
-
-低风险操作包括查看页面、搜索、导航和读取公开内容。高风险操作包括不可逆修改、外部发送、资金相关、权限授权和数据覆盖。
-
-### 确认模式
-
-低风险操作可直接执行。高风险操作必须先清楚说明将要做什么并等待用户确认。
-
-### 确认规范
-
-确认请求要具体，不要含糊。确认后只执行用户批准的操作范围。
-
-## API 参考
-
-常用能力包括打开页面、获取当前页面、读取快照、点击、输入、选择、截图、等待导航、读取文本和执行页面脚本。`;
-
   const chromeSkill = `# Chrome
 
 用于让 Codex 连接并控制用户的 Chrome 浏览器。适用于需要用户现有浏览器状态的任务，包括 cookies、登录态、已有标签页、扩展、远程认证网站，以及 Codex Chrome Extension 的设置、检测和修复。
@@ -1507,7 +1624,7 @@ node scripts/tectonic-path.mjs
 
 优先把生成的 PDF 和辅助文件写入明确的输出目录。除非用户要求回退方案，否则不要安装系统级 TeX 发行版。`;
 
-  return `function ruizhiSkillPreviewMarkdown(e,t){let n=String(t??\`\`).replace(/\\\\/g,\`/\`).toLowerCase();if(n.includes(\`/openai-bundled/plugins/browser-use/skills/browser/skill.md\`)||n.includes(\`/openai-bundled/browser-use/\`)&&n.includes(\`/skills/browser/skill.md\`))return ${JSON.stringify(browserSkill)};if(n.includes(\`/openai-bundled/plugins/chrome/skills/chrome/skill.md\`)||n.includes(\`/openai-bundled/chrome/\`)&&n.includes(\`/skills/chrome/skill.md\`))return ${JSON.stringify(chromeSkill)};if(n.includes(\`/openai-bundled/plugins/latex-tectonic/skills/latex-tectonic/skill.md\`)||n.includes(\`/openai-bundled/latex-tectonic/\`)&&n.includes(\`/skills/latex-tectonic/skill.md\`))return ${JSON.stringify(latexSkill)};return e}`;
+  return `function ruizhiSkillPreviewMarkdown(e,t){let n=String(t??\`\`).replace(/\\\\/g,\`/\`).toLowerCase();if(n.includes(\`/openai-bundled/plugins/chrome/skills/chrome/skill.md\`)||n.includes(\`/openai-bundled/chrome/\`)&&n.includes(\`/skills/chrome/skill.md\`))return ${JSON.stringify(chromeSkill)};if(n.includes(\`/openai-bundled/plugins/latex/skills/\`)||n.includes(\`/openai-bundled/plugins/latex-tectonic/skills/latex-tectonic/skill.md\`)||n.includes(\`/openai-bundled/latex/\`)&&n.includes(\`/skills/\`)||n.includes(\`/openai-bundled/latex-tectonic/\`)&&n.includes(\`/skills/latex-tectonic/skill.md\`))return ${JSON.stringify(latexSkill)};return e}`;
 }
 
 function translatedOpenAIPluginSkillMarkdown(previewPath) {
@@ -1632,7 +1749,7 @@ function patchPluginAvailabilityBundle(filePath) {
   if (next.includes(descriptionTarget) && !next.includes("function ruizhiOpenAIPluginInstallDescription(")) {
     next = next.replace(
       descriptionTarget,
-      "function ruizhiOpenAIPluginInstallDescription(e){let t=[e?.plugin?.id,e?.plugin?.name,e?.displayName,e?.summary?.id,e?.summary?.name].map(e=>String(e??``).toLowerCase()).join(` `),n=[e?.marketplaceName,e?.marketplaceDisplayName,e?.remoteMarketplaceName,e?.plugin?.id,e?.summary?.id].map(e=>String(e??``).toLowerCase()).join(` `);if(!/(openai|codex official)/.test(n)||/(ruijie|local plugins?)/.test(n))return null;if(t.includes(`google-calendar`))return`Google 日历：查看日程、安排会议和管理日历。`;if(t.includes(`google-drive`))return`Google 云端硬盘：访问 Drive、Docs、Sheets 和 Slides 文件。`;if(t.includes(`gmail`))return`Gmail：读取、搜索、撰写和管理邮件。`;if(t.includes(`slack`))return`Slack：搜索消息、查看频道并处理协作对话。`;if(t.includes(`linear`))return`Linear：查找和引用 issue、项目与工作流。`;if(t.includes(`github`))return`GitHub：查看仓库、PR、issue 和代码协作内容。`;if(t.includes(`figma`))return`Figma：读取设计文件、生成实现计划和处理设计系统。`;if(t.includes(`notion`))return`Notion：检索知识库、整理资料和写入页面。`;if(t.includes(`canva`))return`Canva：搜索、创建和编辑设计。`;if(t.includes(`openai-developers`))return`OpenAI Developers：构建 OpenAI API、Agents SDK 和 ChatGPT Apps。`;if(t.includes(`outlook-calendar`))return`Outlook 日历：查看日程、安排会议和管理日历。`;if(t.includes(`outlook-email`))return`Outlook 邮箱：读取、搜索、撰写和管理邮件。`;if(t.includes(`sharepoint`))return`SharePoint：访问团队文档和协作文件。`;if(t.includes(`teams`))return`Microsoft Teams：查看和处理团队协作内容。`;if(t.includes(`computer-use`))return`Computer Use：操作浏览器或桌面界面，用于点击、输入和读取屏幕内容。`;if(t.includes(`browser-use`)||t.includes(`browser`))return`Browser：控制内置浏览器，用于页面导航、点击、输入和截图。`;if(t.includes(`chrome`))return`Chrome：控制用户 Chrome 浏览器，适用于需要登录态、cookies 或已有标签页的任务。`;if(t.includes(`latex-tectonic`))return`LaTeX Tectonic：使用内置 Tectonic 编译 LaTeX 和 TeX 文档。`;if(t.includes(`build-macos-apps`))return`Build macOS Apps：构建、运行、测试、签名和排查 macOS 应用。`;if(t.includes(`spreadsheets`))return`Spreadsheets：读取、编辑和整理电子表格数据。`;if(t.includes(`presentations`))return`Presentations：读取、编辑和整理演示文稿。`;return null}function Nt(e){let t=ruizhiOpenAIPluginInstallDescription(e);return t??(e.plugin.interface?.longDescription?.trim()||e.plugin.interface?.shortDescription?.trim()||e.description?.trim()||null)}"
+      "function ruizhiOpenAIPluginInstallDescription(e){let t=[e?.plugin?.id,e?.plugin?.name,e?.displayName,e?.summary?.id,e?.summary?.name].map(e=>String(e??``).toLowerCase()).join(` `),n=[e?.marketplaceName,e?.marketplaceDisplayName,e?.remoteMarketplaceName,e?.plugin?.id,e?.summary?.id].map(e=>String(e??``).toLowerCase()).join(` `);if(!/(openai|codex official)/.test(n)||/(ruijie|local plugins?)/.test(n))return null;if(t.includes(`google-calendar`))return`Google 日历：查看日程、安排会议和管理日历。`;if(t.includes(`google-drive`))return`Google 云端硬盘：访问 Drive、Docs、Sheets 和 Slides 文件。`;if(t.includes(`gmail`))return`Gmail：读取、搜索、撰写和管理邮件。`;if(t.includes(`slack`))return`Slack：搜索消息、查看频道并处理协作对话。`;if(t.includes(`linear`))return`Linear：查找和引用 issue、项目与工作流。`;if(t.includes(`github`))return`GitHub：查看仓库、PR、issue 和代码协作内容。`;if(t.includes(`figma`))return`Figma：读取设计文件、生成实现计划和处理设计系统。`;if(t.includes(`notion`))return`Notion：检索知识库、整理资料和写入页面。`;if(t.includes(`canva`))return`Canva：搜索、创建和编辑设计。`;if(t.includes(`openai-developers`))return`OpenAI Developers：构建 OpenAI API、Agents SDK 和 ChatGPT Apps。`;if(t.includes(`outlook-calendar`))return`Outlook 日历：查看日程、安排会议和管理日历。`;if(t.includes(`outlook-email`))return`Outlook 邮箱：读取、搜索、撰写和管理邮件。`;if(t.includes(`sharepoint`))return`SharePoint：访问团队文档和协作文件。`;if(t.includes(`teams`))return`Microsoft Teams：查看和处理团队协作内容。`;if(t.includes(`computer-use`))return`Computer Use：操作浏览器或桌面界面，用于点击、输入和读取屏幕内容。`;if(t.includes(`chrome`))return`Chrome：控制用户 Chrome 浏览器，适用于需要登录态、cookies 或已有标签页的任务。`;if(t.includes(`latex-tectonic`))return`LaTeX Tectonic：使用内置 Tectonic 编译 LaTeX 和 TeX 文档。`;if(t.includes(`build-macos-apps`))return`Build macOS Apps：构建、运行、测试、签名和排查 macOS 应用。`;if(t.includes(`spreadsheets`))return`Spreadsheets：读取、编辑和整理电子表格数据。`;if(t.includes(`presentations`))return`Presentations：读取、编辑和整理演示文稿。`;return null}function Nt(e){let t=ruizhiOpenAIPluginInstallDescription(e);return t??(e.plugin.interface?.longDescription?.trim()||e.plugin.interface?.shortDescription?.trim()||e.description?.trim()||null)}"
     );
   }
 
@@ -1678,7 +1795,7 @@ function patchPluginDetailPageBundle(filePath) {
   if (next.includes(detailDescriptionTarget) && !next.includes("function ruizhiOpenAIPluginDetailDescription(")) {
     next = next.replace(
       detailDescriptionTarget,
-      "function ruizhiOpenAIPluginDetailDescription(e){let t=[e?.summary?.id,e?.summary?.name,e?.summary?.interface?.displayName,e?.summary?.interface?.shortDescription].map(e=>String(e??``).toLowerCase()).join(` `),n=[e?.marketplaceName,e?.marketplaceDisplayName,e?.remoteMarketplaceName,e?.summary?.source?.type,e?.summary?.id].map(e=>String(e??``).toLowerCase()).join(` `);if(!/(openai|codex official)/.test(n)||/(ruijie|local plugins?)/.test(n))return null;if(t.includes(`google-calendar`))return`Google 日历：查看日程、安排会议和管理日历。`;if(t.includes(`google-drive`))return`Google 云端硬盘：访问 Drive、Docs、Sheets 和 Slides 文件。`;if(t.includes(`gmail`))return`Gmail：读取、搜索、撰写和管理邮件。`;if(t.includes(`slack`))return`Slack：搜索消息、查看频道并处理协作对话。`;if(t.includes(`linear`))return`Linear：查找和引用 issue、项目与工作流。`;if(t.includes(`github`))return`GitHub：查看仓库、PR、issue 和代码协作内容。`;if(t.includes(`figma`))return`Figma：读取设计文件、生成实现计划和处理设计系统。`;if(t.includes(`notion`))return`Notion：检索知识库、整理资料和写入页面。`;if(t.includes(`canva`))return`Canva：搜索、创建和编辑设计。`;if(t.includes(`openai-developers`))return`OpenAI Developers：构建 OpenAI API、Agents SDK 和 ChatGPT Apps。`;if(t.includes(`outlook-calendar`))return`Outlook 日历：查看日程、安排会议和管理日历。`;if(t.includes(`outlook-email`))return`Outlook 邮箱：读取、搜索、撰写和管理邮件。`;if(t.includes(`sharepoint`))return`SharePoint：访问团队文档和协作文件。`;if(t.includes(`teams`))return`Microsoft Teams：查看和处理团队协作内容。`;if(t.includes(`computer-use`))return`Computer Use：操作浏览器或桌面界面，用于点击、输入和读取屏幕内容。`;if(t.includes(`browser-use`)||t.includes(`browser`))return`Browser：控制内置浏览器，用于页面导航、点击、输入和截图。`;if(t.includes(`chrome`))return`Chrome：控制用户 Chrome 浏览器，适用于需要登录态、cookies 或已有标签页的任务。`;if(t.includes(`latex-tectonic`))return`LaTeX Tectonic：使用内置 Tectonic 编译 LaTeX 和 TeX 文档。`;if(t.includes(`build-macos-apps`))return`Build macOS Apps：构建、运行、测试、签名和排查 macOS 应用。`;if(t.includes(`spreadsheets`))return`Spreadsheets：读取、编辑和整理电子表格数据。`;if(t.includes(`presentations`))return`Presentations：读取、编辑和整理演示文稿。`;return null}function _i(e){return ruizhiOpenAIPluginDetailDescription(e)??e.summary.interface?.shortDescription??e.description??null}function vi(e){let t=ruizhiOpenAIPluginDetailDescription(e);if(t!=null)return null;let n=e.summary.interface?.longDescription??e.description??e.summary.interface?.shortDescription??null;return n===_i(e)?null:n}"
+      "function ruizhiOpenAIPluginDetailDescription(e){let t=[e?.summary?.id,e?.summary?.name,e?.summary?.interface?.displayName,e?.summary?.interface?.shortDescription].map(e=>String(e??``).toLowerCase()).join(` `),n=[e?.marketplaceName,e?.marketplaceDisplayName,e?.remoteMarketplaceName,e?.summary?.source?.type,e?.summary?.id].map(e=>String(e??``).toLowerCase()).join(` `);if(!/(openai|codex official)/.test(n)||/(ruijie|local plugins?)/.test(n))return null;if(t.includes(`google-calendar`))return`Google 日历：查看日程、安排会议和管理日历。`;if(t.includes(`google-drive`))return`Google 云端硬盘：访问 Drive、Docs、Sheets 和 Slides 文件。`;if(t.includes(`gmail`))return`Gmail：读取、搜索、撰写和管理邮件。`;if(t.includes(`slack`))return`Slack：搜索消息、查看频道并处理协作对话。`;if(t.includes(`linear`))return`Linear：查找和引用 issue、项目与工作流。`;if(t.includes(`github`))return`GitHub：查看仓库、PR、issue 和代码协作内容。`;if(t.includes(`figma`))return`Figma：读取设计文件、生成实现计划和处理设计系统。`;if(t.includes(`notion`))return`Notion：检索知识库、整理资料和写入页面。`;if(t.includes(`canva`))return`Canva：搜索、创建和编辑设计。`;if(t.includes(`openai-developers`))return`OpenAI Developers：构建 OpenAI API、Agents SDK 和 ChatGPT Apps。`;if(t.includes(`outlook-calendar`))return`Outlook 日历：查看日程、安排会议和管理日历。`;if(t.includes(`outlook-email`))return`Outlook 邮箱：读取、搜索、撰写和管理邮件。`;if(t.includes(`sharepoint`))return`SharePoint：访问团队文档和协作文件。`;if(t.includes(`teams`))return`Microsoft Teams：查看和处理团队协作内容。`;if(t.includes(`computer-use`))return`Computer Use：操作浏览器或桌面界面，用于点击、输入和读取屏幕内容。`;if(t.includes(`chrome`))return`Chrome：控制用户 Chrome 浏览器，适用于需要登录态、cookies 或已有标签页的任务。`;if(t.includes(`latex-tectonic`))return`LaTeX Tectonic：使用内置 Tectonic 编译 LaTeX 和 TeX 文档。`;if(t.includes(`build-macos-apps`))return`Build macOS Apps：构建、运行、测试、签名和排查 macOS 应用。`;if(t.includes(`spreadsheets`))return`Spreadsheets：读取、编辑和整理电子表格数据。`;if(t.includes(`presentations`))return`Presentations：读取、编辑和整理演示文稿。`;return null}function _i(e){return ruizhiOpenAIPluginDetailDescription(e)??e.summary.interface?.shortDescription??e.description??null}function vi(e){let t=ruizhiOpenAIPluginDetailDescription(e);if(t!=null)return null;let n=e.summary.interface?.longDescription??e.description??e.summary.interface?.shortDescription??null;return n===_i(e)?null:n}"
     );
   }
 
@@ -2448,6 +2565,14 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     log("已跳过插件市场文案补丁");
   }
   patchNativeWebviewFeatureGates(extractedAppDir, { log });
+  patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });
+  patchBrowserNativePipeDiagnostics(extractedAppDir, { log });
+  patchBrowserNativePipePeerAuthorization(extractedAppDir, { log });
+  if (options.resourcesDir) {
+    patchTrustedBrowserClientHashes(extractedAppDir, options.resourcesDir, { log });
+  } else {
+    log("已跳过 Browser client nativePipe 信任哈希刷新：缺少 resourcesDir");
+  }
   log(`已刷新 Windows asar 构建元数据：${appVersion}`);
 }
 

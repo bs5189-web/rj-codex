@@ -7,7 +7,7 @@
   const productName="锐智";
   const ruizhiHomeEnvName="RUIZHI_HOME";
   const ruizhiDefaultHomeDirName=".codex";
-  const electronUserDataDirName="Codex";
+  const electronUserDataDirName="锐智";
   const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
   const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
@@ -25,7 +25,7 @@ function ruizhiInit(){
     const os=require("node:os");
     const path=require("node:path");
     const productName="锐智";
-    const electronUserDataDirName="Codex";
+    const electronUserDataDirName="锐智";
     const locale="zh-CN";
     const posixLocale="zh_CN";
     const ruizhiHomeEnvName="RUIZHI_HOME";
@@ -209,7 +209,7 @@ function ruizhiInit(){
     syncLegacyCodexGlobalSkills();
 
     const marketplaceSpecs=[{"name":"ruijie-skills","resourcePath":["plugins","ruijie-skills"],"installPath":[".tmp","marketplaces","ruijie-skills"],"versionManifestPath":[".codex-plugin","plugin.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__"},{"name":"openai-bundled","resourcePath":["plugins","openai-bundled"],"installPath":[".tmp","bundled-marketplaces","openai-bundled"],"versionManifestPath":[".agents","plugins","marketplace.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","alwaysCopy":true,"hardcodedPlugins":true}];
-    const hardcodedOpenAIBundledPlugins=[{"name":"browser-use","path":"./plugins/browser-use","category":"浏览器"},{"name":"chrome","path":"./plugins/chrome","category":"实验性"},{"name":"latex-tectonic","path":"./plugins/latex-tectonic","category":"研究"}];
+    const hardcodedOpenAIBundledPlugins=[{"name":"browser","path":"./plugins/browser","category":"Engineering"},{"name":"chrome","path":"./plugins/chrome","category":"Productivity"},{"name":"latex","path":"./plugins/latex","category":"Research"}];
     function assertInside(base,target){
       const relative=path.relative(path.resolve(base),path.resolve(target));
       if(!relative||relative.startsWith("..")||path.isAbsolute(relative)){
@@ -381,7 +381,7 @@ function ruizhiInit(){
 
     const managedBegin="# BEGIN Ruizhi Managed Defaults";
     const managedEnd="# END Ruizhi Managed Defaults";
-    const configTemplateLines=["# BEGIN Ruizhi Managed Defaults","model = \"gpt-5.5\"","model_reasoning_effort = \"medium\"","model_provider = \"ruizhi\"","openai_base_url = \"http://127.0.0.1:17888/v1\"","","[model_providers.ruizhi]","name = \"锐擎API\"","base_url = \"http://127.0.0.1:17888/v1\"","wire_api = \"responses\"","requires_openai_auth = true","supports_websockets = false","stream_max_retries = 0","request_max_retries = 0","","[features]","default_mode_request_user_input = true","plugins = true","apps = true","browser_use = true","","[marketplaces.ruijie-skills]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__","","[marketplaces.openai-bundled]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","","# END Ruizhi Managed Defaults",""];
+    const configTemplateLines=["# BEGIN Ruizhi Managed Defaults","model = \"gpt-5.5\"","model_reasoning_effort = \"medium\"","model_provider = \"ruizhi\"","openai_base_url = \"http://127.0.0.1:17888/v1\"","","[model_providers.ruizhi]","name = \"锐擎API\"","base_url = \"http://127.0.0.1:17888/v1\"","wire_api = \"responses\"","requires_openai_auth = true","supports_websockets = false","stream_max_retries = 0","request_max_retries = 0","","[features]","default_mode_request_user_input = true","plugins = true","apps = true","browser_use = true","","[marketplaces.ruijie-skills]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__","","[marketplaces.openai-bundled]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","","[plugins.\"browser@openai-bundled\"]","enabled = true","","[plugins.\"chrome@openai-bundled\"]","enabled = true","","[plugins.\"latex@openai-bundled\"]","enabled = true","","# END Ruizhi Managed Defaults",""];
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
@@ -405,6 +405,36 @@ function ruizhiInit(){
       }
       return "";
     }
+    function managedConfigSectionNames(){
+      const names=["features","model_providers.ruizhi"];
+      for(const spec of marketplaceSpecs){
+        names.push("marketplaces."+spec.name);
+      }
+      for(const plugin of hardcodedOpenAIBundledPlugins){
+        names.push("plugins.\""+plugin.name+"@openai-bundled\"");
+      }
+      return new Set(names);
+    }
+    function stripManagedConfigConflicts(text){
+      const managedSectionNames=managedConfigSectionNames();
+      const output=[];
+      let sawSection=false;
+      let inManagedSection=false;
+      for(const rawLine of String(text??"").split(/\r?\n/)){
+        const section=rawLine.trim().match(/^\[([^\]]+)\]\s*(?:#.*)?$/);
+        if(section){
+          sawSection=true;
+          inManagedSection=managedSectionNames.has(section[1].trim());
+          if(inManagedSection)continue;
+          output.push(rawLine);
+          continue;
+        }
+        if(inManagedSection)continue;
+        if(!sawSection&&/^\s*(model|model_provider|model_reasoning_effort|openai_base_url)\s*=/.test(rawLine))continue;
+        output.push(rawLine);
+      }
+      return output.join("\n").trim();
+    }
     function mergeManagedConfig(existing){
       if(!existing.trim())return managedBlock;
       const beginIndex=existing.indexOf(managedBegin);
@@ -426,11 +456,8 @@ function ruizhiInit(){
         const rest=stripLegacyManagedPrefix(existing);
         return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\n\n"));
       }
-      if(!/^\s*\[/m.test(existing)){
-        return withFinalNewline([existing.trimEnd(),managedBlock.trimEnd()].filter(Boolean).join("\n\n"));
-      }
-      console.warn("ruizhi bootstrap kept unmanaged config.toml unchanged");
-      return existing;
+      const rest=stripManagedConfigConflicts(existing);
+      return withFinalNewline([managedBlock.trimEnd(), rest.trimStart()].filter(Boolean).join("\n\n"));
     }
 
 /* ruizhi-windows-sandbox-config:start */
@@ -502,7 +529,9 @@ function ruizhiInit(){
     }
 /* ruizhi-windows-sandbox-config:end */
     const configPath=path.join(codexHome,"config.toml");
-    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+    const existingCodexConfig=fs.existsSync(configPath);
+    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
+    const existing=existingCodexConfig?fs.readFileSync(configPath,"utf8"):"";
     let next=mergeManagedConfig(existing);
     next=rewriteRuntimeModelProviderBaseUrl(next);
     const sandboxMode=hasWindowsSandboxSetup(codexHome)?inferWindowsSandboxMode(next):readWindowsSandboxModeFromConfig(next);
@@ -628,6 +657,17 @@ function ruizhiStartBackgroundUpdateCheck(){
   function authPath(){
     return path.join(authHome(),"auth.json");
   }
+  function hasExistingCodexConfig(){
+    const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
+    if(marker==="1")return true;
+    if(marker==="0")return false;
+    const filePath=path.join(authHome(),"config.toml");
+    try{
+      return fs.existsSync(filePath)&&fs.statSync(filePath).isFile();
+    }catch{
+      return false;
+    }
+  }
   function maskApiKey(key){
     const value=String(key||"").trim();
     if(!value)return "";
@@ -637,15 +677,16 @@ function ruizhiStartBackgroundUpdateCheck(){
   function readApiKeyStatus(){
     const filePath=authPath();
     let key="";
+    const existingConfig=hasExistingCodexConfig();
     try{
       if(fs.existsSync(filePath)){
         const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
         key=String(auth.OPENAI_API_KEY||"").trim();
       }
     }catch(error){
-      return {configured:false,masked:"",error:String(error?.message||error),version:n.app.getVersion()};
+      return {configured:existingConfig,masked:"",configuredBy:existingConfig?"codex-config":"none",error:String(error?.message||error),version:n.app.getVersion()};
     }
-    return {configured:key.length>0,masked:maskApiKey(key),version:n.app.getVersion()};
+    return {configured:key.length>0||existingConfig,masked:maskApiKey(key),configuredBy:key.length>0?"api-key":existingConfig?"codex-config":"none",version:n.app.getVersion()};
   }
   function writeApiKey(key){
     const filePath=authPath();
@@ -796,6 +837,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       setImmediate(()=>autoUpdater.quitAndInstall(true,true));
       return {ok:true};
     });
+    n.ipcMain.on("ruizhi:auth:get-sync",event=>{event.returnValue=readApiKeyStatus();});
     n.ipcMain.handle("ruizhi:auth:get",()=>readApiKeyStatus());
     n.ipcMain.handle("ruizhi:auth:set-and-test",async(_event,key)=>{
       try{

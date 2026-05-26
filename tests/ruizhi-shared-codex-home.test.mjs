@@ -11,9 +11,20 @@ function readProjectFile(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
 }
 
-test("runtime defaults share Codex home and Electron user data directories", () => {
+test("runtime defaults share Codex home but isolate Electron user data", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
   assert.equal(config.runtime.defaultHomeDirName, ".codex");
+  assert.equal(config.runtime.electronUserDataDirName, config.productName);
+  assert.match(
+    readProjectFile("scripts/build-macos.mjs"),
+    /CFBundleName", "-string", "Codex"/,
+    "macOS CFBundleName must stay Codex so Electron can find Codex Helper.app"
+  );
+  assert.match(
+    readProjectFile("scripts/build-macos.mjs"),
+    /CFBundleDisplayName", "-string", config\.productName/,
+    "macOS display name should still show the Ruizhi product name"
+  );
 
   const sources = [
     "scripts/build-windows.mjs",
@@ -27,6 +38,6 @@ test("runtime defaults share Codex home and Electron user data directories", () 
     assert.match(source, /["`]\.codex["`]/, `${sourcePath} should default CODEX_HOME to .codex`);
     assert.doesNotMatch(source, /path\.join\(home,\s*["`]\.ruizhi["`]\)/, `${sourcePath} should not default CODEX_HOME to .ruizhi`);
     assert.doesNotMatch(source, /p\.push\(["`]\.ruizhi["`]\)/, `${sourcePath} should not patch CLI default home to .ruizhi`);
-    assert.doesNotMatch(source, /path\.join\([^)]*(?:APPDATA|Application Support|XDG_CONFIG_HOME)[^)]*,\s*productName\)/s, `${sourcePath} should not default Electron userData to the Ruizhi product name`);
+    assert.match(source, /electronUserDataDirName/, `${sourcePath} should route Electron userData through the runtime setting`);
   }
 });

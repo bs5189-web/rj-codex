@@ -11,7 +11,7 @@ function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(projectRoot, relativePath), "utf8"));
 }
 
-test("page enhance enables first migration scope and leaves high risk features disabled", () => {
+test("page enhance keeps session export and retires destructive session actions", () => {
   const config = readJson("config/rj-codex.json");
   const features = config.pageEnhance?.features;
 
@@ -19,9 +19,9 @@ test("page enhance enables first migration scope and leaves high risk features d
   assert.equal(features?.menu, true);
   assert.equal(features?.pluginEntryUnlock, true);
   assert.equal(features?.forcePluginInstall, true);
-  assert.equal(features?.sessionDelete, true);
+  assert.equal(features?.sessionDelete, false);
   assert.equal(features?.markdownExport, true);
-  assert.equal(features?.projectMove, true);
+  assert.equal(features?.projectMove, false);
   assert.equal(features?.timeline, true);
   assert.equal(features?.threadScrollRestore, true);
   assert.equal(features?.threadSort, true);

@@ -207,6 +207,30 @@ function ruizhiForcePluginInstallEnabled() {
   }
 }
 
+function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const targetGateSource = "function Ue(e){return nt(),i(Z,e)}";
+  const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && fs.readFileSync(filePath, "utf8").includes(targetGateSource));
+  if (candidates.length !== 1) {
+    throw new Error(`Statsig webview gate bundle 匹配数量异常：${candidates.length}`);
+  }
+  const statsigFile = candidates[0];
+  const original = fs.readFileSync(statsigFile, "utf8");
+  if (original.includes("ruizhiNativeFeatureGateValue")) {
+    log("已存在 Codex 原生 webview gate 补丁");
+    return;
+  }
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const from = targetGateSource;
+  if (!original.includes(from)) {
+    throw new Error("Codex 原生 webview gate 补丁点不存在");
+  }
+  const next = original.replace(from, `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||i(Z,e)}`);
+  fs.writeFileSync(statsigFile, next, "utf8");
+  log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
+}
+
 function managedConfigTomlLinesForBootstrap(config) {
   const openai = config.openai ?? {};
   const baseUrl = modelProviderBaseUrl(config);
@@ -2264,6 +2288,15 @@ function patchWindowsTrayMenuLabels(extractedAppDir, config, options = {}) {
     "return`正在停止 Chronicle...`"
   );
 
+  const nativeMenuCode = `function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0,e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{let e=await n();e&&r(e,i)},f=e?.items?.[0]?.submenu;if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}}`;
+  if (!source.includes("function ruizhiEnsureNativeMenuItems(")) {
+    const insertionPoint = "let Xe=[],Ze=[";
+    if (!source.includes(insertionPoint)) {
+      throw new Error("顶部菜单原生入口补丁点不存在：菜单模板入口");
+    }
+    source = source.replace(insertionPoint, `${nativeMenuCode}${insertionPoint}`);
+  }
+
   if (!source.includes("function ruizhiTranslateApplicationMenu(")) {
     const insertionPoint = "let Xe=[],Ze=[";
     if (!source.includes(insertionPoint)) {
@@ -2279,7 +2312,7 @@ function patchWindowsTrayMenuLabels(extractedAppDir, config, options = {}) {
   if (!menuSetPattern.test(source)) {
     throw new Error("顶部菜单中文补丁点不存在：setApplicationMenu");
   }
-  source = source.replace(menuSetPattern, "}}try{ruizhiTranslateApplicationMenu($1)}catch(e){console.error(`锐智菜单翻译失败`,e)}n.Menu.setApplicationMenu($1),$2($3)}");
+  source = source.replace(menuSetPattern, "}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:yB});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(`锐智菜单修复失败`,e)}n.Menu.setApplicationMenu($1),$2($3)}");
 
   fs.writeFileSync(mainBundlePath, source, "utf8");
   log(`已补丁 Windows 托盘和顶部菜单中文文案：${path.basename(mainBundlePath)}`);
@@ -2414,6 +2447,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   } else {
     log("已跳过插件市场文案补丁");
   }
+  patchNativeWebviewFeatureGates(extractedAppDir, { log });
   log(`已刷新 Windows asar 构建元数据：${appVersion}`);
 }
 

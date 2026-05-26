@@ -739,6 +739,31 @@ function patchPluginAccountGate() {
   log(`已补丁插件账号模式 gate：${path.basename(gateFile)}`);
 }
 
+function patchNativeWebviewFeatureGates() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const targetGateSource = "function Ue(e){return nt(),i(Z,e)}";
+  const statsigFile = walkFiles(assetsDir)
+    .filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)))
+    .find((filePath) => fs.readFileSync(filePath, "utf8").includes(targetGateSource));
+  if (!statsigFile) {
+    throw new Error("Statsig webview gate 补丁目标不存在");
+  }
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const source = fs.readFileSync(statsigFile, "utf8");
+  if (source.includes("ruizhiNativeFeatureGateValue")) {
+    log("已存在 Codex 原生 webview gate 补丁");
+    return;
+  }
+  const patched = replaceExact(
+    source,
+    targetGateSource,
+    `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||i(Z,e)}`,
+    "Codex 原生 webview gate：自动化侧栏与设置菜单"
+  );
+  fs.writeFileSync(statsigFile, patched, "utf8");
+  log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
+}
+
 function patchOnboardingApiKeyTexts() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const onboardingFile = findOneFile(assetsDir, /^onboarding-login-content-.*\.js$/, "onboarding 登录内容 bundle");
@@ -1062,7 +1087,7 @@ function patchOfficialUpdateLogic() {
 }
 
 function applicationMenuPatchSource() {
-  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=e?.items?.[0]?.submenu;if(!a||!Array.isArray(a.items))return;let o=e=>String(e?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),s=()=>a.items.some(e=>/^(Settings|设置|Preferences|偏好设置)/.test(o(e))),c=()=>a.items.some(e=>/^(Automations|自动化)$/.test(o(e)));if(!s()){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:async()=>{let e=await n();e&&r(e,i)}});a.insert(Math.min(2,a.items.length),e)}if(!c()){let e=new t({label:\`自动化\`,click:async()=>{let e=await n();e&&r(e,\`/automations\`)}});a.insert(Math.min(3,a.items.length),e)}}`;
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{let e=await n();e&&r(e,i)},f=e?.items?.[0]?.submenu;if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}}`;
 }
 
 function patchApplicationMenu() {
@@ -1829,6 +1854,7 @@ async function repackAppAsar() {
   asar.extractAll(appAsarPath, extractedDir);
 
   patchPluginAccountGate();
+  patchNativeWebviewFeatureGates();
   patchOnboardingApiKeyTexts();
   patchLoginRoute();
   patchWebviewLocales();

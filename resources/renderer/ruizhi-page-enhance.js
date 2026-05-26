@@ -188,27 +188,6 @@
     document.body.appendChild(root);
   }
 
-  function reactFiberFrom(element) {
-    const key = Object.keys(element || {}).find((name) => name.startsWith("__reactFiber$") || name.startsWith("__reactInternalInstance$"));
-    return key ? element[key] : null;
-  }
-
-  function authContextValueFrom(element) {
-    for (let fiber = reactFiberFrom(element); fiber; fiber = fiber.return) {
-      for (const value of [fiber.memoizedProps && fiber.memoizedProps.value, fiber.pendingProps && fiber.pendingProps.value]) {
-        if (value && typeof value === "object" && typeof value.setAuthMethod === "function" && "authMethod" in value) return value;
-      }
-    }
-    return null;
-  }
-
-  function spoofChatGPTAuthMethod(element) {
-    const auth = authContextValueFrom(element);
-    if (!auth || auth.authMethod === "chatgpt") return false;
-    auth.setAuthMethod("chatgpt");
-    return true;
-  }
-
   function pluginEntryButton() {
     const buttons = Array.from(document.querySelectorAll("nav[role='navigation'] button, nav button, [role='navigation'] button"));
     return buttons.find((button) => /^(插件|Plugins)(\s+-\s+.*)?$/i.test((button.textContent || "").trim())) || null;
@@ -219,15 +198,13 @@
     const button = pluginEntryButton();
     if (!button) return;
     button.dataset.ruizhiPluginEntryUnlock = markers.pluginEntry;
-    spoofChatGPTAuthMethod(button);
     clearDisabledState(button);
     const textNode = Array.from(button.querySelectorAll("span,div")).reverse()
       .flatMap((node) => Array.from(node.childNodes))
       .find((node) => node.nodeType === 3 && /^(插件|Plugins)(\s+-\s+.*)?$/i.test((node.nodeValue || "").trim()));
-    if (textNode) textNode.nodeValue = /^Plugins/i.test(textNode.nodeValue || "") ? "Plugins - Unlocked" : "插件 - 已解锁";
+    if (textNode) textNode.nodeValue = /^Plugins/i.test(textNode.nodeValue || "") ? "Plugins" : "插件";
     if (button.dataset.ruizhiPluginEntryBound !== "true") {
       button.dataset.ruizhiPluginEntryBound = "true";
-      button.addEventListener("click", () => spoofChatGPTAuthMethod(button), true);
     }
   }
 

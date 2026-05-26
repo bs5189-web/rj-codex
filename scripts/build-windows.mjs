@@ -512,6 +512,26 @@ function patchPluginAccountGate() {
   log(`已补丁插件账号模式 gate：${path.basename(gradientFile)}`);
 }
 
+function patchNativeWebviewFeatureGates() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const targetGateSource = "function Ue(e){return nt(),i(Z,e)}";
+  const statsigFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, new RegExp(escapeRegExp(targetGateSource)), "Statsig webview gate bundle");
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const source = fs.readFileSync(statsigFile, "utf8");
+  if (source.includes("ruizhiNativeFeatureGateValue")) {
+    log("已存在 Codex 原生 webview gate 补丁");
+    return;
+  }
+  const patched = replaceExact(
+    source,
+    targetGateSource,
+    `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||i(Z,e)}`,
+    "Codex 原生 webview gate：自动化侧栏与设置菜单"
+  );
+  fs.writeFileSync(statsigFile, patched, "utf8");
+  log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
+}
+
 function patchOnboardingApiKeyTexts() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const onboardingFile = findOneFile(assetsDir, /^onboarding-login-content-.*\.js$/, "onboarding 登录内容 bundle");
@@ -2657,6 +2677,7 @@ function patchBootstrap() {
 
 function applyLegacyAsarPatches() {
   patchPluginAccountGate();
+  patchNativeWebviewFeatureGates();
   patchOnboardingApiKeyTexts();
   patchLoginRoute();
   patchWebviewLocales();

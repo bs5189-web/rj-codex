@@ -14,6 +14,13 @@ function read(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
 }
 
+function readWindowsMainBundle() {
+  const buildDir = path.join(projectRoot, "overrides", "windows-app", "asar", ".vite", "build");
+  const mainBundle = fs.readdirSync(buildDir).find((name) => /^main-.*\.js$/.test(name));
+  assert.ok(mainBundle, "Windows override main bundle should exist");
+  return fs.readFileSync(path.join(buildDir, mainBundle), "utf8");
+}
+
 test("renderer wires thread sorting and robust DOM adapters", () => {
   const source = read("resources/renderer/ruizhi-page-enhance.js");
 
@@ -123,7 +130,25 @@ test("application menu translation preserves Codex Automations", () => {
   const source = read("scripts/windows-asar-overrides.mjs");
 
   assert.match(source, /"Automations":"自动化"/);
+  assert.match(source, /ruizhiEnsureNativeMenuItems/);
+  assert.match(source, /label:\\?`自动化\\?`/);
+  assert.match(source, /[mr]\(e,\\?`\/automations\\?`\)/);
+  assert.match(source, /label:\\?`设置…\\?`/);
+  assert.match(source, /visible=!0/);
+  assert.match(source, /enabled=!0/);
   assert.doesNotMatch(source, /Automations[^;\n]+(remove|delete|hidden|disabled)/i);
+});
+
+test("Windows override main bundle keeps native Settings and Automations actions visible", () => {
+  const source = readWindowsMainBundle();
+
+  assert.match(source, /ruizhiEnsureNativeMenuItems/);
+  assert.match(source, /label:`自动化`/);
+  assert.match(source, /[mr]\(e,`\/automations`\)/);
+  assert.match(source, /label:`设置…`/);
+  assert.match(source, /visible=!0/);
+  assert.match(source, /enabled=!0/);
+  assert.doesNotMatch(source, /Plugins\s+-\s+Unlocked|插件\s+-\s+已解锁/);
 });
 
 test("macOS application menu keeps native Settings and Automations actions visible", () => {
@@ -137,4 +162,20 @@ test("macOS application menu keeps native Settings and Automations actions visib
   assert.match(source, /label:\\?`设置…\\?`/);
   assert.match(source, /settingsRoute:i/);
   assert.match(source, /[mr]\(e,i\)/);
+  assert.match(source, /visible=!0/);
+  assert.match(source, /enabled=!0/);
+});
+
+test("packaging opens Codex native webview gates for sidebar Automations and profile Settings", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /ruizhiNativeFeatureGateValue/, `${scriptPath} should patch native feature gates`);
+    assert.match(source, /3075919032/, `${scriptPath} should keep Codex native Automations nav visible`);
+    assert.match(source, /4166894088/, `${scriptPath} should keep Codex native profile Settings visible`);
+    assert.doesNotMatch(source, /querySelectorAll\([^)]*(自动化|Automations|settingsPage|general-settings)/, `${scriptPath} should not fake native sidebar/profile buttons with DOM insertion`);
+  }
 });

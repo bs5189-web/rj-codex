@@ -2,7 +2,7 @@
   "name": "ruizhi-desktop",
   "productName": "Codex",
   "author": "OpenAI",
-  "version": "0.1.14",
+  "version": "0.1.24",
   "description": "锐智桌面端",
   "main": ".vite/build/bootstrap.js",
   "scripts": {

@@ -28,7 +28,8 @@ const config = JSON.parse(fs.readFileSync(path.join(projectRoot, "config", "rj-c
 const appVersion = process.env.RUIZHI_BUILD_VERSION ?? config.version;
 const runtimeConfig = config.runtime ?? {};
 const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
-const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
+const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".codex";
+const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
 const imageGenerationConfig = config.imageGeneration ?? {};
 const apiKeyTestConfig = config.apiKeyTest ?? {};
 const modelBridgeConfig = config.modelBridge ?? {};
@@ -154,6 +155,37 @@ function modelBridgeRoutes() {
   return modelBridgeConfig.routes && typeof modelBridgeConfig.routes === "object"
     ? modelBridgeConfig.routes
     : {};
+}
+
+function pageEnhanceEnabled() {
+  return config.pageEnhance?.enabled !== false;
+}
+
+function pageEnhanceFeatures() {
+  return {
+    menu: true,
+    pluginEntryUnlock: true,
+    forcePluginInstall: true,
+    sessionDelete: true,
+    markdownExport: true,
+    projectMove: true,
+    timeline: true,
+    threadScrollRestore: true,
+    modelWhitelistUnlock: false,
+    zedRemoteOpen: false,
+    upstreamWorktreeCreate: false,
+    serviceTierControls: false,
+    ...(config.pageEnhance?.features && typeof config.pageEnhance.features === "object" ? config.pageEnhance.features : {})
+  };
+}
+
+function pageEnhanceBootstrapConfig() {
+  return {
+    enabled: pageEnhanceEnabled(),
+    features: pageEnhanceFeatures(),
+    rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
+    serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
+  };
 }
 
 function imageGenHelperExeName() {
@@ -913,6 +945,7 @@ function ruizhiInit(){
     const os=require("node:os");
     const path=require("node:path");
     const productName=${jsonLiteral(config.productName)};
+    const electronUserDataDirName=${jsonLiteral(electronUserDataDirName)};
     const locale=${jsonLiteral(config.locale)};
     const posixLocale=${jsonLiteral(posixLocale)};
     const ruizhiHomeEnvName=${jsonLiteral(ruizhiHomeEnvName)};
@@ -937,15 +970,16 @@ function ruizhiInit(){
     const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
     function defaultUserDataPath(){
       if(process.platform==="win32"){
-        return path.join(process.env.APPDATA||path.join(home,"AppData","Roaming"),productName);
+        return path.join(process.env.APPDATA||path.join(home,"AppData","Roaming"),electronUserDataDirName);
       }
       if(process.platform==="darwin"){
-        return path.join(home,"Library","Application Support",productName);
+        return path.join(home,"Library","Application Support",electronUserDataDirName);
       }
-      return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),productName);
+      return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),electronUserDataDirName);
     }
     const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
-    const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
+    const explicitCodexHome=(process.env.CODEX_HOME||"").trim();
+    const codexHome=explicitRuizhiHome||explicitCodexHome||path.join(home,ruizhiDefaultHomeDirName);
     const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
     function stableModelBridgePort(basePort,seed){
       let hash=0;
@@ -1400,11 +1434,13 @@ function bootstrapLegacyUpdateCode() {
     testModel: apiKeyTestConfig.model ?? "qwen3.6-flash",
     testTimeoutMs: apiKeyTestConfig.timeoutMs ?? 15000
   };
+  const enhanceConfig = pageEnhanceBootstrapConfig();
 
   return `
 function ruizhiStartBackgroundUpdateCheck(){
   const updateConfig=${jsonLiteral(updateConfig)};
   const authConfig=${jsonLiteral(authConfig)};
+  const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
   if(process.platform!=="win32"||!n.app.isPackaged)return;
   const fs=require("node:fs");
   const os=require("node:os");
@@ -1722,6 +1758,27 @@ function ruizhiStartBackgroundUpdateCheck(){
       });
     });
   }
+  function registerRuizhiEnhanceIpc(){
+    if(global.__RUIZHI_ENHANCE_IPC_REGISTERED__)return;
+    global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
+    try{
+      const servicePath=path.join(process.resourcesPath||path.dirname(process.execPath),...pageEnhanceConfig.serviceResourcePath);
+      if(!pageEnhanceConfig.enabled||!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
+      const service=require(servicePath).createRuizhiEnhanceService({
+        codexHome:authHome(),
+        resourcesRoot:process.resourcesPath||path.dirname(process.execPath),
+        config:{pageEnhance:pageEnhanceConfig}
+      });
+      n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
+    }catch(error){
+      console.error("ruizhi enhance ipc register failed",error);
+      n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>({
+        status:"failed",
+        session_id:String(payload?.session_id||""),
+        message:String(error?.message||error)
+      }));
+    }
+  }
   function registerRuizhiIpc(){
     n.ipcMain.handle("ruizhi:update:get-state",()=>publicUpdateState());
     n.ipcMain.handle("ruizhi:update:install-now",()=>{
@@ -1749,6 +1806,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       return {ok:true,...result};
     });
     n.ipcMain.handle("ruizhi:runtime:install-vc-redist",()=>installVcRedist());
+    registerRuizhiEnhanceIpc();
   }
   async function fetchManifest(){
     const cacheBusted=new URL(updateConfig.manifestUrl);
@@ -2026,11 +2084,13 @@ function bootstrapForceUpdateCode() {
     testModel: apiKeyTestConfig.model ?? "qwen3.6-flash",
     testTimeoutMs: apiKeyTestConfig.timeoutMs ?? 15000
   };
+  const enhanceConfig = pageEnhanceBootstrapConfig();
 
   return `
 function ruizhiStartBackgroundUpdateCheck(){
   const updateConfig=${jsonLiteral(updateConfig)};
   const authConfig=${jsonLiteral(authConfig)};
+  const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
   if(!n.app.isPackaged)return;
   const fs=require("node:fs");
   const os=require("node:os");
@@ -2301,6 +2361,27 @@ function ruizhiStartBackgroundUpdateCheck(){
       });
     });
   }
+  function registerRuizhiEnhanceIpc(){
+    if(global.__RUIZHI_ENHANCE_IPC_REGISTERED__)return;
+    global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
+    try{
+      const servicePath=path.join(process.resourcesPath||path.dirname(process.execPath),...pageEnhanceConfig.serviceResourcePath);
+      if(!pageEnhanceConfig.enabled||!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
+      const service=require(servicePath).createRuizhiEnhanceService({
+        codexHome:authHome(),
+        resourcesRoot:process.resourcesPath||path.dirname(process.execPath),
+        config:{pageEnhance:pageEnhanceConfig}
+      });
+      n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
+    }catch(error){
+      console.error("ruizhi enhance ipc register failed",error);
+      n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>({
+        status:"failed",
+        session_id:String(payload?.session_id||""),
+        message:String(error?.message||error)
+      }));
+    }
+  }
   function registerRuizhiIpc(){
     n.ipcMain.handle("ruizhi:update:get-state",()=>publicUpdateState());
     n.ipcMain.handle("ruizhi:update:install-now",()=>{
@@ -2327,6 +2408,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       return {ok:true,...result};
     });
     n.ipcMain.handle("ruizhi:runtime:install-vc-redist",()=>installVcRedist());
+    registerRuizhiEnhanceIpc();
   }
   function configureUpdater(){
     if(process.platform!=="win32")return false;
@@ -2407,6 +2489,7 @@ function preloadIntegrationCode() {
   const ipcRenderer=electron.ipcRenderer;
   const contextBridge=electron.contextBridge;
   const appVersion=${jsonLiteral(appVersion)};
+  const pageEnhanceConfig=${jsonLiteral(pageEnhanceBootstrapConfig())};
   const integrationKey="__RUIZHI_DESKTOP_INTEGRATION__";
   const previous=globalThis[integrationKey];
   if(previous&&typeof previous.dispose==="function")previous.dispose();
@@ -2450,6 +2533,11 @@ function preloadIntegrationCode() {
     },
     runtime:{
       installVcRedist:()=>ipcRenderer.invoke("ruizhi:runtime:install-vc-redist")
+    },
+    enhance:{
+      call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
+      getSettings:()=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/get",{}),
+      setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
     }
   };
   try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
@@ -2461,6 +2549,24 @@ function preloadIntegrationCode() {
       addCleanup(()=>document.removeEventListener("DOMContentLoaded",listener));
     }else if(!disposed)fn();
   }
+  function injectRuizhiPageEnhance(){
+    if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
+    window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
+    try{
+      const fs=require("node:fs");
+      const path=require("node:path");
+      const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
+      const scriptPath=path.join(resourcesRoot,...pageEnhanceConfig.rendererResourcePath);
+      const source=fs.readFileSync(scriptPath,"utf8");
+      const script=document.createElement("script");
+      script.textContent="window.__RUIZHI_PAGE_ENHANCE_CONFIG__="+${jsonLiteral(JSON.stringify(pageEnhanceBootstrapConfig()))}+";\\n"+source;
+      (document.documentElement||document.head||document.body).appendChild(script);
+      script.remove();
+    }catch(error){
+      console.error("ruizhi page enhance inject failed",error);
+    }
+  }
+  onReady(injectRuizhiPageEnhance);
   function injectStyle(){
     if(document.getElementById("ruizhi-desktop-integration-style"))return;
     const style=document.createElement("style");
@@ -2832,10 +2938,9 @@ function patchCodexHomeSource() {
     if (next === source) {
       throw new Error("补丁点不存在：锐智 home 环境变量解析");
     }
-    next = replaceExact(next, `p.push(".codex");`, `p.push(".ruizhi");`, "锐智默认 home 目录");
     return next;
   });
-  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，兼容 CODEX_HOME");
+  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，默认沿用 CODEX_HOME/.codex");
 }
 
 function patchCodexBundledModels() {

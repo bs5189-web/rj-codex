@@ -1,3 +1,23 @@
+/* ruizhi-early-env:start */
+(()=>{try{
+  const os=require("node:os");
+  const path=require("node:path");
+  const fs=require("node:fs");
+  const home=os.homedir();
+  const productName="锐智";
+  const ruizhiHomeEnvName="RUIZHI_HOME";
+  const ruizhiDefaultHomeDirName=".codex";
+  const electronUserDataDirName="Codex";
+  const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
+  const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
+  const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
+  process.env[ruizhiHomeEnvName]=codexHome;
+  process.env.CODEX_HOME=codexHome;
+  process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
+  fs.mkdirSync(codexHome,{recursive:true});
+  fs.mkdirSync(userData,{recursive:true});
+}catch(e){console.error("ruizhi early env init failed",e)}})();
+/* ruizhi-early-env:end */
 const e=require(`./app-session-BxEcL5Yg.js`),t=require(`./workspace-root-drop-handler-CSnqqPxa.js`);let n=require(`electron`),r=require(`node:path`);require(`node:crypto`);let i=require(`node:child_process`);var a=`desktop.intelLaunchWarning.message`,o=`{appName} is running the Intel build on an Apple Silicon Mac`,s=`desktop.intelLaunchWarning.detail`,c=`This build works through Rosetta, but the Apple Silicon build launches faster and performs better. Quit now to install the Apple Silicon build, or continue with the Intel build`,l=`desktop.intelLaunchWarning.quit`,u=`Quit`,d=`desktop.intelLaunchWarning.continue`,f=`Continue Anyway`;function p(e,t=h){return!e.isPackaged||e.platform!==`darwin`||e.arch!==`x64`?!1:t()}async function m({appName:e,environment:r,readProcessTranslated:i=h,loadNativeIntl:m=g,showMessageBox:_=e=>n.dialog.showMessageBox(e)}){if(!p(r,i))return!0;try{let t=await m();return(await _({type:`warning`,buttons:[t.formatMessage({messageId:l,defaultMessage:u}),t.formatMessage({messageId:d,defaultMessage:f})],defaultId:0,cancelId:0,noLink:!0,message:t.formatMessage({messageId:a,defaultMessage:o,values:{appName:e}}),detail:t.formatMessage({messageId:s,defaultMessage:c})})).response===1}catch(e){return t.Wr().warning(`Failed to show Intel-on-Apple-Silicon launch warning`,{safe:{errorName:e instanceof Error?e.name:null}}),!0}}function h(){try{return(0,i.execFileSync)(`sysctl`,[`-in`,`sysctl.proc_translated`],{encoding:`utf8`,env:t.Ur(process.env),stdio:[`ignore`,`pipe`,`ignore`]}).trim()===`1`}catch{return!1}}async function g(){try{return t.M()}catch{try{return await t.A.load(``)}catch{return t.A.createDefault()}}}function _({appDataPath:t,buildFlavor:n,env:i}){let a=i.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(a)return(0,r.resolve)(a);let o=(0,r.join)(t,e.G(n)),s=i.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&s!=null?(0,r.join)(o,`agent`,s):o}
 function ruizhiInit(){
   try{
@@ -5,13 +25,16 @@ function ruizhiInit(){
     const os=require("node:os");
     const path=require("node:path");
     const productName="锐智";
+    const electronUserDataDirName="Codex";
     const locale="zh-CN";
     const posixLocale="zh_CN";
     const ruizhiHomeEnvName="RUIZHI_HOME";
-    const ruizhiDefaultHomeDirName=".ruizhi";
+    const ruizhiDefaultHomeDirName=".codex";
     const openaiBaseUrl="https://uniapi.ruijie.com.cn/v1";
+    const modelProviderBaseUrl="http://127.0.0.1:17888/v1";
+    const modelBridgeConfig={"enabled":true,"host":"127.0.0.1","port":17888,"scriptResourcePath":["bridge","ruizhi-responses-bridge.cjs"],"routes":{"gpt-5.5":"responses","gpt-5.4":"responses","gpt-5.4-mini":"responses","gpt-5.3-codex":"responses","qwen3.6-plus":"responses","qwen3.6-flash":"responses","qwen3-coder-plus":"responses","qwen3-coder-480b-a35b-instruct":"responses","qwen3-coder-30b-a3b-instruct":"responses","claude-opus-4-7":{"protocol":"chat","reasoningEffort":true},"claude-sonnet-4-6":{"protocol":"chat","reasoningEffort":true},"glm-5.1":{"protocol":"chat","reasoningEffort":true},"kimi-k2.6":{"protocol":"chat","reasoningEffort":true},"MiniMax/MiniMax-M2.7":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-pro":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash-maxthink":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash":{"protocol":"chat","reasoningEffort":true}}};
     const imageGenHelper="ruizhi-imagegen.exe";
-    const modelCatalogEnabled=false;
+    const modelCatalogEnabled=true;
     const modelCatalogFile="ruizhi-model-catalog.json";
     const systemSkillsRoot=["skills",".system"];
     const hiddenSystemSkillNames=["openai-docs"];
@@ -21,20 +44,89 @@ function ruizhiInit(){
     const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
     function defaultUserDataPath(){
       if(process.platform==="win32"){
-        return path.join(process.env.APPDATA||path.join(home,"AppData","Roaming"),productName);
+        return path.join(process.env.APPDATA||path.join(home,"AppData","Roaming"),electronUserDataDirName);
       }
       if(process.platform==="darwin"){
-        return path.join(home,"Library","Application Support",productName);
+        return path.join(home,"Library","Application Support",electronUserDataDirName);
       }
-      return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),productName);
+      return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),electronUserDataDirName);
     }
     const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
-    const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
+    const explicitCodexHome=(process.env.CODEX_HOME||"").trim();
+    const codexHome=explicitRuizhiHome||explicitCodexHome||path.join(home,ruizhiDefaultHomeDirName);
     const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
     process.env[ruizhiHomeEnvName]=codexHome;
     process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
+    /* ruizhi-model-bridge:start */
+    function stableModelBridgePort(basePort,seed){
+      let hash=0;
+      for(const char of String(seed||"")){
+        hash=(hash*31+char.charCodeAt(0))>>>0;
+      }
+      return basePort+1+(hash%997);
+    }
+    modelBridgeConfig.port=stableModelBridgePort(modelBridgeConfig.port,resourcesRoot);
+    function ensureLoopbackNoProxy(){
+      const required=["127.0.0.1","localhost","::1"];
+      const existing=[process.env.NO_PROXY,process.env.no_proxy].filter(value=>typeof value==="string"&&value.trim()).join(",");
+      const parts=existing.split(",").map(value=>value.trim()).filter(Boolean);
+      const lower=new Set(parts.map(value=>value.toLowerCase()));
+      for(const host of required){
+        if(!lower.has(host.toLowerCase()))parts.push(host);
+      }
+      const next=parts.join(",");
+      process.env.NO_PROXY=next;
+      process.env.no_proxy=next;
+    }
+    ensureLoopbackNoProxy();
+    function startModelBridge(){
+      if(!modelBridgeConfig.enabled)return null;
+      const scriptPath=path.join(resourcesRoot,...modelBridgeConfig.scriptResourcePath);
+      if(!fs.existsSync(scriptPath))throw new Error("模型协议 bridge 脚本不存在："+scriptPath);
+      const bridge=require(scriptPath).startRuizhiResponsesBridge({
+        host:modelBridgeConfig.host,
+        port:modelBridgeConfig.port,
+        upstreamBaseUrl:openaiBaseUrl,
+        authHome:codexHome,
+        catalogPath:path.join(resourcesRoot,"models",modelCatalogFile),
+        routes:modelBridgeConfig.routes
+      });
+      return bridge?.baseUrl||modelProviderBaseUrl;
+    }
+    const runtimeModelProviderBaseUrl=startModelBridge()||modelProviderBaseUrl;
+    function rewriteRuntimeModelProviderBaseUrl(text){
+      if(runtimeModelProviderBaseUrl===modelProviderBaseUrl)return text;
+      return String(text).split(JSON.stringify(modelProviderBaseUrl)).join(JSON.stringify(runtimeModelProviderBaseUrl));
+    }
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
+    process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
+/* ruizhi-model-bridge:end */
+/* ruizhi-page-enhance:start */
+    const pageEnhanceConfig={"enabled":true,"features":{"menu":true,"pluginEntryUnlock":true,"forcePluginInstall":true,"sessionDelete":true,"markdownExport":true,"projectMove":true,"timeline":true,"threadScrollRestore":true,"modelWhitelistUnlock":false,"zedRemoteOpen":false,"upstreamWorktreeCreate":false,"serviceTierControls":false},"rendererResourcePath":["renderer","ruizhi-page-enhance.js"],"serviceResourcePath":["bridge","ruizhi-enhance-service.cjs"]};
+    function registerRuizhiEnhanceIpc(){
+      if(global.__RUIZHI_ENHANCE_IPC_REGISTERED__)return;
+      global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
+      try{
+        const servicePath=path.join(resourcesRoot,...pageEnhanceConfig.serviceResourcePath);
+        if(!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
+        const service=require(servicePath).createRuizhiEnhanceService({
+          codexHome,
+          resourcesRoot,
+          config:{pageEnhance:pageEnhanceConfig}
+        });
+        n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
+      }catch(error){
+        console.error("ruizhi enhance ipc register failed",error);
+        n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>({
+          status:"failed",
+          session_id:String(payload?.session_id||""),
+          message:String(error?.message||error)
+        }));
+      }
+    }
+    registerRuizhiEnhanceIpc();
+/* ruizhi-page-enhance:end */
     process.env.RUIZHI_IMAGEGEN_EXE=path.join(resourcesRoot,"bin",imageGenHelper);
     process.env.LANG="zh_CN.UTF-8";
     process.env.LANGUAGE=posixLocale;
@@ -289,7 +381,7 @@ function ruizhiInit(){
 
     const managedBegin="# BEGIN Ruizhi Managed Defaults";
     const managedEnd="# END Ruizhi Managed Defaults";
-    const configTemplateLines=["# BEGIN Ruizhi Managed Defaults","model = \"gpt-5.5\"","model_reasoning_effort = \"medium\"","model_provider = \"ruizhi\"","openai_base_url = \"https://uniapi.ruijie.com.cn/v1\"","","[model_providers.ruizhi]","name = \"锐擎API\"","base_url = \"https://uniapi.ruijie.com.cn/v1\"","wire_api = \"responses\"","requires_openai_auth = true","supports_websockets = false","stream_max_retries = 0","","[features]","default_mode_request_user_input = true","plugins = true","apps = true","browser_use = true","","[marketplaces.ruijie-skills]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__","","[marketplaces.openai-bundled]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","","# END Ruizhi Managed Defaults",""];
+    const configTemplateLines=["# BEGIN Ruizhi Managed Defaults","model = \"gpt-5.5\"","model_reasoning_effort = \"medium\"","model_provider = \"ruizhi\"","openai_base_url = \"http://127.0.0.1:17888/v1\"","","[model_providers.ruizhi]","name = \"锐擎API\"","base_url = \"http://127.0.0.1:17888/v1\"","wire_api = \"responses\"","requires_openai_auth = true","supports_websockets = false","stream_max_retries = 0","request_max_retries = 0","","[features]","default_mode_request_user_input = true","plugins = true","apps = true","browser_use = true","","[marketplaces.ruijie-skills]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__","","[marketplaces.openai-bundled]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","","# END Ruizhi Managed Defaults",""];
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
@@ -341,10 +433,82 @@ function ruizhiInit(){
       return existing;
     }
 
+/* ruizhi-windows-sandbox-config:start */
+    function readWindowsSandboxModeFromConfig(text){
+      let inWindowsSection=false;
+      for(const rawLine of String(text??"").split(/\r?\n/)){
+        const line=rawLine.trim();
+        if(!line||line.startsWith("#"))continue;
+        const section=line.match(/^\[([^\]]+)\]\s*(?:#.*)?$/);
+        if(section){
+          inWindowsSection=section[1].trim()==="windows";
+          continue;
+        }
+        if(!inWindowsSection)continue;
+        const match=line.match(/^sandbox\s*=\s*["']?([^"'\s#]+)["']?\s*(?:#.*)?$/);
+        if(match&&(match[1]==="elevated"||match[1]==="unelevated"))return match[1];
+      }
+      return null;
+    }
+    function hasWindowsSandboxSetup(root){
+      return process.platform==="win32"&&fs.existsSync(path.join(root,".sandbox","setup_marker.json"))&&fs.existsSync(path.join(root,".sandbox-secrets","sandbox_users.json"));
+    }
+    function ensureWindowsSandboxMode(text,mode){
+      if(process.platform!=="win32"||!mode||readWindowsSandboxModeFromConfig(text)!=null)return text;
+      const nextLines=withFinalNewline(text).split(/\r?\n/);
+      let windowsSectionIndex=-1;
+      for(let index=0;index<nextLines.length;index+=1){
+        const section=nextLines[index].trim().match(/^\[([^\]]+)\]\s*(?:#.*)?$/);
+        if(section&&section[1].trim()==="windows"){
+          windowsSectionIndex=index;
+          break;
+        }
+      }
+      if(windowsSectionIndex>=0){
+        nextLines.splice(windowsSectionIndex+1,0,"sandbox = "+JSON.stringify(mode));
+        return withFinalNewline(nextLines.join("\n").trimEnd());
+      }
+      return withFinalNewline([text.trimEnd(),"","[windows]","sandbox = "+JSON.stringify(mode)].filter(Boolean).join("\n"));
+    }
+    function readConfigIfExists(root){
+      const target=path.join(root,"config.toml");
+      return fs.existsSync(target)?fs.readFileSync(target,"utf8"):"";
+    }
+    function inferWindowsSandboxMode(primaryText){
+      const fallbackCodexHome=path.join(home,".codex");
+      return readWindowsSandboxModeFromConfig(primaryText)||readWindowsSandboxModeFromConfig(readConfigIfExists(fallbackCodexHome))||"elevated";
+    }
+    function syncWindowsSandboxConfig(root,preferredMode){
+      if(!hasWindowsSandboxSetup(root))return;
+      const target=path.join(root,"config.toml");
+      const existing=readConfigIfExists(root);
+      const mode=readWindowsSandboxModeFromConfig(existing)||preferredMode||"elevated";
+      const next=ensureWindowsSandboxMode(existing,mode);
+      if(next!==existing){
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.writeFileSync(target,next,"utf8");
+      }
+    }
+    function syncFallbackWindowsSandboxConfig(preferredMode){
+      if(process.platform!=="win32")return;
+      const roots=[codexHome,path.join(home,".codex")];
+      const seen=new Set();
+      for(const root of roots){
+        const resolved=path.resolve(root);
+        if(seen.has(resolved))continue;
+        seen.add(resolved);
+        syncWindowsSandboxConfig(root,preferredMode);
+      }
+    }
+/* ruizhi-windows-sandbox-config:end */
     const configPath=path.join(codexHome,"config.toml");
     const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
-    const next=mergeManagedConfig(existing);
+    let next=mergeManagedConfig(existing);
+    next=rewriteRuntimeModelProviderBaseUrl(next);
+    const sandboxMode=hasWindowsSandboxSetup(codexHome)?inferWindowsSandboxMode(next):readWindowsSandboxModeFromConfig(next);
+    if(hasWindowsSandboxSetup(codexHome))next=ensureWindowsSandboxMode(next,sandboxMode);
     if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
+    syncFallbackWindowsSandboxConfig(readWindowsSandboxModeFromConfig(next));
   }catch(e){
     console.error("ruizhi bootstrap init failed",e);
   }
@@ -352,8 +516,8 @@ function ruizhiInit(){
 ruizhiInit();
 
 function ruizhiStartBackgroundUpdateCheck(){
-  const updateConfig={"enabled":true,"feedUrl":"http://minio.rjagi.cn:9000/ai-ruizhi/updates/windows/","currentVersion":"0.1.14"};
-  const authConfig={"productName":"锐智","ruizhiHomeEnvName":"RUIZHI_HOME","ruizhiDefaultHomeDirName":".ruizhi","baseUrl":"https://uniapi.ruijie.com.cn/v1","testModel":"qwen3.6-flash","testTimeoutMs":15000};
+  const updateConfig={"enabled":true,"feedUrl":"http://minio.rjagi.cn:9000/ai-ruizhi/updates/windows/","currentVersion":"0.1.24"};
+  const authConfig={"productName":"锐智","ruizhiHomeEnvName":"RUIZHI_HOME","ruizhiDefaultHomeDirName":".codex","baseUrl":"https://uniapi.ruijie.com.cn/v1","testModel":"qwen3.6-flash","testTimeoutMs":15000};
   if(!n.app.isPackaged)return;
   const fs=require("node:fs");
   const os=require("node:os");
@@ -720,5 +884,5 @@ function ruizhiStartBackgroundUpdateCheck(){
     console.error("ruizhi update bootstrap failed",error);
   }
 }
-var v={quit:`Quit`};async function y(e){await n.dialog.showMessageBox({type:`error`,buttons:[v.quit],defaultId:0,cancelId:0,message:`${n.app.getName()} failed to start.`,detail:e instanceof Error?e.message:`The main desktop app failed during startup.`,noLink:!0});n.app.quit();return}var b=process.platform===`darwin`,x=t.T.resolve();t.h(),t.n(b),n.app.setName("锐智"),n.app.setPath(`userData`,_({appDataPath:n.app.getPath(`appData`),buildFlavor:x,env:process.env})),process.platform===`win32`&&n.app.setAppUserModelId(`cn.ruizhi.desktop`);var S=t.y({isMacOS:b,isPackaged:n.app.isPackaged});if(!(!S||n.app.requestSingleInstanceLock()))t.Wr().info(`Exiting second desktop instance`,{safe:{packaged:n.app.isPackaged,platform:process.platform}}),n.app.exit(0);else{let e=t.x(x);S&&n.app.on(`second-instance`,(t,n)=>{e.queueSecondInstanceArgs(n)}),n.app.whenReady().then(async()=>{let{desktopSentry:r,sparkleManager:i}=e;if(!await m({appName:n.app.getName(),environment:{arch:process.arch,isPackaged:n.app.isPackaged,platform:process.platform}})){n.app.quit();return}ruizhiStartBackgroundUpdateCheck();try{let{runMainAppStartup:e}=await Promise.resolve().then(()=>require(`./main-Bnxe1qAn.js`));await e()}catch(e){for(let e of n.BrowserWindow.getAllWindows())e.isDestroyed()||e.destroy();t.Wr().error(`Desktop bootstrap failed to start the main app`,{safe:{phase:`bootstrap-import-main`}}),r.captureException(e,{tags:{phase:`bootstrap-import-main`}}),await y(e)}})}
+var v={quit:`Quit`};async function y(e){await n.dialog.showMessageBox({type:`error`,buttons:[v.quit],defaultId:0,cancelId:0,message:`${n.app.getName()} failed to start.`,detail:e instanceof Error?e.message:`The main desktop app failed during startup.`,noLink:!0});n.app.quit();return}var b=process.platform===`darwin`,x=t.T.resolve();t.h(),t.n(b),n.app.setName("Codex"),n.app.setPath(`userData`,_({appDataPath:n.app.getPath(`appData`),buildFlavor:x,env:process.env})),process.platform===`win32`&&n.app.setAppUserModelId(`cn.ruizhi.desktop`);var S=t.y({isMacOS:b,isPackaged:n.app.isPackaged});if(!(!S||n.app.requestSingleInstanceLock()))t.Wr().info(`Exiting second desktop instance`,{safe:{packaged:n.app.isPackaged,platform:process.platform}}),n.app.exit(0);else{let e=t.x(x);S&&n.app.on(`second-instance`,(t,n)=>{e.queueSecondInstanceArgs(n)}),n.app.whenReady().then(async()=>{let{desktopSentry:r,sparkleManager:i}=e;if(!await m({appName:n.app.getName(),environment:{arch:process.arch,isPackaged:n.app.isPackaged,platform:process.platform}})){n.app.quit();return}ruizhiStartBackgroundUpdateCheck();try{let{runMainAppStartup:e}=await Promise.resolve().then(()=>require(`./main-Bnxe1qAn.js`));await e()}catch(e){for(let e of n.BrowserWindow.getAllWindows())e.isDestroyed()||e.destroy();t.Wr().error(`Desktop bootstrap failed to start the main app`,{safe:{phase:`bootstrap-import-main`}}),r.captureException(e,{tags:{phase:`bootstrap-import-main`}}),await y(e)}})}
 //# sourceMappingURL=bootstrap.js.map

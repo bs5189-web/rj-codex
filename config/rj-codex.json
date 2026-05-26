@@ -47,7 +47,8 @@
   },
   "runtime": {
     "homeEnv": "RUIZHI_HOME",
-    "defaultHomeDirName": ".ruizhi"
+    "defaultHomeDirName": ".codex",
+    "electronUserDataDirName": "Codex"
   },
   "models": {
     "enabled": true,
@@ -100,6 +101,23 @@
         "protocol": "chat",
         "reasoningEffort": true
       }
+    }
+  },
+  "pageEnhance": {
+    "enabled": true,
+    "features": {
+      "menu": true,
+      "pluginEntryUnlock": true,
+      "forcePluginInstall": true,
+      "sessionDelete": true,
+      "markdownExport": true,
+      "projectMove": true,
+      "timeline": true,
+      "threadScrollRestore": true,
+      "modelWhitelistUnlock": false,
+      "zedRemoteOpen": false,
+      "upstreamWorktreeCreate": false,
+      "serviceTierControls": false
     }
   },
   "imageGeneration": {

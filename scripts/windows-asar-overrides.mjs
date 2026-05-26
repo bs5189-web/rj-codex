@@ -14,6 +14,8 @@ export const projectRoot = path.resolve(path.dirname(__filename), "..");
 export const windowsAsarOverridesRoot = path.join(projectRoot, "overrides", "windows-app", "asar");
 export const windowsResourceOverridesRoot = path.join(projectRoot, "overrides", "windows-app", "resources");
 export const windowsPrerequisitesRoot = path.join(projectRoot, "resources", "windows", "prerequisites");
+const pageEnhanceRendererSourcePath = path.join(projectRoot, "resources", "renderer", "ruizhi-page-enhance.js");
+const pageEnhanceServiceSourcePath = path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs");
 const enableWindowsPluginTextPatches = process.env.RUIZHI_ENABLE_PLUGIN_TEXT_PATCHES !== "0";
 const windowsVcRedistFileName = "vc_redist.x64.exe";
 const openAIBundledPluginDefinitions = [
@@ -157,6 +159,46 @@ function modelBridgeBootstrapConfig(config) {
       ? config.modelBridge.routes
       : {}
   };
+}
+
+function pageEnhanceEnabled(config) {
+  return config.pageEnhance?.enabled !== false;
+}
+
+function pageEnhanceFeatures(config) {
+  return {
+    menu: true,
+    pluginEntryUnlock: true,
+    forcePluginInstall: true,
+    sessionDelete: true,
+    markdownExport: true,
+    projectMove: true,
+    timeline: true,
+    threadScrollRestore: true,
+    modelWhitelistUnlock: false,
+    zedRemoteOpen: false,
+    upstreamWorktreeCreate: false,
+    serviceTierControls: false,
+    ...(config.pageEnhance?.features && typeof config.pageEnhance.features === "object" ? config.pageEnhance.features : {})
+  };
+}
+
+function pageEnhanceBootstrapConfig(config) {
+  return {
+    enabled: pageEnhanceEnabled(config),
+    features: pageEnhanceFeatures(config),
+    rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
+    serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
+  };
+}
+
+function ruizhiForcePluginInstallEnabled() {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(projectRoot, "config", "rj-codex.json"), "utf8"));
+    return pageEnhanceEnabled(config) && pageEnhanceFeatures(config).forcePluginInstall !== false;
+  } catch {
+    return true;
+  }
 }
 
 function managedConfigTomlLinesForBootstrap(config) {
@@ -618,19 +660,36 @@ export function applyWindowsAsarOverrides(targetDir, options = {}) {
 
 export function copyWindowsResourceOverrides(resourcesDir, options = {}) {
   const log = options.log ?? (() => {});
-  if (!fs.existsSync(windowsResourceOverridesRoot)) {
-    return { files: 0 };
-  }
-
-  const files = walkFiles(windowsResourceOverridesRoot);
-  if (files.length === 0) {
-    return { files: 0 };
-  }
-
   assertInsideProject(resourcesDir);
-  fsExtra.copySync(windowsResourceOverridesRoot, resourcesDir, { overwrite: true });
-  log(`已应用 Windows 资源覆盖层：${files.length} 个文件`);
-  return { files: files.length };
+  const files = fs.existsSync(windowsResourceOverridesRoot) ? walkFiles(windowsResourceOverridesRoot) : [];
+  if (files.length > 0) {
+    fsExtra.copySync(windowsResourceOverridesRoot, resourcesDir, { overwrite: true });
+    log(`已应用 Windows 资源覆盖层：${files.length} 个文件`);
+  }
+
+  const enhanceFiles = copyPageEnhanceRuntimeResources(resourcesDir, { log });
+  return { files: files.length + enhanceFiles.files };
+}
+
+export function copyPageEnhanceRuntimeResources(resourcesDir, options = {}) {
+  const log = options.log ?? (() => {});
+  if (!fs.existsSync(pageEnhanceRendererSourcePath)) {
+    throw new Error(`页面增强 renderer 脚本不存在：${pageEnhanceRendererSourcePath}`);
+  }
+  if (!fs.existsSync(pageEnhanceServiceSourcePath)) {
+    throw new Error(`页面增强服务脚本不存在：${pageEnhanceServiceSourcePath}`);
+  }
+  assertInsideProject(resourcesDir);
+  const targets = [
+    [pageEnhanceRendererSourcePath, path.join(resourcesDir, "renderer", "ruizhi-page-enhance.js")],
+    [pageEnhanceServiceSourcePath, path.join(resourcesDir, "bridge", "ruizhi-enhance-service.cjs")]
+  ];
+  for (const [source, target] of targets) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(source, target);
+  }
+  log("已同步页面增强 renderer 与服务脚本");
+  return { files: targets.length };
 }
 
 export function copyWindowsPrerequisites(resourcesDir, options = {}) {
@@ -1557,10 +1616,12 @@ function patchPluginAvailabilityBundle(filePath) {
     "a=n.plugin.interface?.category?.trim()",
     "a=ruizhiIsOpenAIPlugin(n)?ruizhiPluginCategoryLabel(n.plugin.interface?.category?.trim()):n.plugin.interface?.category?.trim()"
   );
-  next = next.replace(
-    "children:c?(0,Z.jsx)(F,{id:`plugins.installModal.installing`,defaultMessage:`正在安装 {pluginName}`,description:`Button label in the plugin install modal while installation is in progress`,values:{pluginName:X(P)}}):(0,Z.jsx)(F,{id:`plugins.installModal.install`,defaultMessage:`安装 {pluginName}`,description:`Install button label in the plugin install modal`,values:{pluginName:X(P)}})",
-    "children:h?(0,Z.jsx)(F,{id:`plugins.installModal.pendingSupport`,defaultMessage:`即将支持，敬请期待`,description:`Button label when plugin install is unavailable in this build`}):c?(0,Z.jsx)(F,{id:`plugins.installModal.installing`,defaultMessage:`正在安装 {pluginName}`,description:`Button label in the plugin install modal while installation is in progress`,values:{pluginName:X(P)}}):(0,Z.jsx)(F,{id:`plugins.installModal.install`,defaultMessage:`安装 {pluginName}`,description:`Install button label in the plugin install modal`,values:{pluginName:X(P)}})"
-  );
+  if (!ruizhiForcePluginInstallEnabled()) {
+    next = next.replace(
+      "children:c?(0,Z.jsx)(F,{id:`plugins.installModal.installing`,defaultMessage:`正在安装 {pluginName}`,description:`Button label in the plugin install modal while installation is in progress`,values:{pluginName:X(P)}}):(0,Z.jsx)(F,{id:`plugins.installModal.install`,defaultMessage:`安装 {pluginName}`,description:`Install button label in the plugin install modal`,values:{pluginName:X(P)}})",
+      "children:h?(0,Z.jsx)(F,{id:`plugins.installModal.pendingSupport`,defaultMessage:`即将支持，敬请期待`,description:`Button label when plugin install is unavailable in this build`}):c?(0,Z.jsx)(F,{id:`plugins.installModal.installing`,defaultMessage:`正在安装 {pluginName}`,description:`Button label in the plugin install modal while installation is in progress`,values:{pluginName:X(P)}}):(0,Z.jsx)(F,{id:`plugins.installModal.install`,defaultMessage:`安装 {pluginName}`,description:`Install button label in the plugin install modal`,values:{pluginName:X(P)}})"
+    );
+  }
   if (next !== source) {
     fs.writeFileSync(filePath, next, "utf8");
     return true;
@@ -1598,14 +1659,16 @@ function patchPluginDetailPageBundle(filePath) {
       "function ruizhiPluginDetailCategory(e){switch(String(e??``).trim().toLowerCase().replace(/[_-]+/g,` `)){case`featured`:return`推荐`;case`experimental`:return`实验性`;case`coding`:return`编码`;case`automation`:return`自动化`;case`engineering`:case`developer tools`:return`工程`;case`productivity`:return`效率`;case`research`:return`研究`;case`google`:return`谷歌`;case`microsoft`:return`微软`;case`communication`:case`communications`:return`沟通`;case`project management`:return`项目管理`;case`data`:case`data analytics`:case`data & analytics`:return`数据分析`;case`search`:return`搜索`;case`browser`:case`browsers`:return`浏览器`;case`design`:return`设计`;case`lifestyle`:return`生活方式`;case`finance`:return`财务`;case`sales`:return`销售`;case`marketing`:return`市场营销`;case`education`:return`教育`;case`writing`:return`写作`;case`other`:return`其他`;default:return e}}function ruizhiIsOpenAIPluginDetail(e){let t=[e?.marketplaceName,e?.marketplaceDisplayName,e?.remoteMarketplaceName,e?.summary?.source?.type,e?.summary?.id].map(e=>String(e??``).toLowerCase()).join(` `);return/(openai|codex official)/.test(t)&&!/(ruijie|local plugins?)/.test(t)}function pi(e){let t=e.summary.interface?.category?.trim()||null,n=ruizhiIsOpenAIPluginDetail(e)?ruizhiPluginDetailCategory(t):t,r=[e.marketplaceName.trim().length>0?ut(e.marketplaceName):null,n].filter(e=>e!=null);return r.length===0?null:r.join(`, `)}"
     );
   }
-  next = next.replace(
-    "connectorUnavailable:{id:`plugins.install.connectorUnavailable`,defaultMessage:`应用不可用`,description:`Tooltip shown when plugin install is unavailable because the plugin's apps are not available in the current app directory`},uninstall:",
-    "connectorUnavailable:{id:`plugins.install.connectorUnavailable`,defaultMessage:`应用不可用`,description:`Tooltip shown when plugin install is unavailable because the plugin's apps are not available in the current app directory`},pendingSupport:{id:`plugins.detail.pendingSupport`,defaultMessage:`即将支持，敬请期待`,description:`Primary install action label when plugin install is unavailable in this build`},uninstall:"
-  );
-  next = next.replace(
-    "let f=a?Fi.addingToCodex:y?Fi.disabledByAdminButton:Fi.addToCodex,p;",
-    "let f=a?Fi.addingToCodex:r?Fi.pendingSupport:y?Fi.disabledByAdminButton:Fi.addToCodex,p;"
-  );
+  if (!ruizhiForcePluginInstallEnabled()) {
+    next = next.replace(
+      "connectorUnavailable:{id:`plugins.install.connectorUnavailable`,defaultMessage:`应用不可用`,description:`Tooltip shown when plugin install is unavailable because the plugin's apps are not available in the current app directory`},uninstall:",
+      "connectorUnavailable:{id:`plugins.install.connectorUnavailable`,defaultMessage:`应用不可用`,description:`Tooltip shown when plugin install is unavailable because the plugin's apps are not available in the current app directory`},pendingSupport:{id:`plugins.detail.pendingSupport`,defaultMessage:`即将支持，敬请期待`,description:`Primary install action label when plugin install is unavailable in this build`},uninstall:"
+    );
+    next = next.replace(
+      "let f=a?Fi.addingToCodex:y?Fi.disabledByAdminButton:Fi.addToCodex,p;",
+      "let f=a?Fi.addingToCodex:r?Fi.pendingSupport:y?Fi.disabledByAdminButton:Fi.addToCodex,p;"
+    );
+  }
 
   if (next !== source) {
     fs.writeFileSync(filePath, next, "utf8");
@@ -1766,6 +1829,56 @@ function replaceInFile(filePath, pattern, replacement, label) {
   fs.writeFileSync(filePath, source.replace(pattern, replacement), "utf8");
 }
 
+function preloadPageEnhanceIntegrationSnippet(config) {
+  const enhanceConfig = pageEnhanceBootstrapConfig(config);
+  return `
+  /* ruizhi-page-enhance-preload:start */
+  const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
+  api.enhance={
+    call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
+    getSettings:()=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/get",{}),
+    setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
+  };
+  function injectRuizhiPageEnhance(){
+    if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
+    window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
+    try{
+      const fs=require("node:fs");
+      const path=require("node:path");
+      const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
+      const scriptPath=path.join(resourcesRoot,...pageEnhanceConfig.rendererResourcePath);
+      const source=fs.readFileSync(scriptPath,"utf8");
+      const script=document.createElement("script");
+      script.textContent="window.__RUIZHI_PAGE_ENHANCE_CONFIG__="+${jsonLiteral(JSON.stringify(enhanceConfig))}+";\\n"+source;
+      (document.documentElement||document.head||document.body).appendChild(script);
+      script.remove();
+    }catch(error){
+      console.error("ruizhi page enhance inject failed",error);
+    }
+  }
+  onReady(injectRuizhiPageEnhance);
+  /* ruizhi-page-enhance-preload:end */
+`;
+}
+
+function ensurePreloadPageEnhanceIntegration(preloadPath, config, options = {}) {
+  const log = options.log ?? (() => {});
+  let source = fs.readFileSync(preloadPath, "utf8");
+  let next = source.replace(/\/\* ruizhi-page-enhance-preload:start \*\/[\s\S]*?\/\* ruizhi-page-enhance-preload:end \*\/\r?\n?/g, "");
+  if (next.includes("enhance:{") || next.includes("enhance={")) {
+    return;
+  }
+  const exposeAnchor = '  try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}';
+  if (!next.includes(exposeAnchor)) {
+    throw new Error("preload 增强 bridge 注入点不存在");
+  }
+  next = next.replace(exposeAnchor, `${preloadPageEnhanceIntegrationSnippet(config)}${exposeAnchor}`);
+  if (next !== source) {
+    fs.writeFileSync(preloadPath, next, "utf8");
+    log("已注入页面增强 preload bridge");
+  }
+}
+
 export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
@@ -1805,6 +1918,10 @@ export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
 function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {}) {
   const log = options.log ?? (() => {});
   const productName = config.productName ?? "锐智";
+  const runtimeConfig = config.runtime ?? {};
+  const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
+  const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".codex";
+  const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
   const preludeStart = "/* ruizhi-early-env:start */";
   const preludeEnd = "/* ruizhi-early-env:end */";
   const prelude = `${preludeStart}
@@ -1814,10 +1931,13 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const fs=require("node:fs");
   const home=os.homedir();
   const productName=${JSON.stringify(productName)};
-  const codexHome=(process.env.RUIZHI_HOME||path.join(home,".ruizhi")).trim();
+  const ruizhiHomeEnvName=${JSON.stringify(ruizhiHomeEnvName)};
+  const ruizhiDefaultHomeDirName=${JSON.stringify(ruizhiDefaultHomeDirName)};
+  const electronUserDataDirName=${JSON.stringify(electronUserDataDirName)};
+  const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
-  const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,productName)).trim();
-  process.env.RUIZHI_HOME=codexHome;
+  const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
+  process.env[ruizhiHomeEnvName]=codexHome;
   process.env.CODEX_HOME=codexHome;
   process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
   fs.mkdirSync(codexHome,{recursive:true});
@@ -1881,6 +2001,36 @@ function bridgeBootstrapBlock() {
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
 /* ruizhi-model-bridge:end */
+`;
+}
+
+function pageEnhanceBootstrapBlock(config) {
+  const enhanceConfig = pageEnhanceBootstrapConfig(config);
+  return `/* ruizhi-page-enhance:start */
+    const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
+    function registerRuizhiEnhanceIpc(){
+      if(global.__RUIZHI_ENHANCE_IPC_REGISTERED__)return;
+      global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
+      try{
+        const servicePath=path.join(resourcesRoot,...pageEnhanceConfig.serviceResourcePath);
+        if(!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
+        const service=require(servicePath).createRuizhiEnhanceService({
+          codexHome,
+          resourcesRoot,
+          config:{pageEnhance:pageEnhanceConfig}
+        });
+        n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
+      }catch(error){
+        console.error("ruizhi enhance ipc register failed",error);
+        n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>({
+          status:"failed",
+          session_id:String(payload?.session_id||""),
+          message:String(error?.message||error)
+        }));
+      }
+    }
+    registerRuizhiEnhanceIpc();
+/* ruizhi-page-enhance:end */
 `;
 }
 
@@ -1967,7 +2117,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   let source = fs.readFileSync(bootstrapPath, "utf8");
   let next = source;
 
-  const constantsPattern = /const openaiBaseUrl="[^"]*";(?:\s*const modelProviderBaseUrl=[^;]+;)?(?:\s*const modelBridgeConfig=\{[\s\S]*?\};)?/;
+  const constantsPattern = /const openaiBaseUrl="[^"]*";(?:\s*const modelProviderBaseUrl=[^;]+;)?(?:\s*const modelBridgeConfig=\{[\s\S]*?\};)?(?:\s*const pageEnhanceConfig=\{[\s\S]*?\};)?/;
   if (!constantsPattern.test(next)) {
     throw new Error("Windows bootstrap openaiBaseUrl 补丁点不存在");
   }
@@ -1998,12 +2148,14 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
 
   const bridgeMarkerPattern = /\/\* ruizhi-model-bridge:start \*\/[\s\S]*?\/\* ruizhi-model-bridge:end \*\/\r?\n?/g;
   next = next.replace(bridgeMarkerPattern, "");
+  const pageEnhanceMarkerPattern = /\/\* ruizhi-page-enhance:start \*\/[\s\S]*?\/\* ruizhi-page-enhance:end \*\/\r?\n?/g;
+  next = next.replace(pageEnhanceMarkerPattern, "");
   const oldEnvAnchor = "process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;\n    process.env.RUIZHI_IMAGEGEN_EXE=";
   const imageEnvAnchor = "    process.env.RUIZHI_IMAGEGEN_EXE=";
   if (next.includes(oldEnvAnchor)) {
-    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock()}    process.env.RUIZHI_IMAGEGEN_EXE=`);
+    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock()}${pageEnhanceBootstrapBlock(config)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
   } else if (next.includes(imageEnvAnchor)) {
-    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock()}${imageEnvAnchor}`);
+    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock()}${pageEnhanceBootstrapBlock(config)}${imageEnvAnchor}`);
   } else {
     throw new Error("Windows bootstrap RUIZHI_IMAGEGEN_EXE 补丁点不存在");
   }
@@ -2232,6 +2384,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
       `const appVersion=${JSON.stringify(appVersion)};`,
       "preload appVersion"
     );
+    ensurePreloadPageEnhanceIntegration(preloadPath, config, { log });
   }
 
   if (fs.existsSync(bootstrapPath)) {

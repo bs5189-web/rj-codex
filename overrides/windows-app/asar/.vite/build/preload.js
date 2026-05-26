@@ -3,7 +3,7 @@ let e=require(`electron`);var t=`codex_desktop:mcp-app-sandbox-host-message`,n=`
   const electron=require("electron");
   const ipcRenderer=electron.ipcRenderer;
   const contextBridge=electron.contextBridge;
-  const appVersion="0.1.14";
+  const appVersion="0.1.24";
   let updateState={status:"idle",currentVersion:appVersion,version:null,progress:0,message:""};
   let row=null;
   let progressEl=null;
@@ -24,6 +24,33 @@ let e=require(`electron`);var t=`codex_desktop:mcp-app-sandbox-host-message`,n=`
       installVcRedist:()=>ipcRenderer.invoke("ruizhi:runtime:install-vc-redist")
     }
   };
+
+  /* ruizhi-page-enhance-preload:start */
+  const pageEnhanceConfig={"enabled":true,"features":{"menu":true,"pluginEntryUnlock":true,"forcePluginInstall":true,"sessionDelete":true,"markdownExport":true,"projectMove":true,"timeline":true,"threadScrollRestore":true,"modelWhitelistUnlock":false,"zedRemoteOpen":false,"upstreamWorktreeCreate":false,"serviceTierControls":false},"rendererResourcePath":["renderer","ruizhi-page-enhance.js"],"serviceResourcePath":["bridge","ruizhi-enhance-service.cjs"]};
+  api.enhance={
+    call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
+    getSettings:()=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/get",{}),
+    setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
+  };
+  function injectRuizhiPageEnhance(){
+    if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
+    window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
+    try{
+      const fs=require("node:fs");
+      const path=require("node:path");
+      const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
+      const scriptPath=path.join(resourcesRoot,...pageEnhanceConfig.rendererResourcePath);
+      const source=fs.readFileSync(scriptPath,"utf8");
+      const script=document.createElement("script");
+      script.textContent="window.__RUIZHI_PAGE_ENHANCE_CONFIG__="+"{\"enabled\":true,\"features\":{\"menu\":true,\"pluginEntryUnlock\":true,\"forcePluginInstall\":true,\"sessionDelete\":true,\"markdownExport\":true,\"projectMove\":true,\"timeline\":true,\"threadScrollRestore\":true,\"modelWhitelistUnlock\":false,\"zedRemoteOpen\":false,\"upstreamWorktreeCreate\":false,\"serviceTierControls\":false},\"rendererResourcePath\":[\"renderer\",\"ruizhi-page-enhance.js\"],\"serviceResourcePath\":[\"bridge\",\"ruizhi-enhance-service.cjs\"]}"+";\n"+source;
+      (document.documentElement||document.head||document.body).appendChild(script);
+      script.remove();
+    }catch(error){
+      console.error("ruizhi page enhance inject failed",error);
+    }
+  }
+  onReady(injectRuizhiPageEnhance);
+  /* ruizhi-page-enhance-preload:end */
   try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
 
   function onReady(fn){

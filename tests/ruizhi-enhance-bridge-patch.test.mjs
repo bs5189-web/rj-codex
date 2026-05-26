@@ -1,0 +1,29 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const projectRoot = path.resolve(path.dirname(__filename), "..");
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
+}
+
+test("Windows asar patch injects enhance bridge and runtime service", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+
+  assert.match(source, /ruizhi:enhance:call/);
+  assert.match(source, /ruizhi-enhance-service\.cjs/);
+  assert.match(source, /ruizhi-page-enhance\.js/);
+  assert.match(source, /enhance:\s*\{/);
+});
+
+test("packaging scripts expose the enhance bridge on preload", () => {
+  for (const scriptPath of ["scripts/build-windows.mjs", "scripts/build-macos.mjs"]) {
+    const source = read(scriptPath);
+    assert.match(source, /ruizhi:enhance:call/, `${scriptPath} should register enhance IPC`);
+    assert.match(source, /enhance:\s*\{/, `${scriptPath} should expose window.ruizhiDesktop.enhance`);
+  }
+});

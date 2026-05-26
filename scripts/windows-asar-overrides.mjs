@@ -761,6 +761,21 @@ function restoreOpenAIBundledPluginResources(resourcesDir, options = {}) {
   fs.rmSync(targetRoot, { recursive: true, force: true });
   fsExtra.copySync(sourceRoot, targetRoot);
   log("已恢复官方 OpenAI 插件资源");
+
+  // Rename plugin directories to match expected names in openAIBundledPluginDefinitions
+  const pluginsRoot = path.join(targetRoot, "plugins");
+  const pluginDirRenames = [
+    ["browser", "browser-use"],
+    ["latex", "latex-tectonic"]
+  ];
+  for (const [from, to] of pluginDirRenames) {
+    const fromPath = path.join(pluginsRoot, from);
+    const toPath = path.join(pluginsRoot, to);
+    if (fs.existsSync(fromPath) && !fs.existsSync(toPath)) {
+      fs.renameSync(fromPath, toPath);
+      log(`已重命名插件目录：${from} -> ${to}`);
+    }
+  }
 }
 
 function pluginCategoryLabel(category) {
@@ -2404,7 +2419,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     );
   }
 
-  patchWindowsTrayMenuLabels(extractedAppDir, config, { log });
+  // patchWindowsTrayMenuLabels(extractedAppDir, config, { log }); // 暂时跳过：Codex 42.x 的托盘 JS 匹配数量有变化
   patchVcRuntimeErrorPage(extractedAppDir, { log });
   patchWindowsHelpDocumentationLinks(extractedAppDir, config, { log });
   if (enableWindowsPluginTextPatches) {

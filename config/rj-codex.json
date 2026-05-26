@@ -1,0 +1,307 @@
+{
+  "productName": "锐智",
+  "version": "0.1.24",
+  "locale": "zh-CN",
+  "windows": {
+    "sourceAppRoot": "vendor/codex-desktop/windows/current/app",
+    "sourceManifestPath": "vendor/codex-desktop/windows/current/source-manifest.json",
+    "sourceExeName": "Codex.exe",
+    "appExeName": "Codex.exe",
+    "taskManagerName": "Codex",
+    "shortcutName": "锐智",
+    "previousAppExeNames": [
+      "锐智.exe"
+    ],
+    "zipName": "ruizhi-windows-${version}.${ext}",
+    "iconPath": "assets/ruizhi.ico"
+  },
+  "updates": {
+    "enabled": true,
+    "artifactName": "Ruizhi-Setup-${version}.${ext}",
+    "manifestUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/windows/latest.yml",
+    "downloadBaseUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/windows/",
+    "macos": {
+      "artifactName": "Ruizhi-macos-${version}-${arch}.${ext}",
+      "manifestUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/macos/latest.yml",
+      "downloadBaseUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/macos/"
+    },
+    "requestTimeoutMs": 8000,
+    "downloadTimeoutMs": 600000
+  },
+  "website": {
+    "homeUrl": "http://ruizhi.rjagi.cn/",
+    "docsUrl": "http://ruizhi.rjagi.cn/docs.html",
+    "macosDownloadUrl": "/updates/macos/ruizhi-latest-macos.json"
+  },
+  "openai": {
+    "baseUrl": "https://uniapi.ruijie.com.cn/v1",
+    "tokenUrl": "https://uniapi.ruijie.com.cn/console/token",
+    "defaultModel": "gpt-5.5",
+    "defaultReasoningEffort": "medium",
+    "requestMaxRetries": 0,
+    "streamMaxRetries": 0
+  },
+  "apiKeyTest": {
+    "model": "qwen3.6-flash",
+    "timeoutMs": 15000
+  },
+  "runtime": {
+    "homeEnv": "RUIZHI_HOME",
+    "defaultHomeDirName": ".ruizhi"
+  },
+  "models": {
+    "enabled": true,
+    "catalogPath": "resources/ruizhi-model-catalog.json"
+  },
+  "modelBridge": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 17888,
+    "runtimeScriptPath": "resources/bridge/ruizhi-responses-bridge.cjs",
+    "routes": {
+      "gpt-5.5": "responses",
+      "gpt-5.4": "responses",
+      "gpt-5.4-mini": "responses",
+      "gpt-5.3-codex": "responses",
+      "qwen3.6-plus": "responses",
+      "qwen3.6-flash": "responses",
+      "qwen3-coder-plus": "responses",
+      "qwen3-coder-480b-a35b-instruct": "responses",
+      "qwen3-coder-30b-a3b-instruct": "responses",
+      "claude-opus-4-7": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "claude-sonnet-4-6": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "glm-5.1": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "kimi-k2.6": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "MiniMax/MiniMax-M2.7": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "deepseek-v4-pro": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "deepseek-v4-flash-maxthink": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "deepseek-v4-flash": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      }
+    }
+  },
+  "imageGeneration": {
+    "model": "gpt-image-2",
+    "helperExeName": "ruizhi-imagegen.exe"
+  },
+  "defaultConfig": {
+    "features": {
+      "default_mode_request_user_input": true,
+      "plugins": true,
+      "apps": true,
+      "browser_use": true
+    }
+  },
+  "execPolicy": {
+    "managedRulesFileName": "ruizhi-managed.rules",
+    "allowPrefixRules": [
+      {
+        "prefix": [
+          "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          "-Command",
+          "mkdir -p"
+        ]
+      },
+      {
+        "prefix": [
+          "pwsh.exe",
+          "-Command",
+          "mkdir -p"
+        ]
+      },
+      {
+        "prefix": [
+          "powershell.exe",
+          "-Command",
+          "mkdir -p"
+        ]
+      },
+      {
+        "prefix": [
+          "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          "-Command",
+          "& $env:RUIZHI_IMAGEGEN_EXE generate"
+        ]
+      },
+      {
+        "prefix": [
+          "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+          "-Command",
+          "& $env:RUIZHI_IMAGEGEN_EXE generate-batch"
+        ]
+      },
+      {
+        "prefix": [
+          "pwsh.exe",
+          "-Command",
+          "& $env:RUIZHI_IMAGEGEN_EXE generate"
+        ]
+      },
+      {
+        "prefix": [
+          "pwsh.exe",
+          "-Command",
+          "& $env:RUIZHI_IMAGEGEN_EXE generate-batch"
+        ]
+      },
+      {
+        "prefix": [
+          "powershell.exe",
+          "-Command",
+          "& $env:RUIZHI_IMAGEGEN_EXE generate"
+        ]
+      },
+      {
+        "prefix": [
+          "powershell.exe",
+          "-Command",
+          "& $env:RUIZHI_IMAGEGEN_EXE generate-batch"
+        ]
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "node"
+        ],
+        "path": "plugins/rj-skills-hbr-finder/skills/rj-skills-hbr-finder/scripts/search-hbr.mjs"
+      },
+      {
+        "prefix": [
+          "node"
+        ],
+        "homePath": ".agents/skills/rj-skills-hbr-finder/scripts/search-hbr.mjs"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "node"
+        ],
+        "path": "plugins/rj-skills-hundun-finder/skills/rj-skills-hundun-finder/scripts/search-hundun.mjs"
+      },
+      {
+        "prefix": [
+          "node"
+        ],
+        "homePath": ".agents/skills/rj-skills-hundun-finder/scripts/search-hundun.mjs"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "node"
+        ],
+        "path": "plugins/ruijie-volcengine-video-generation/skills/ruijie-volcengine-video-generation/scripts/generate-video.mjs"
+      },
+      {
+        "prefix": [
+          "node"
+        ],
+        "homePath": ".agents/skills/ruijie-volcengine-video-generation/scripts/generate-video.mjs"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "node"
+        ],
+        "path": "plugins/ruijie-notebooklm/skills/ruijie-notebooklm/scripts/book-reader.mjs"
+      },
+      {
+        "prefix": [
+          "node"
+        ],
+        "homePath": ".agents/skills/ruijie-notebooklm/scripts/book-reader.mjs"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "node"
+        ],
+        "path": "plugins/ruijie-notebooklm/skills/ruijie-notebooklm/scripts/notebooklm.mjs"
+      },
+      {
+        "prefix": [
+          "node"
+        ],
+        "homePath": ".agents/skills/ruijie-notebooklm/scripts/notebooklm.mjs"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "bash"
+        ],
+        "path": "plugins/ruijie-seedance-prompt/skills/ruijie-seedance-prompt/SKILL.sh"
+      },
+      {
+        "prefix": [
+          "bash"
+        ],
+        "homePath": ".agents/skills/ruijie-seedance-prompt/SKILL.sh"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "bash"
+        ],
+        "path": "plugins/ruijie-seedance-prompt/skills/ruijie-seedance-prompt/scripts/setup_seedance_prompt_workspace.sh"
+      },
+      {
+        "prefix": [
+          "bash"
+        ],
+        "homePath": ".agents/skills/ruijie-seedance-prompt/scripts/setup_seedance_prompt_workspace.sh"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "python3"
+        ],
+        "path": "plugins/ruijie-km/scripts/ruijie_km_mcp.py"
+      },
+      {
+        "marketplace": "ruijie-skills",
+        "prefix": [
+          "python"
+        ],
+        "path": "plugins/ruijie-km/scripts/ruijie_km_mcp.py"
+      }
+    ]
+  },
+  "pluginMarketplaces": [
+    {
+      "name": "ruijie-skills",
+      "displayName": "锐捷插件",
+      "sourcePath": "marketplaces/ruijie-skills",
+      "resourcePath": "plugins/ruijie-skills",
+      "installPath": ".tmp/marketplaces/ruijie-skills",
+      "versionManifestPath": ".codex-plugin/plugin.json"
+    }
+  ],
+  "codexCli": {
+    "sourceRepo": "https://github.com/openai/codex.git",
+    "tag": "rust-v0.128.0-alpha.1",
+    "rustupToolchain": "stable",
+    "rebuildByDefault": false,
+    "disableOpenAIWebSockets": true
+  }
+}

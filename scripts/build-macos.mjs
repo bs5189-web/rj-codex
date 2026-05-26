@@ -1,0 +1,2438 @@
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import fsExtra from "fs-extra";
+import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
+
+const require = createRequire(import.meta.url);
+const asar = require("asar");
+
+const __filename = fileURLToPath(import.meta.url);
+const projectRoot = path.resolve(path.dirname(__filename), "..");
+const config = JSON.parse(fs.readFileSync(path.join(projectRoot, "config", "rj-codex.json"), "utf8"));
+const appVersion = process.env.RUIZHI_BUILD_VERSION ?? config.version;
+const updatesConfig = config.updates ?? {};
+const macosUpdateConfig = updatesConfig.macos ?? {};
+const macosBuildArch = normalizeMacosBuildArch(process.env.RUIZHI_MACOS_ARCH ?? process.arch);
+const runtimeConfig = config.runtime ?? {};
+const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
+const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
+const imageGenerationConfig = config.imageGeneration ?? {};
+const modelBridgeConfig = config.modelBridge ?? {};
+const openAIBundledPluginDefinitions = [
+  { name: "browser-use", path: "./plugins/browser-use", category: "浏览器" },
+  { name: "chrome", path: "./plugins/chrome", category: "实验性" },
+  { name: "latex-tectonic", path: "./plugins/latex-tectonic", category: "研究" }
+];
+
+const distDir = resolveProjectPath("dist");
+const macDistDir = resolveProjectPath(path.join("dist", "macos"));
+const appOutRoot = path.join(macDistDir, `${config.productName}.app`);
+const workRoot = path.join(projectRoot, ".work", "macos");
+const dmgStagingDir = path.join(workRoot, "dmg");
+const sourceWorkDir = path.join(workRoot, "source");
+const extractedDir = path.join(workRoot, "app");
+const updateManifestPath = path.join(distDir, "ruizhi-latest-macos.json");
+const archUpdateManifestPath = path.join(distDir, `ruizhi-latest-macos-${macosBuildArch}.json`);
+const latestMacYmlPath = path.join(distDir, "latest-mac.yml");
+const legacyLatestMacYmlPath = path.join(distDir, "latest.yml");
+const archLatestMacYmlPath = path.join(distDir, `latest-mac-${macosBuildArch}.yml`);
+
+function log(message) {
+  console.log(`[ruizhi:macos] ${message}`);
+}
+
+function assertInsideProject(targetPath) {
+  const resolvedRoot = path.resolve(projectRoot).toLowerCase();
+  const resolvedTarget = path.resolve(targetPath).toLowerCase();
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error(`拒绝访问项目外路径：${targetPath}`);
+  }
+}
+
+function resolveProjectPath(targetPath) {
+  const resolvedTarget = path.isAbsolute(targetPath)
+    ? path.resolve(targetPath)
+    : path.resolve(projectRoot, targetPath);
+  assertInsideProject(resolvedTarget);
+  return resolvedTarget;
+}
+
+function cleanDir(targetPath) {
+  assertInsideProject(targetPath);
+  fs.mkdirSync(targetPath, { recursive: true });
+  for (const entry of fs.readdirSync(targetPath)) {
+    fs.rmSync(path.join(targetPath, entry), { recursive: true, force: true });
+  }
+}
+
+function execLogged(command, args, options = {}) {
+  log([command, ...args].join(" "));
+  execFileSync(command, args, { stdio: "inherit", ...options });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function execSensitive(command, args, label, options = {}) {
+  log(label);
+  execFileSync(command, args, { stdio: "inherit", ...options });
+}
+
+function execOutput(command, args, options = {}) {
+  return execFileSync(command, args, { encoding: "utf8", ...options });
+}
+
+function jsonLiteral(value) {
+  return JSON.stringify(value);
+}
+
+function tomlValue(value) {
+  if (typeof value === "string") {
+    return jsonLiteral(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  throw new Error(`不支持的 TOML 默认值：${value}`);
+}
+
+function splitConfigPath(value) {
+  return String(value).split(/[\\/]+/).filter(Boolean);
+}
+
+function pluginMarketplaces() {
+  return Array.isArray(config.pluginMarketplaces) ? config.pluginMarketplaces : [];
+}
+
+function macosUpdatesEnabled() {
+  return macosUpdateConfig.enabled ?? updatesConfig.enabled !== false;
+}
+
+function macosUpdateDownloadBaseUrl() {
+  return process.env.RUIZHI_MACOS_UPDATE_DOWNLOAD_BASE_URL
+    ?? process.env.RUIZHI_UPDATE_DOWNLOAD_BASE_URL
+    ?? macosUpdateConfig.downloadBaseUrl
+    ?? "";
+}
+
+function joinUrl(baseUrl, fileName) {
+  if (!baseUrl) {
+    return fileName;
+  }
+  return new URL(fileName, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+}
+
+function renderArtifactName(template, filePath) {
+  const ext = path.extname(filePath).replace(/^\./, "") || "zip";
+  return String(template)
+    .replace(/\$\{version\}/g, appVersion)
+    .replace(/\$\{arch\}/g, macosBuildArch)
+    .replace(/\$\{ext\}/g, ext);
+}
+
+function macosUpdateArtifactName(filePath) {
+  const template = macosUpdateConfig.artifactName ?? "Ruizhi-macos-${version}-${arch}.${ext}";
+  return renderArtifactName(template, filePath);
+}
+
+function macosDmgArtifactName() {
+  return macosUpdateArtifactName("app.dmg");
+}
+
+function yamlString(value) {
+  return JSON.stringify(String(value));
+}
+
+function normalizeMacosBuildArch(value) {
+  const arch = String(value ?? "").trim().toLowerCase();
+  if (["arm64", "aarch64"].includes(arch)) {
+    return "arm64";
+  }
+  if (["x64", "x86", "x86_64", "amd64", "intel"].includes(arch)) {
+    return "x64";
+  }
+  throw new Error(`不支持的 macOS 架构：${value}`);
+}
+
+function macosMachArch(value = macosBuildArch) {
+  return value === "x64" ? "x86_64" : value;
+}
+
+function macosGoArch(value = macosBuildArch) {
+  return value === "x64" ? "amd64" : value;
+}
+
+function assertVersionFilePart(version) {
+  if (!/^[0-9A-Za-z._+-]+$/.test(version)) {
+    throw new Error(`版本号不能用于产物文件名：${version}`);
+  }
+}
+
+function versionedLatestMacYmlPath(version = appVersion, arch = macosBuildArch) {
+  assertVersionFilePart(version);
+  assertVersionFilePart(arch);
+  return path.join(distDir, `latest-mac-${version}-${arch}.yml`);
+}
+
+function versionedMacUpdateManifestPath(version = appVersion, arch = macosBuildArch) {
+  assertVersionFilePart(version);
+  assertVersionFilePart(arch);
+  return path.join(distDir, `ruizhi-latest-macos-${version}-${arch}.json`);
+}
+
+function readElectronUpdaterManifestVersion(manifestPath) {
+  const content = fs.readFileSync(manifestPath, "utf8");
+  const match = content.match(/^version:\s*['"]?([^'"\s]+)['"]?\s*$/m);
+  if (!match) {
+    throw new Error(`无法从 electron-updater 清单读取版本号：${manifestPath}`);
+  }
+  return match[1];
+}
+
+function readJsonManifestVersion(manifestPath) {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  if (typeof manifest.version !== "string" || !manifest.version.trim()) {
+    throw new Error(`无法从 JSON 更新清单读取版本号：${manifestPath}`);
+  }
+  return manifest.version;
+}
+
+function preserveExistingMacUpdateManifests() {
+  if (fs.existsSync(latestMacYmlPath)) {
+    const version = readElectronUpdaterManifestVersion(latestMacYmlPath);
+    const versionedPath = versionedLatestMacYmlPath(version);
+    fs.copyFileSync(latestMacYmlPath, versionedPath);
+    log(`已保留历史 macOS electron-updater 清单：${versionedPath}`);
+  } else if (fs.existsSync(legacyLatestMacYmlPath)) {
+    const version = readElectronUpdaterManifestVersion(legacyLatestMacYmlPath);
+    const versionedPath = versionedLatestMacYmlPath(version);
+    fs.copyFileSync(legacyLatestMacYmlPath, versionedPath);
+    log(`已保留历史 macOS legacy electron-updater 清单：${versionedPath}`);
+  }
+
+  if (fs.existsSync(updateManifestPath)) {
+    const version = readJsonManifestVersion(updateManifestPath);
+    const versionedPath = versionedMacUpdateManifestPath(version);
+    fs.copyFileSync(updateManifestPath, versionedPath);
+    log(`已保留历史 macOS 更新清单：${versionedPath}`);
+  }
+}
+
+function marketplaceSourceToken(name) {
+  return `__RUIZHI_MARKETPLACE_SOURCE_${name.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}__`;
+}
+
+function modelCatalogPath() {
+  const configured = config.models?.catalogPath;
+  if (!configured) {
+    throw new Error("缺少 models.catalogPath 配置。");
+  }
+  const resolved = resolveProjectPath(configured);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`锐智模型目录不存在：${resolved}`);
+  }
+  return resolved;
+}
+
+function modelCatalogEnabled() {
+  return config.models?.enabled !== false;
+}
+
+function modelBridgeEnabled() {
+  return modelCatalogEnabled() && modelBridgeConfig.enabled === true;
+}
+
+function modelBridgeHost() {
+  return modelBridgeConfig.host ?? "127.0.0.1";
+}
+
+function modelBridgePort() {
+  const port = modelBridgeConfig.port ?? 17888;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`modelBridge.port 无效：${port}`);
+  }
+  return port;
+}
+
+function modelProviderBaseUrl() {
+  if (!modelBridgeEnabled()) {
+    return config.openai.baseUrl;
+  }
+  return `http://${modelBridgeHost()}:${modelBridgePort()}/v1`;
+}
+
+function modelBridgeRuntimeSourcePath() {
+  const configured = modelBridgeConfig.runtimeScriptPath ?? "resources/bridge/ruizhi-responses-bridge.cjs";
+  const resolved = resolveProjectPath(configured);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`模型协议 bridge 脚本不存在：${resolved}`);
+  }
+  return resolved;
+}
+
+function modelBridgeRuntimeResourcePath() {
+  return path.join("bridge", path.basename(modelBridgeRuntimeSourcePath()));
+}
+
+function modelBridgeRoutes() {
+  return modelBridgeConfig.routes && typeof modelBridgeConfig.routes === "object"
+    ? modelBridgeConfig.routes
+    : {};
+}
+
+function imageGenHelperName() {
+  return (imageGenerationConfig.helperDarwinName ?? imageGenerationConfig.helperExeName ?? "ruizhi-imagegen")
+    .replace(/\.exe$/i, "");
+}
+
+function builtInAllowPrefixRules() {
+  const configuredRules = Array.isArray(config.execPolicy?.allowPrefixRules)
+    ? config.execPolicy.allowPrefixRules
+    : [];
+  const imageGenHelperPath = path.join("bin", imageGenHelperName());
+  return [
+    ...configuredRules,
+    {
+      commandResourcePath: imageGenHelperPath,
+      prefix: ["generate"]
+    },
+    {
+      commandResourcePath: imageGenHelperPath,
+      prefix: ["generate-batch"]
+    }
+  ];
+}
+
+function imageGenSkillSourcePath() {
+  return resolveProjectPath(path.join("resources", "skills", "imagegen", "SKILL.md"));
+}
+
+function findOneFile(dir, pattern, label) {
+  const matches = fs.readdirSync(dir)
+    .filter((name) => pattern.test(name))
+    .map((name) => path.join(dir, name));
+
+  if (matches.length !== 1) {
+    throw new Error(`${label} 匹配数量异常：${matches.length}`);
+  }
+
+  return matches[0];
+}
+
+function findOptionalFile(dir, pattern, label) {
+  const matches = fs.readdirSync(dir)
+    .filter((name) => pattern.test(name))
+    .map((name) => path.join(dir, name));
+
+  if (matches.length === 0) {
+    log(`跳过缺失文件：${label}`);
+    return null;
+  }
+  if (matches.length > 1) {
+    throw new Error(`${label} 匹配数量异常：${matches.length}`);
+  }
+
+  return matches[0];
+}
+
+function replaceExact(source, from, to, label) {
+  if (!source.includes(from)) {
+    throw new Error(`补丁点不存在：${label}`);
+  }
+  return source.replace(from, to);
+}
+
+function replaceExactIfPresent(source, from, to, label) {
+  if (!source.includes(from)) {
+    log(`跳过补丁点：${label}`);
+    return source;
+  }
+  return source.replace(from, to);
+}
+
+function replaceRegex(source, pattern, to, label) {
+  if (!pattern.test(source)) {
+    throw new Error(`补丁点不存在：${label}`);
+  }
+  return source.replace(pattern, to);
+}
+
+function replaceAllIfPresent(source, from, to) {
+  return source.split(from).join(to);
+}
+
+function walkFiles(root) {
+  if (!fs.existsSync(root)) {
+    return [];
+  }
+
+  const result = [];
+  const visit = (dir) => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath);
+      } else if (entry.isFile()) {
+        result.push(fullPath);
+      }
+    }
+  };
+
+  visit(root);
+  return result;
+}
+
+function configuredWebsiteUrl(key, label) {
+  const configured = String(config.website?.[key] ?? "").trim();
+  if (!configured) {
+    throw new Error(`缺少 website.${key} 配置，无法补丁${label}链接`);
+  }
+  return configured;
+}
+
+function homeUrl() {
+  return configuredWebsiteUrl("homeUrl", "帮助首页");
+}
+
+function docsUrl(hash = "") {
+  const configured = configuredWebsiteUrl("docsUrl", "帮助文档");
+  return hash ? `${configured.split("#")[0]}#${hash}` : configured;
+}
+
+function patchHelpDocumentationLinks() {
+  const helpHomeUrl = homeUrl();
+  const helpHomePattern = /\{label:`Codex Documentation`,click:\(\)=>\{([A-Za-z_$][\w$]*)\.shell\.openExternal\(`https:\/\/developers\.openai\.com\/codex\/app`\)\}\}/g;
+  const replacements = [
+    ["https://developers.openai.com/codex/app/worktrees#option-1-working-on-the-worktree", docsUrl("workspace")],
+    ["https://developers.openai.com/codex/app/local-environments", docsUrl("terminal")],
+    ["https://developers.openai.com/codex/app/troubleshooting", docsUrl("faq")],
+    ["https://developers.openai.com/codex/app/automations", docsUrl("automation")],
+    ["https://developers.openai.com/codex/app/worktrees", docsUrl("workspace")],
+    ["https://developers.openai.com/codex/changelog", docsUrl("install")],
+    ["https://developers.openai.com/codex/skills", docsUrl("skills")],
+    ["https://developers.openai.com/codex/mcp", docsUrl("skills")],
+    ["https://developers.openai.com/codex/agent-approvals-security#automatic-approval-reviews", docsUrl("best-practices")],
+    ["https://developers.openai.com/codex/memories/chronicle", docsUrl("rules")],
+    ["https://developers.openai.com/codex/memories", docsUrl("rules")],
+    ["https://developers.openai.com/codex/pricing", docsUrl("intro")],
+    ["https://developers.openai.com/codex/app", docsUrl()]
+  ];
+
+  let changedFiles = 0;
+  let replacementCount = 0;
+  const files = walkFiles(extractedDir).filter((filePath) => /\.(js|html|json)$/i.test(filePath));
+  for (const filePath of files) {
+    let source = fs.readFileSync(filePath, "utf8");
+    let next = source;
+    const helpHomeMatches = next.match(helpHomePattern);
+    if (helpHomeMatches) {
+      next = next.replace(
+        helpHomePattern,
+        `{label:\`Codex Documentation\`,click:()=>{$1.shell.openExternal(\`${helpHomeUrl}\`)}}`
+      );
+      replacementCount += helpHomeMatches.length;
+    }
+    for (const [from, to] of replacements) {
+      const before = next;
+      next = next.split(from).join(to);
+      if (next !== before) {
+        replacementCount += before.split(from).length - 1;
+      }
+    }
+    if (next !== source) {
+      fs.writeFileSync(filePath, next, "utf8");
+      changedFiles += 1;
+    }
+  }
+
+  if (replacementCount === 0) {
+    throw new Error("未找到 Codex 帮助文档链接补丁点");
+  }
+
+  log(`已补丁帮助文档链接：${changedFiles} 个文件，${replacementCount} 处`);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function writePatchedFile(filePath, transform) {
+  const original = fs.readFileSync(filePath, "utf8");
+  const patched = transform(original);
+  if (patched === original) {
+    throw new Error(`文件没有发生变化：${filePath}`);
+  }
+  fs.writeFileSync(filePath, patched);
+}
+
+function writePatchedFileIfChanged(filePath, transform) {
+  const original = fs.readFileSync(filePath, "utf8");
+  const patched = transform(original);
+  if (patched === original) {
+    log(`跳过未变化文件：${path.basename(filePath)}`);
+    return false;
+  }
+  fs.writeFileSync(filePath, patched);
+  return true;
+}
+
+function defaultConfigTomlLines(marketplaceSourceValues = {}) {
+  const openai = config.openai;
+  const defaultConfig = config.defaultConfig ?? {};
+  const features = defaultConfig.features ?? {};
+
+  const lines = [
+    `model = ${jsonLiteral(openai.defaultModel)}`,
+    `model_reasoning_effort = ${jsonLiteral(openai.defaultReasoningEffort)}`,
+    `model_provider = "ruizhi"`,
+    `openai_base_url = ${jsonLiteral(openai.baseUrl)}`,
+    ""
+  ];
+
+  lines.push("[model_providers.ruizhi]");
+  lines.push(`name = "锐擎API"`);
+  lines.push(`base_url = ${jsonLiteral(openai.baseUrl)}`);
+  lines.push(`wire_api = "responses"`);
+  lines.push(`requires_openai_auth = true`);
+  lines.push(`supports_websockets = false`);
+  if (Number.isInteger(openai.streamMaxRetries)) {
+    lines.push(`stream_max_retries = ${openai.streamMaxRetries}`);
+  }
+  if (Number.isInteger(openai.requestMaxRetries)) {
+    lines.push(`request_max_retries = ${openai.requestMaxRetries}`);
+  }
+  lines.push("");
+
+  const featureEntries = Object.entries(features);
+  if (featureEntries.length > 0) {
+    lines.push("[features]");
+    for (const [key, value] of featureEntries) {
+      lines.push(`${key} = ${tomlValue(value)}`);
+    }
+    lines.push("");
+  }
+
+  const managedMarketplaces = [
+    ...pluginMarketplaces(),
+    { name: "openai-bundled" }
+  ];
+
+  for (const marketplace of managedMarketplaces) {
+    lines.push(`[marketplaces.${marketplace.name}]`);
+    lines.push(`source_type = "local"`);
+    lines.push(`source = ${marketplaceSourceValues[marketplace.name] ?? marketplaceSourceToken(marketplace.name)}`);
+    lines.push("");
+  }
+
+  return lines;
+}
+
+function managedConfigTomlLines(marketplaceSourceValues = {}) {
+  return [
+    "# BEGIN Ruizhi Managed Defaults",
+    ...defaultConfigTomlLines(marketplaceSourceValues),
+    "# END Ruizhi Managed Defaults",
+    ""
+  ];
+}
+
+function appResourcesDir() {
+  return path.join(appOutRoot, "Contents", "Resources");
+}
+
+function validateMacAppRoot(appRoot) {
+  const asarPath = path.join(appRoot, "Contents", "Resources", "app.asar");
+  if (!fs.existsSync(asarPath)) {
+    throw new Error(`不是有效的 Codex.app：${appRoot}`);
+  }
+}
+
+function findMacApps(root) {
+  const results = [];
+  const stack = [{ dir: root, depth: 0 }];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current.depth > 5 || !fs.existsSync(current.dir)) {
+      continue;
+    }
+    for (const entry of fs.readdirSync(current.dir, { withFileTypes: true })) {
+      const fullPath = path.join(current.dir, entry.name);
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      if (entry.name.endsWith(".app") && fs.existsSync(path.join(fullPath, "Contents", "Resources", "app.asar"))) {
+        results.push(fullPath);
+      } else {
+        stack.push({ dir: fullPath, depth: current.depth + 1 });
+      }
+    }
+  }
+  return results;
+}
+
+function sourceAppFromLocalInstall() {
+  const candidates = [
+    "/Applications/Codex.app",
+    path.join(process.env.HOME ?? "", "Applications", "Codex.app")
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, "Contents", "Resources", "app.asar"))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function downloadFile(url, targetPath) {
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  execLogged("curl", ["-L", "--fail", "--retry", "3", "--output", targetPath, url]);
+}
+
+function defaultCodexMacosAppUrl() {
+  return "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
+}
+
+function extractZip(zipPath, targetDir) {
+  cleanDir(targetDir);
+  execLogged("ditto", ["-x", "-k", zipPath, targetDir]);
+}
+
+function copyAppFromDmg(dmgPath, targetDir) {
+  cleanDir(targetDir);
+  const output = execOutput("hdiutil", ["attach", "-nobrowse", "-readonly", dmgPath]);
+  const mountPoint = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.match(/\/Volumes\/.+$/)?.[0])
+    .find(Boolean);
+
+  if (!mountPoint) {
+    throw new Error(`无法挂载 DMG：${dmgPath}`);
+  }
+
+  try {
+    const apps = findMacApps(mountPoint);
+    if (apps.length === 0) {
+      throw new Error(`DMG 中找不到带 app.asar 的 .app：${dmgPath}`);
+    }
+    fsExtra.copySync(apps[0], path.join(targetDir, path.basename(apps[0])));
+  } finally {
+    execLogged("hdiutil", ["detach", mountPoint]);
+  }
+}
+
+function sourceAppFromUrl() {
+  const url = process.env.CODEX_MACOS_APP_URL?.trim() || defaultCodexMacosAppUrl();
+  if (!url) {
+    return null;
+  }
+
+  cleanDir(sourceWorkDir);
+  const parsed = new URL(url);
+  const fileName = path.basename(parsed.pathname) || "codex-app-download";
+  const downloadPath = path.join(sourceWorkDir, fileName);
+  downloadFile(url, downloadPath);
+
+  const extractDir = path.join(sourceWorkDir, "extracted");
+  if (/\.zip$/i.test(fileName)) {
+    extractZip(downloadPath, extractDir);
+  } else if (/\.dmg$/i.test(fileName)) {
+    copyAppFromDmg(downloadPath, extractDir);
+  } else {
+    throw new Error("CODEX_MACOS_APP_URL 只支持 .zip 或 .dmg。");
+  }
+
+  const apps = findMacApps(extractDir);
+  if (apps.length === 0) {
+    throw new Error(`下载产物中找不到带 app.asar 的 .app：${url}`);
+  }
+  return apps[0];
+}
+
+function findSourceAppRoot() {
+  if (process.env.CODEX_APP_ROOT) {
+    const explicit = path.resolve(process.env.CODEX_APP_ROOT);
+    validateMacAppRoot(explicit);
+    return explicit;
+  }
+
+  const local = sourceAppFromLocalInstall();
+  if (local) {
+    validateMacAppRoot(local);
+    return local;
+  }
+
+  const fromUrl = sourceAppFromUrl();
+  if (fromUrl) {
+    validateMacAppRoot(fromUrl);
+    return fromUrl;
+  }
+
+  throw new Error("没有找到 Codex.app。请先安装到 /Applications/Codex.app，或设置 CODEX_APP_ROOT。");
+}
+
+function patchPluginAccountGate() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const pluginAuthFile = findOneFile(assetsDir, /^plugin-auth-.*\.js$/, "插件账号模式 auth bundle");
+  const gateFile = pluginAuthFile ?? findOneFile(assetsDir, /^gradient-.*\.js$/, "插件账号模式 gate bundle");
+  writePatchedFile(gateFile, (source) =>
+    replaceExact(source, "function e(e){return e!==`chatgpt`}", "function e(e){return !1}", "APIKey 模式插件置灰判断")
+  );
+  log(`已补丁插件账号模式 gate：${path.basename(gateFile)}`);
+}
+
+function patchOnboardingApiKeyTexts() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const onboardingFile = findOneFile(assetsDir, /^onboarding-login-content-.*\.js$/, "onboarding 登录内容 bundle");
+
+  writePatchedFile(onboardingFile, (source) => {
+    let next = source;
+    next = replaceExact(next, "defaultMessage:`OpenAI API key`", "defaultMessage:`APIKey`", "APIKey 输入标题");
+    next = replaceAllIfPresent(next, "defaultMessage:`sk-...`", "defaultMessage:`请输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Continue`", "defaultMessage:`登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Enter API key`", "defaultMessage:`输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Continue with ChatGPT`", "defaultMessage:`APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Cancel sign-in`", "defaultMessage:`取消`");
+    next = replaceExact(
+      next,
+      "children:[c,y]}),t[23]=c,t[24]=y,t[25]=b):b=t[25],b}",
+      `children:[c,(0,d.jsx)(\`a\`,{href:\`${config.openai.tokenUrl}\`,target:\`_blank\`,rel:\`noreferrer\`,className:\`text-sm text-token-text-link-foreground hover:underline\`,children:\`获取锐擎API Key\`}),y]}),t[23]=c,t[24]=y,t[25]=b):b=t[25],b}`,
+      "APIKey 表单获取链接"
+    );
+    return next;
+  });
+  log(`已补丁 APIKey 登录文案：${path.basename(onboardingFile)}`);
+}
+
+function patchLoginRoute() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const loginRouteFile = findOneFile(assetsDir, /^login-route-.*\.js$/, "登录路由 bundle");
+
+  writePatchedFile(loginRouteFile, (source) => {
+    let next = source;
+    next = replaceExactIfPresent(next, ",[F,z]=(0,G.useState)(!1),[H,U]=", ",[F,z]=(0,G.useState)(!0),[H,U]=", "桌面登录页默认展示 APIKey 表单");
+    next = replaceExactIfPresent(next, "ce=()=>{F&&Z(`api_key_cancel`),z(!1),Y(!1),q(``)}", "ce=()=>{F&&Z(`api_key_cancel`),z(!0),Y(!1),q(``)}", "APIKey 表单取消后不回到 ChatGPT 登录选择");
+    next = replaceExactIfPresent(next, "let g=h;if(a&&!r){", "let g=!1;if(a&&!r){", "隐藏 ChatGPT 方案徽标");
+    next = replaceAllIfPresent(next, "https://platform.openai.com/api-keys", config.openai.tokenUrl);
+    next = replaceAllIfPresent(next, "defaultMessage:`Welcome to Codex`", "defaultMessage:`欢迎使用锐智`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Get started with Codex`", "defaultMessage:`使用 APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`The best way to build with agents`", "defaultMessage:`输入 APIKey 开始使用`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Sign in with ChatGPT`", "defaultMessage:`APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Continue with ChatGPT`", "defaultMessage:`APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Sign in another way`", "defaultMessage:`输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Sign up`", "defaultMessage:`注册入口已关闭`");
+    next = replaceAllIfPresent(next, "defaultMessage:`OpenAI API key`", "defaultMessage:`APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Enter your OpenAI API key`", "defaultMessage:`输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Get API Key`", "defaultMessage:`获取锐擎API Key`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Cloud tasks disabled with API key`", "defaultMessage:`请使用 APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Use API Key`", "defaultMessage:`使用 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Cancel`", "defaultMessage:`清空`");
+    next = replaceAllIfPresent(next, "defaultMessage:`OK`", "defaultMessage:`登录`");
+    return next;
+  });
+  log(`已补丁登录路由：${path.basename(loginRouteFile)}`);
+}
+
+function replaceLocaleMessage(source, key, value) {
+  const pattern = new RegExp(`("${escapeRegExp(key)}":)\`[^\`]*\``);
+  if (!pattern.test(source)) {
+    throw new Error(`找不到中文翻译键：${key}`);
+  }
+  return source.replace(pattern, `$1\`${value}\``);
+}
+
+function patchWebviewLocales() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const localeFiles = fs.readdirSync(assetsDir)
+    .filter((name) => /^zh-(CN|HK|TW)-.*\.js$/.test(name))
+    .map((name) => path.join(assetsDir, name));
+
+  if (localeFiles.length === 0) {
+    throw new Error("找不到中文 webview locale bundle");
+  }
+
+  const replacements = new Map([
+    ["codex.archiveInfo.electron", "查看已删除的聊天：{settingsLink}"],
+    ["codex.archiveInfo.extension", "在你的 .codex 文件夹中查看已删除的聊天。"],
+    ["codex.gallery.dropdowns.submenu.tertiary", "删除"],
+    ["codex.localTaskRow.archiveTask", "删除对话"],
+    ["electron.onboarding.login.apikey.cancel", "清空"],
+    ["electron.onboarding.login.apikey.continue", "登录"],
+    ["electron.onboarding.login.apikey.label", "APIKey"],
+    ["electron.onboarding.login.apikey.open", "输入 APIKey"],
+    ["electron.onboarding.login.apikey.open.welcomeV2", "输入 APIKey"],
+    ["electron.onboarding.login.apikey.placeholder", "请输入 APIKey"],
+    ["electron.onboarding.login.chatgpt.cancel", "取消"],
+    ["electron.onboarding.login.chatgpt.cancel.welcomeV2", "取消"],
+    ["electron.onboarding.login.chatgpt.continue", "APIKey 登录"],
+    ["electron.onboarding.login.chatgpt.signIn", "APIKey 登录"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "APIKey 登录"],
+    ["electron.onboarding.login.includedPlans.welcomeV2", ""],
+    ["electron.onboarding.login.signup.welcomeV2", "注册入口已关闭"],
+    ["electron.onboarding.login.subtitle", "输入 APIKey 开始使用"],
+    ["electron.onboarding.login.title", "欢迎使用锐智"],
+    ["electron.onboarding.login.welcomeV2.title", "使用 APIKey 登录"],
+    ["electron.onboarding.login.welcomeV2.title.streamlined", "欢迎使用锐智"],
+    ["localTaskRow.archiveError", "无法删除对话"],
+    ["settings.dataControls.archivedChats.empty", "暂无已删除的聊天。"],
+    ["settings.dataControls.archivedChats.error", "无法加载已删除的聊天。"],
+    ["settings.dataControls.archivedChats.loading", "正在加载已删除的聊天…"],
+    ["settings.dataControls.archivedChats.unarchive", "恢复"],
+    ["settings.dataControls.archivedChats.unarchiveError", "无法恢复聊天"],
+    ["settings.dataControls.archivedChats.unarchiveSuccessPlain", "对话已恢复。"],
+    ["settings.nav.data-controls", "已删除对话"],
+    ["settings.section.data-controls", "已删除对话"],
+    ["sidebarElectron.archiveProjectThreads", "删除对话"],
+    ["sidebarElectron.archiveProjectThreads.archiving", "正在删除…"],
+    ["sidebarElectron.archiveProjectThreads.confirm", "全部删除"],
+    ["sidebarElectron.archiveProjectThreads.confirmSubtitle", "这会将 {projectLabel} 中的对话移到已删除对话。之后你可以在那里恢复它们"],
+    ["sidebarElectron.archiveProjectThreads.confirmTitle", "{count, plural, one {删除 # 个对话？} other {删除 # 个对话？}}"],
+    ["sidebarElectron.archiveProjectThreads.error", "无法删除 {projectLabel} 中的活跃对话"],
+    ["sidebarElectron.archiveProjectThreads.partialError", "已删除 {projectLabel} 中的 {successCount, plural, one {# 个对话} other {# 个对话}}；{failedCount} 个失败"],
+    ["sidebarElectron.archiveProjectThreads.success", "已删除 {count, plural, one {# 个对话} other {# 个对话}}"],
+    ["sidebarElectron.archiveRemoteProjectThreads", "删除对话"],
+    ["sidebarElectron.archiveThread", "删除对话"],
+    ["sidebarElectron.archiveThreadError", "无法删除对话"],
+    ["threadHeader.archiveConfirmConfirm", "删除"],
+    ["threadHeader.archiveConfirmHeartbeatConfirm", "删除并移除"],
+    ["threadHeader.archiveConfirmHeartbeatSubtitleNamed", "此对话有一个正在运行的心跳自动化：{name}。删除对话也会将其移除并停止后续运行。"],
+    ["threadHeader.archiveConfirmHeartbeatSubtitleUnnamed", "此对话有一个正在运行的心跳自动化。删除对话也会将其移除并停止后续运行。"],
+    ["threadHeader.archiveConfirmHeartbeatTitle", "删除对话并移除自动化？"],
+    ["threadHeader.archiveConfirmSubtitle", "稍后可在已删除对话中恢复。"],
+    ["threadHeader.archiveConfirmTitle", "删除对话？"]
+  ]);
+
+  for (const localeFile of localeFiles) {
+    writePatchedFile(localeFile, (source) => {
+      let next = source;
+      for (const [key, value] of replacements) {
+        next = replaceLocaleMessage(next, key, value);
+      }
+      return next;
+    });
+    log(`已补丁中文翻译：${path.basename(localeFile)}`);
+  }
+}
+
+function patchPackageMetadata() {
+  const packagePath = path.join(extractedDir, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+  packageJson.name = "ruizhi-desktop";
+  packageJson.productName = config.productName;
+  packageJson.version = appVersion;
+  packageJson.description = "锐智桌面端";
+  fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  log("已补丁 package 元数据");
+}
+
+function patchWebviewHtml() {
+  const htmlPath = path.join(extractedDir, "webview", "index.html");
+  writePatchedFile(htmlPath, (source) =>
+    replaceExact(source, "<title>Codex</title>", `<title>${config.productName}</title>`, "窗口标题")
+  );
+  log("已补丁 webview HTML 标题");
+}
+
+function patchDefaultLocale() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const localeResolverFile = findOneFile(assetsDir, /^locale-resolver-.*\.js$/, "locale resolver bundle");
+  writePatchedFile(localeResolverFile, (source) =>
+    replaceExact(source, "var t=`en-US`", `var t=\`${config.locale}\``, "默认语言")
+  );
+  log(`已补丁默认语言：${path.basename(localeResolverFile)}`);
+}
+
+function templateLiteralValuePattern() {
+  return /`((?:\\.|[^`\\])*)`/g;
+}
+
+function replaceBrandInVisibleText(value) {
+  return value.replace(/Codex/g, (match, offset, source) => {
+    const before = source.slice(Math.max(0, offset - 16), offset);
+    if (/GPT-[0-9A-Za-z_. -]*$/i.test(before)) {
+      return match;
+    }
+    return config.productName;
+  });
+}
+
+function localeBundlePattern(locale) {
+  return new RegExp(`^${escapeRegExp(locale)}-.*\\.js$`);
+}
+
+function loadLocaleMessages(locale) {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const localeFile = findOneFile(assetsDir, localeBundlePattern(locale), `${locale} locale bundle`);
+  const source = fs.readFileSync(localeFile, "utf8");
+  const messages = new Map();
+  const pattern = /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g;
+
+  for (const match of source.matchAll(pattern)) {
+    messages.set(match[1], replaceBrandInVisibleText(match[2]));
+  }
+
+  if (messages.size === 0) {
+    throw new Error(`${locale} locale bundle 为空：${localeFile}`);
+  }
+
+  return { localeFile, messages };
+}
+
+function patchTemplateLiteralValues(source, transform) {
+  return source.replace(templateLiteralValuePattern(), (literal, value) => {
+    const next = transform(value);
+    return next === value ? literal : `\`${next}\``;
+  });
+}
+
+function patchLocaleBundleBrandText(localeFile) {
+  const original = fs.readFileSync(localeFile, "utf8");
+  const patched = patchTemplateLiteralValues(original, replaceBrandInVisibleText);
+  if (patched !== original) {
+    fs.writeFileSync(localeFile, patched, "utf8");
+  }
+}
+
+function listWebviewTextFiles() {
+  const webviewRoot = path.join(extractedDir, "webview");
+  const allowedExtensions = new Set([".js", ".html"]);
+  const files = [];
+
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile() && allowedExtensions.has(path.extname(entry.name))) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  walk(webviewRoot);
+  return files;
+}
+
+function patchFrontendDefaultMessages() {
+  const { localeFile, messages } = loadLocaleMessages(config.locale);
+  let changedFiles = 0;
+  let changedMessages = 0;
+
+  patchLocaleBundleBrandText(localeFile);
+
+  for (const filePath of listWebviewTextFiles()) {
+    if (filePath === localeFile) {
+      continue;
+    }
+    const original = fs.readFileSync(filePath, "utf8");
+    const patched = original.replace(
+      /id:`([^`]+)`,defaultMessage:`((?:\\.|[^`\\])*)`/g,
+      (match, id, defaultMessage) => {
+        const localized = messages.get(id);
+        const nextMessage = localized ?? replaceBrandInVisibleText(defaultMessage);
+        if (nextMessage === defaultMessage) {
+          return match;
+        }
+        changedMessages += 1;
+        return `id:\`${id}\`,defaultMessage:\`${nextMessage}\``;
+      }
+    );
+
+    if (patched !== original) {
+      fs.writeFileSync(filePath, patched, "utf8");
+      changedFiles += 1;
+    }
+  }
+
+  log(`已补丁前端默认中文文案：${changedMessages} 条，${changedFiles} 个文件`);
+}
+
+function patchAppSunsetGate() {
+  let changedFiles = 0;
+  const gatePatterns = [
+    ["if(ms(`2929582856`)){", "if(false&&ms(`2929582856`)){"],
+    ["if(Li(`2929582856`)){", "if(false&&Li(`2929582856`)){"]
+  ];
+
+  for (const filePath of listWebviewTextFiles()) {
+    const original = fs.readFileSync(filePath, "utf8");
+    let patched = original;
+    for (const [from, to] of gatePatterns) {
+      patched = patched.replace(from, to);
+    }
+    if (patched !== original) {
+      fs.writeFileSync(filePath, patched, "utf8");
+      changedFiles += 1;
+    }
+  }
+
+  if (changedFiles === 0) {
+    throw new Error("补丁点不存在：禁用远端 app sunset 强制更新拦截");
+  }
+  log(`已禁用 app sunset 强制更新拦截：${changedFiles} 个文件`);
+}
+
+function patchModelAvailabilityAllowlist() {
+  if (!modelCatalogEnabled()) {
+    log("跳过模型白名单补丁：自定义模型目录已关闭");
+    return;
+  }
+
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const modelSettingsFile = findOptionalFile(assetsDir, /^use-model-settings-.*\.js$/, "model settings bundle");
+  if (!modelSettingsFile) {
+    return;
+  }
+  writePatchedFileIfChanged(modelSettingsFile, (source) =>
+    replaceExactIfPresent(source, "let l=s.useHiddenModels&&a!==`amazonBedrock`,u;", "let l=!1,u;", "禁用官方模型 available_models 白名单过滤")
+  );
+  log(`已禁用模型白名单过滤：${path.basename(modelSettingsFile)}`);
+}
+
+function patchOfficialUpdateLogic() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  writePatchedFileIfChanged(mainFile, (source) =>
+    replaceExactIfPresent(
+      source,
+      "d=t.C.shouldIncludeSparkle(a,process.platform,process.env),f=t.C.shouldIncludeUpdater(a,process.platform,process.env)",
+      "d=!1,f=!1",
+      "禁用 Codex 官方 Sparkle/updater 能力"
+    )
+  );
+  log(`已禁用 Codex 官方更新逻辑：${path.basename(mainFile)}`);
+}
+
+function bootstrapInitCode() {
+  const posixLocale = config.locale.replace("-", "_");
+  const configLines = managedConfigTomlLines().map((line) => jsonLiteral(line)).join(",");
+  const imageGenHelper = imageGenHelperName();
+  const marketplaceSpecs = pluginMarketplaces().map((marketplace) => ({
+    name: marketplace.name,
+    resourcePath: splitConfigPath(marketplace.resourcePath),
+    installPath: splitConfigPath(marketplace.installPath),
+    versionManifestPath: splitConfigPath(marketplace.versionManifestPath),
+    sourceToken: marketplaceSourceToken(marketplace.name)
+  }));
+  marketplaceSpecs.push({
+    name: "openai-bundled",
+    resourcePath: ["plugins", "openai-bundled"],
+    installPath: [".tmp", "bundled-marketplaces", "openai-bundled"],
+    versionManifestPath: [".agents", "plugins", "marketplace.json"],
+    sourceToken: marketplaceSourceToken("openai-bundled"),
+    alwaysCopy: true,
+    hardcodedPlugins: true
+  });
+  const execPolicyConfig = config.execPolicy ?? {};
+  const managedRulesFileName = execPolicyConfig.managedRulesFileName ?? "ruizhi-managed.rules";
+  const allowPrefixRules = builtInAllowPrefixRules();
+  const oldGenerated = `model = ${jsonLiteral(config.openai.defaultModel)}\nmodel_provider = "openai"\nmodel_reasoning_effort = ${jsonLiteral(config.openai.defaultReasoningEffort)}\nopenai_base_url = ${jsonLiteral(config.openai.baseUrl)}\n\n[features]\nplugins = true\napps = true\nbrowser_use = true\n`;
+
+  return `
+function ruizhiInit(){
+  try{
+    const fs=require("node:fs");
+    const os=require("node:os");
+    const path=require("node:path");
+    const productName=${jsonLiteral(config.productName)};
+    const locale=${jsonLiteral(config.locale)};
+    const posixLocale=${jsonLiteral(posixLocale)};
+    const ruizhiHomeEnvName=${jsonLiteral(ruizhiHomeEnvName)};
+    const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
+    const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
+    const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
+    const modelBridgeConfig=${jsonLiteral({
+      enabled: modelBridgeEnabled(),
+      host: modelBridgeHost(),
+      port: modelBridgePort(),
+      scriptResourcePath: splitConfigPath(modelBridgeRuntimeResourcePath()),
+      routes: modelBridgeRoutes()
+    })};
+    const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabled())};
+    const imageGenHelper=${jsonLiteral(imageGenHelper)};
+    const modelCatalogFile="ruizhi-model-catalog.json";
+    const imageGenSkillPath=["skills",".system","imagegen","SKILL.md"];
+    const managedRulesFileName=${jsonLiteral(managedRulesFileName)};
+    const allowPrefixRules=${jsonLiteral(allowPrefixRules)};
+    const home=os.homedir();
+    const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
+    function defaultUserDataPath(){
+      if(process.platform==="win32"){
+        return path.join(process.env.APPDATA||path.join(home,"AppData","Roaming"),productName);
+      }
+      if(process.platform==="darwin"){
+        return path.join(home,"Library","Application Support",productName);
+      }
+      return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),productName);
+    }
+    const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
+    const explicitCodexHome=(process.env.CODEX_HOME||"").trim();
+    const codexHome=explicitRuizhiHome||explicitCodexHome||path.join(home,ruizhiDefaultHomeDirName);
+    const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
+    function stableModelBridgePort(basePort,seed){
+      let hash=0;
+      for(const char of String(seed||"")){
+        hash=(hash*31+char.charCodeAt(0))>>>0;
+      }
+      return basePort+1+(hash%997);
+    }
+    modelBridgeConfig.port=stableModelBridgePort(modelBridgeConfig.port,resourcesRoot);
+    function ensureLoopbackNoProxy(){
+      const required=["127.0.0.1","localhost","::1"];
+      const existing=[process.env.NO_PROXY,process.env.no_proxy].filter(value=>typeof value==="string"&&value.trim()).join(",");
+      const parts=existing.split(",").map(value=>value.trim()).filter(Boolean);
+      const lower=new Set(parts.map(value=>value.toLowerCase()));
+      for(const host of required){
+        if(!lower.has(host.toLowerCase()))parts.push(host);
+      }
+      const next=parts.join(",");
+      process.env.NO_PROXY=next;
+      process.env.no_proxy=next;
+    }
+    ensureLoopbackNoProxy();
+    function startModelBridge(){
+      if(!modelBridgeConfig.enabled)return null;
+      const scriptPath=path.join(resourcesRoot,...modelBridgeConfig.scriptResourcePath);
+      const bridge=require(scriptPath).startRuizhiResponsesBridge({
+        host:modelBridgeConfig.host,
+        port:modelBridgeConfig.port,
+        upstreamBaseUrl:openaiBaseUrl,
+        authHome:codexHome,
+        catalogPath:path.join(resourcesRoot,"models",modelCatalogFile),
+        routes:modelBridgeConfig.routes
+      });
+      return bridge.baseUrl;
+    }
+    const runtimeBridgeBaseUrl=startModelBridge();
+    const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
+    function rewriteRuntimeModelProviderBaseUrl(text){
+      if(runtimeModelProviderBaseUrl===modelProviderBaseUrl)return text;
+      return String(text).split(JSON.stringify(modelProviderBaseUrl)).join(JSON.stringify(runtimeModelProviderBaseUrl));
+    }
+    process.env[ruizhiHomeEnvName]=codexHome;
+    process.env.CODEX_HOME=codexHome;
+    process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
+    process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
+    process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
+    process.env.RUIZHI_IMAGEGEN_EXE=path.join(resourcesRoot,"bin",imageGenHelper);
+    process.env.LANG=${jsonLiteral(`${posixLocale}.UTF-8`)};
+    process.env.LANGUAGE=posixLocale;
+    process.env.LC_ALL=${jsonLiteral(`${posixLocale}.UTF-8`)};
+    try{n.app.commandLine.appendSwitch("lang",locale)}catch{}
+    fs.mkdirSync(codexHome,{recursive:true});
+    fs.mkdirSync(userData,{recursive:true});
+
+    function copyIfChanged(source,target){
+      if(!fs.existsSync(source))return false;
+      let changed=true;
+      try{
+        changed=!fs.existsSync(target)||fs.readFileSync(source).compare(fs.readFileSync(target))!==0;
+      }catch{
+        changed=true;
+      }
+      if(changed){
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.copyFileSync(source,target);
+      }
+      return changed;
+    }
+    function syncModelCache(){
+      const source=path.join(resourcesRoot,"models",modelCatalogFile);
+      const target=path.join(codexHome,"models_cache.json");
+      if(!modelCatalogEnabled||!fs.existsSync(source)){
+        fs.rmSync(target,{force:true});
+        return;
+      }
+      let sourceJson=null;
+      let targetJson=null;
+      let shouldCopy=true;
+      try{
+        sourceJson=JSON.parse(fs.readFileSync(source,"utf8"));
+        targetJson=fs.existsSync(target)?JSON.parse(fs.readFileSync(target,"utf8")):null;
+        shouldCopy=!targetJson||sourceJson.client_version!==targetJson.client_version||sourceJson.etag!==targetJson.etag||!Array.isArray(targetJson.models)||targetJson.models.length!==sourceJson.models.length;
+      }catch{
+        shouldCopy=true;
+      }
+      if(shouldCopy||sourceJson){
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        if(!sourceJson)sourceJson=JSON.parse(fs.readFileSync(source,"utf8"));
+        sourceJson.fetched_at=new Date().toISOString();
+        fs.writeFileSync(target,JSON.stringify(sourceJson,null,2)+"\\n","utf8");
+      }
+    }
+    function syncImageGenSkill(){
+      copyIfChanged(path.join(resourcesRoot,...imageGenSkillPath),path.join(codexHome,...imageGenSkillPath));
+    }
+    function copyDirectoryEntriesIfMissing(sourceRoot,targetRoot){
+      if(!fs.existsSync(sourceRoot))return 0;
+      let copied=0;
+      fs.mkdirSync(targetRoot,{recursive:true});
+      for(const entry of fs.readdirSync(sourceRoot,{withFileTypes:true})){
+        if(entry.name.startsWith(".")||entry.name==="openai-docs")continue;
+        const source=path.join(sourceRoot,entry.name);
+        const target=path.join(targetRoot,entry.name);
+        if(fs.existsSync(target))continue;
+        fs.cpSync(source,target,{recursive:true});
+        copied+=1;
+      }
+      return copied;
+    }
+    function syncLegacyCodexGlobalSkills(){
+      copyDirectoryEntriesIfMissing(path.join(home,".codex","skills"),path.join(home,".agents","skills"));
+    }
+    syncModelCache();
+    syncImageGenSkill();
+    syncLegacyCodexGlobalSkills();
+
+    const marketplaceSpecs=${jsonLiteral(marketplaceSpecs)};
+    const hardcodedOpenAIBundledPlugins=${jsonLiteral(openAIBundledPluginDefinitions)};
+    function assertInside(base,target){
+      const relative=path.relative(path.resolve(base),path.resolve(target));
+      if(!relative||relative.startsWith("..")||path.isAbsolute(relative)){
+        throw new Error("拒绝覆盖锐智目录外的 marketplace："+target);
+      }
+    }
+    function readMarketplaceVersion(root,spec){
+      const manifestPath=path.join(root,...spec.versionManifestPath);
+      if(!fs.existsSync(manifestPath))return null;
+      const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
+      return [manifest.name||"",manifest.version||""].join("@");
+    }
+    function hardcodedOpenAIBundledMarketplace(){
+      return {
+        name:"openai-bundled",
+        interface:{displayName:"OpenAI"},
+        plugins:hardcodedOpenAIBundledPlugins.map(plugin=>({
+          name:plugin.name,
+          source:{source:"local",path:plugin.path},
+          policy:{installation:"AVAILABLE",authentication:"ON_INSTALL"},
+          category:plugin.category
+        }))
+      };
+    }
+    function writeHardcodedOpenAIBundledMarketplace(root){
+      const missing=[];
+      for(const plugin of hardcodedOpenAIBundledPlugins){
+        const pluginRoot=path.join(root,"plugins",plugin.name);
+        const manifestPath=path.join(pluginRoot,".codex-plugin","plugin.json");
+        if(!fs.existsSync(manifestPath))missing.push(plugin.name);
+      }
+      if(missing.length>0){
+        throw new Error("内置 OpenAI 插件资源缺失："+missing.join(", "));
+      }
+      const marketplacePath=path.join(root,".agents","plugins","marketplace.json");
+      fs.mkdirSync(path.dirname(marketplacePath),{recursive:true});
+      fs.writeFileSync(marketplacePath,JSON.stringify(hardcodedOpenAIBundledMarketplace(),null,2)+"\\n","utf8");
+    }
+    function copyMarketplaceDirectory(sourceRoot,targetRoot,spec){
+      const stagingRoot=targetRoot+".staging-"+process.pid+"-"+Date.now();
+      assertInside(codexHome,targetRoot);
+      assertInside(codexHome,stagingRoot);
+      fs.rmSync(stagingRoot,{recursive:true,force:true});
+      try{
+        fs.mkdirSync(path.dirname(stagingRoot),{recursive:true});
+        fs.cpSync(sourceRoot,stagingRoot,{recursive:true});
+        if(spec.hardcodedPlugins)writeHardcodedOpenAIBundledMarketplace(stagingRoot);
+        fs.rmSync(targetRoot,{recursive:true,force:true});
+        fs.renameSync(stagingRoot,targetRoot);
+      }catch(error){
+        fs.rmSync(stagingRoot,{recursive:true,force:true});
+        throw error;
+      }
+    }
+    function syncMarketplaces(){
+      const tokenValues={};
+      for(const spec of marketplaceSpecs){
+        const sourceRoot=path.join(resourcesRoot,...spec.resourcePath);
+        const targetRoot=path.join(codexHome,...spec.installPath);
+        tokenValues[spec.sourceToken]=targetRoot;
+        try{
+          const sourceVersion=readMarketplaceVersion(sourceRoot,spec);
+          if(!sourceVersion)throw new Error("缺少 marketplace 版本清单："+sourceRoot);
+          const targetVersion=readMarketplaceVersion(targetRoot,spec);
+          if(spec.alwaysCopy||sourceVersion!==targetVersion){
+            copyMarketplaceDirectory(sourceRoot,targetRoot,spec);
+          }else if(spec.hardcodedPlugins){
+            writeHardcodedOpenAIBundledMarketplace(targetRoot);
+          }
+        }catch(error){
+          console.error("ruizhi marketplace sync failed",spec.name,error);
+        }
+      }
+      return tokenValues;
+    }
+    function readPluginVersion(root){
+      const manifestPath=path.join(root,".codex-plugin","plugin.json");
+      if(!fs.existsSync(manifestPath))return null;
+      const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
+      return String(manifest.version||"").trim()||null;
+    }
+    function copyPluginDisplayFiles(sourceRoot,targetRoot){
+      const entries=[[".codex-plugin"],["assets"],["skills"]];
+      for(const entry of entries){
+        const source=path.join(sourceRoot,...entry);
+        if(!fs.existsSync(source))continue;
+        const target=path.join(targetRoot,...entry);
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.cpSync(source,target,{recursive:true,force:true});
+      }
+    }
+    function syncInstalledOpenAIBundledPluginCache(){
+      const sourcePluginsRoot=path.join(codexHome,".tmp","bundled-marketplaces","openai-bundled","plugins");
+      const cacheRoot=path.join(codexHome,"plugins","cache","openai-bundled");
+      if(!fs.existsSync(sourcePluginsRoot)||!fs.existsSync(cacheRoot))return;
+      for(const entry of fs.readdirSync(sourcePluginsRoot,{withFileTypes:true})){
+        if(!entry.isDirectory())continue;
+        const pluginCacheRoot=path.join(cacheRoot,entry.name);
+        if(!fs.existsSync(pluginCacheRoot))continue;
+        try{
+          const sourceRoot=path.join(sourcePluginsRoot,entry.name);
+          const version=readPluginVersion(sourceRoot);
+          if(!version)continue;
+          copyPluginDisplayFiles(sourceRoot,path.join(pluginCacheRoot,version));
+        }catch(error){
+          console.error("ruizhi OpenAI plugin cache sync failed",entry.name,error);
+        }
+      }
+    }
+    function marketplaceRoot(name,marketplaceSources){
+      const spec=marketplaceSpecs.find(item=>item.name===name);
+      return spec?marketplaceSources[spec.sourceToken]:null;
+    }
+    function splitRulePath(value){
+      return String(value??"").split(/[\\\\/]+/).filter(Boolean);
+    }
+    function resolveRulePath(rule,marketplaceSources){
+      if(rule.marketplace&&rule.path){
+        const root=marketplaceRoot(rule.marketplace,marketplaceSources);
+        return root?path.join(root,...splitRulePath(rule.path)):null;
+      }
+      if(rule.homePath){
+        return path.join(home,...splitRulePath(rule.homePath));
+      }
+      if(rule.codexHomePath){
+        return path.join(codexHome,...splitRulePath(rule.codexHomePath));
+      }
+      if(rule.resourcePath){
+        return path.join(resourcesRoot,...splitRulePath(rule.resourcePath));
+      }
+      return null;
+    }
+    function resolveRuleCommandPath(rule,marketplaceSources){
+      if(rule.commandMarketplace&&rule.commandPath){
+        const root=marketplaceRoot(rule.commandMarketplace,marketplaceSources);
+        return root?path.join(root,...splitRulePath(rule.commandPath)):null;
+      }
+      if(rule.commandHomePath){
+        return path.join(home,...splitRulePath(rule.commandHomePath));
+      }
+      if(rule.commandCodexHomePath){
+        return path.join(codexHome,...splitRulePath(rule.commandCodexHomePath));
+      }
+      if(rule.commandResourcePath){
+        return path.join(resourcesRoot,...splitRulePath(rule.commandResourcePath));
+      }
+      return null;
+    }
+    function syncExecPolicyRules(marketplaceSources){
+      if(!Array.isArray(allowPrefixRules)||allowPrefixRules.length===0)return;
+      const lines=[];
+      for(const rule of allowPrefixRules){
+        const prefix=Array.isArray(rule.prefix)?rule.prefix.filter(item=>typeof item==="string"&&item.length>0):[];
+        const commandPath=resolveRuleCommandPath(rule,marketplaceSources);
+        if(prefix.length===0&&!commandPath)continue;
+        const resolvedPath=resolveRulePath(rule,marketplaceSources);
+        const pattern=commandPath?[commandPath,...prefix]:(resolvedPath?[...prefix,resolvedPath]:prefix);
+        lines.push("prefix_rule(pattern="+JSON.stringify(pattern)+", decision=\\"allow\\")");
+      }
+      if(lines.length===0)return;
+      const rulesPath=path.join(codexHome,"rules",managedRulesFileName);
+      const next=lines.join("\\n")+"\\n";
+      const existing=fs.existsSync(rulesPath)?fs.readFileSync(rulesPath,"utf8"):"";
+      if(existing!==next){
+        fs.mkdirSync(path.dirname(rulesPath),{recursive:true});
+        fs.writeFileSync(rulesPath,next,"utf8");
+      }
+    }
+
+    const managedBegin="# BEGIN Ruizhi Managed Defaults";
+    const managedEnd="# END Ruizhi Managed Defaults";
+    const configTemplateLines=[${configLines}];
+    const marketplaceSources=syncMarketplaces();
+    syncInstalledOpenAIBundledPluginCache();
+    syncExecPolicyRules(marketplaceSources);
+    let managedBlock=configTemplateLines.join("\\n");
+    for(const [token,source] of Object.entries(marketplaceSources)){
+      managedBlock=managedBlock.split(token).join(JSON.stringify(source));
+    }
+    if(!managedBlock.endsWith("\\n"))managedBlock+="\\n";
+
+    function withFinalNewline(text){
+      return text.endsWith("\\n")?text:text+"\\n";
+    }
+    function stripLegacyManagedPrefix(text){
+      const normalized=text.charCodeAt(0)===0xfeff?text.slice(1):text;
+      if(!normalized.startsWith("# Managed by Ruizhi Desktop."))return text;
+      const matches=Array.from(normalized.matchAll(/\\n\\[[^\\]]+\\]/g));
+      for(const match of matches){
+        if(match[0].trim()!=="[features]"){
+          return normalized.slice(match.index+1).trimStart();
+        }
+      }
+      return "";
+    }
+    function mergeManagedConfig(existing){
+      if(!existing.trim())return managedBlock;
+      const beginIndex=existing.indexOf(managedBegin);
+      const endIndex=existing.indexOf(managedEnd);
+      if(beginIndex>=0&&endIndex>=beginIndex){
+        const before=existing.slice(0,beginIndex).trimEnd();
+        const after=existing.slice(endIndex+managedEnd.length).trimStart();
+        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\\n\\n"));
+      }
+      const oldGenerated=${jsonLiteral(oldGenerated)};
+      if(existing.trim()===oldGenerated.trim()||existing.replace(/^\\uFEFF/,"").startsWith("# Managed by Ruizhi Desktop.")){
+        const rest=stripLegacyManagedPrefix(existing);
+        return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\\n\\n"));
+      }
+      if(!/^\\s*\\[/m.test(existing)){
+        return withFinalNewline([existing.trimEnd(),managedBlock.trimEnd()].filter(Boolean).join("\\n\\n"));
+      }
+      console.warn("ruizhi bootstrap kept unmanaged config.toml unchanged");
+      return existing;
+    }
+
+    const configPath=path.join(codexHome,"config.toml");
+    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+    const next=rewriteRuntimeModelProviderBaseUrl(mergeManagedConfig(existing));
+    if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
+  }catch(e){
+    console.error("ruizhi bootstrap init failed",e);
+  }
+}
+ruizhiInit();
+`;
+}
+
+function bootstrapForceUpdateCode() {
+  const updateConfig = {
+    enabled: macosUpdatesEnabled(),
+    feedUrl: macosUpdateDownloadBaseUrl(),
+    currentVersion: appVersion
+  };
+
+  return `
+async function ruizhiForceUpdateIfAvailable(){
+  ruizhiStartBackgroundUpdateCheck();
+}
+function ruizhiStartBackgroundUpdateCheck(){
+  const updateConfig=${jsonLiteral(updateConfig)};
+  if(process.platform!=="darwin"||!n.app.isPackaged)return;
+  let autoUpdater=null;
+  let updateReady=false;
+  let updateState={
+    status:"idle",
+    currentVersion:updateConfig.currentVersion||n.app.getVersion(),
+    version:null,
+    progress:0,
+    downloadedBytes:0,
+    totalBytes:0,
+    message:""
+  };
+  let lastProgressEmit=0;
+
+  function publicUpdateState(){
+    return {...updateState};
+  }
+  function broadcastUpdateState(force=false){
+    const now=Date.now();
+    if(!force&&now-lastProgressEmit<250)return;
+    lastProgressEmit=now;
+    const snapshot=publicUpdateState();
+    for(const win of n.BrowserWindow.getAllWindows()){
+      if(!win.isDestroyed())win.webContents.send("ruizhi:update:state-changed",snapshot);
+    }
+  }
+  function setUpdateState(patch,force=false){
+    updateState={...updateState,...patch};
+    broadcastUpdateState(force);
+  }
+  function notifyUpdateReady(version){
+    try{
+      if(n.Notification?.isSupported?.()){
+        new n.Notification({title:"锐智更新已就绪",body:"新版本 "+String(version||"")+" 已下载，退出锐智后将自动安装。"}).show();
+      }
+    }catch(error){
+      console.error("ruizhi update notification failed",error);
+    }
+  }
+  function registerRuizhiIpc(){
+    n.ipcMain.handle("ruizhi:update:get-state",()=>publicUpdateState());
+    n.ipcMain.handle("ruizhi:update:install-now",()=>{
+      if(!autoUpdater||!updateReady)return {ok:false,error:"没有已下载的更新包"};
+      setUpdateState({status:"installing",message:"正在重启并安装更新"},true);
+      setImmediate(()=>autoUpdater.quitAndInstall());
+      return {ok:true};
+    });
+  }
+  function configureUpdater(){
+    if(!updateConfig.enabled)return false;
+    if(!updateConfig.feedUrl){
+      setUpdateState({status:"error",message:"缺少 macOS 更新下载地址"},true);
+      return false;
+    }
+    try{
+      autoUpdater=require("electron-updater").autoUpdater;
+    }catch(error){
+      console.error("ruizhi electron-updater load failed",error);
+      setUpdateState({status:"error",message:"更新模块加载失败："+String(error?.message||error)},true);
+      return false;
+    }
+    autoUpdater.logger=console;
+    autoUpdater.autoDownload=true;
+    autoUpdater.autoInstallOnAppQuit=true;
+    autoUpdater.allowDowngrade=false;
+    autoUpdater.allowPrerelease=false;
+    autoUpdater.setFeedURL({provider:"generic",url:updateConfig.feedUrl});
+    autoUpdater.on("checking-for-update",()=>{
+      updateReady=false;
+      setUpdateState({status:"checking",version:null,progress:0,downloadedBytes:0,totalBytes:0,message:"正在检查更新"},true);
+    });
+    autoUpdater.on("update-available",info=>{
+      updateReady=false;
+      setUpdateState({status:"downloading",version:String(info?.version||""),progress:0,downloadedBytes:0,totalBytes:0,message:"正在下载更新"},true);
+    });
+    autoUpdater.on("download-progress",progress=>{
+      const percent=Math.max(0,Math.min(100,Math.floor(Number(progress?.percent)||0)));
+      setUpdateState({
+        status:"downloading",
+        version:updateState.version,
+        progress:percent,
+        downloadedBytes:Number(progress?.transferred)||0,
+        totalBytes:Number(progress?.total)||0,
+        message:"正在下载更新"
+      });
+    });
+    autoUpdater.on("update-downloaded",info=>{
+      updateReady=true;
+      const version=String(info?.version||updateState.version||"");
+      setUpdateState({status:"ready",version,progress:100,message:"更新已下载"},true);
+      notifyUpdateReady(version);
+    });
+    autoUpdater.on("update-not-available",()=>{
+      updateReady=false;
+      setUpdateState({status:"idle",version:null,progress:0,downloadedBytes:0,totalBytes:0,message:""},true);
+    });
+    autoUpdater.on("error",error=>{
+      updateReady=false;
+      console.error("ruizhi update failed",error);
+      setUpdateState({status:"error",message:String(error?.message||error)},true);
+    });
+    return true;
+  }
+  try{
+    registerRuizhiIpc();
+    const updaterReady=configureUpdater();
+    n.app.whenReady().then(()=>{
+      broadcastUpdateState(true);
+      if(!updateConfig.enabled||!updaterReady)return;
+      const timer=setTimeout(()=>{autoUpdater.checkForUpdates().catch(error=>{
+        console.error("ruizhi update check failed",error);
+        setUpdateState({status:"error",message:String(error?.message||error)},true);
+      });},15000);
+      timer.unref?.();
+    }).catch(error=>console.error("ruizhi update scheduling failed",error));
+  }catch(error){
+    console.error("ruizhi update bootstrap failed",error);
+  }
+}
+`;
+}
+
+function preloadIntegrationCode() {
+  return `
+;(()=>{try{
+  const electron=require("electron");
+  const ipcRenderer=electron.ipcRenderer;
+  const contextBridge=electron.contextBridge;
+  const appVersion=${jsonLiteral(appVersion)};
+  const integrationKey="__RUIZHI_DESKTOP_INTEGRATION__";
+  const previous=globalThis[integrationKey];
+  if(previous&&typeof previous.dispose==="function")previous.dispose();
+  const cleanup=[];
+  let disposed=false;
+  function addCleanup(fn){cleanup.push(fn);}
+  function cleanupNodes(){
+    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>el.remove());
+    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
+      el.classList.remove("ruizhi-settings-update-row");
+      delete el.dataset.ruizhiUpdateActive;
+      delete el.dataset.ruizhiUpdateStatus;
+      el.style.removeProperty("--ruizhi-update-progress");
+    });
+  }
+  function dispose(){
+    if(disposed)return;
+    disposed=true;
+    while(cleanup.length){
+      const fn=cleanup.pop();
+      try{fn()}catch{}
+    }
+    cleanupNodes();
+  }
+  globalThis[integrationKey]={dispose};
+  let updateState={status:"idle",currentVersion:appVersion,version:null,progress:0,message:""};
+  let row=null;
+  let progressEl=null;
+  let statusEl=null;
+  let renderQueued=false;
+
+  const api={
+    update:{
+      getState:()=>ipcRenderer.invoke("ruizhi:update:get-state"),
+      installNow:()=>ipcRenderer.invoke("ruizhi:update:install-now")
+    }
+  };
+  try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
+
+  function onReady(fn){
+    if(document.readyState==="loading"){
+      const listener=()=>{if(!disposed)fn();};
+      document.addEventListener("DOMContentLoaded",listener,{once:true});
+      addCleanup(()=>document.removeEventListener("DOMContentLoaded",listener));
+    }else if(!disposed)fn();
+  }
+  function injectStyle(){
+    if(document.getElementById("ruizhi-desktop-integration-style"))return;
+    const style=document.createElement("style");
+    style.id="ruizhi-desktop-integration-style";
+    style.textContent=[
+      ".ruizhi-settings-update-row{position:relative!important;overflow:hidden!important;}",
+      ".ruizhi-settings-update-row>.ruizhi-update-progress-bg{position:absolute;inset:1px auto 1px 1px;width:var(--ruizhi-update-progress,0%);border-radius:inherit;background:rgba(127,127,127,.12);pointer-events:none;z-index:0;transition:width .24s ease,opacity .2s ease;opacity:0;}",
+      ".ruizhi-settings-update-row[data-ruizhi-update-active='true']>.ruizhi-update-progress-bg{opacity:1;}",
+      ".ruizhi-settings-update-row>:not(.ruizhi-update-progress-bg):not(.ruizhi-update-status){position:relative;z-index:1;}",
+      ".ruizhi-update-status{position:relative;z-index:2;margin-left:auto;padding:0 2px;font:inherit;font-size:12px;line-height:inherit;font-weight:500;color:inherit;opacity:.62;background:transparent;white-space:nowrap;}",
+      ".ruizhi-update-status[data-clickable='true']{cursor:pointer;opacity:.82;}",
+      ".ruizhi-settings-update-row:hover .ruizhi-update-status[data-clickable='true']{opacity:1;text-decoration:underline;text-underline-offset:2px;}"
+    ].join("\\n");
+    document.head.appendChild(style);
+  }
+  function visible(el){
+    if(!(el instanceof HTMLElement))return false;
+    const rect=el.getBoundingClientRect();
+    const style=getComputedStyle(el);
+    return rect.width>=48&&rect.height>=24&&style.visibility!=="hidden"&&style.display!=="none";
+  }
+  function labelOf(el){
+    return [
+      el.getAttribute("aria-label"),
+      el.getAttribute("title"),
+      el.getAttribute("data-testid"),
+      el.textContent
+    ].filter(Boolean).join(" ");
+  }
+  function findSettingsRow(){
+    const nodes=Array.from(document.querySelectorAll("button,a,[role='button']"));
+    const matches=nodes.filter(el=>visible(el)&&/(设置|Settings|Preferences|setting)/i.test(labelOf(el)));
+    matches.sort((a,b)=>{
+      const ar=a.getBoundingClientRect();
+      const br=b.getBoundingClientRect();
+      return br.bottom-ar.bottom||ar.left-br.left;
+    });
+    return matches[0]||null;
+  }
+  function ensureRow(){
+    const target=findSettingsRow();
+    if(!target){
+      row=null;
+      progressEl=null;
+      statusEl=null;
+      cleanupNodes();
+      return false;
+    }
+    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
+      if(el!==target)el.classList.remove("ruizhi-settings-update-row");
+    });
+    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>{
+      if(!target.contains(el))el.remove();
+    });
+    if(row!==target){
+      row?.classList.remove("ruizhi-settings-update-row");
+      row=target;
+      row.classList.add("ruizhi-settings-update-row");
+      progressEl=null;
+      statusEl=null;
+    }
+    const progressNodes=Array.from(row.querySelectorAll(".ruizhi-update-progress-bg"));
+    if(!progressEl||!row.contains(progressEl))progressEl=progressNodes[0]||null;
+    for(const el of progressNodes){
+      if(el!==progressEl)el.remove();
+    }
+    if(!progressEl||!row.contains(progressEl)){
+      progressEl=document.createElement("span");
+      progressEl.className="ruizhi-update-progress-bg";
+      row.prepend(progressEl);
+    }
+    const statusNodes=Array.from(row.querySelectorAll(".ruizhi-update-status"));
+    if(!statusEl||!row.contains(statusEl))statusEl=statusNodes[0]||null;
+    for(const el of statusNodes){
+      if(el!==statusEl)el.remove();
+    }
+    if(!statusEl||!row.contains(statusEl)){
+      statusEl=document.createElement("span");
+      statusEl.className="ruizhi-update-status";
+      statusEl.addEventListener("click",event=>{
+        if(updateState.status!=="ready")return;
+        event.preventDefault();
+        event.stopPropagation();
+        ipcRenderer.invoke("ruizhi:update:install-now").catch(error=>console.error("ruizhi install-now failed",error));
+      });
+      row.appendChild(statusEl);
+    }
+    return true;
+  }
+  function statusText(){
+    const status=updateState.status;
+    if(status==="checking")return "检查更新";
+    if(status==="downloading")return Math.max(0,Math.min(100,Number(updateState.progress)||0))+"%";
+    if(status==="ready")return "重启并更新";
+    if(status==="installing")return "正在安装";
+    if(status==="error")return "更新失败";
+    return "v"+(updateState.currentVersion||appVersion);
+  }
+  function renderUpdateRow(){
+    if(disposed)return;
+    injectStyle();
+    if(!ensureRow())return;
+    const status=updateState.status;
+    const active=status==="checking"||status==="downloading"||status==="ready"||status==="installing";
+    const progress=status==="ready"||status==="installing"?100:status==="downloading"?Number(updateState.progress)||0:0;
+    row.dataset.ruizhiUpdateActive=active?"true":"false";
+    row.dataset.ruizhiUpdateStatus=status||"idle";
+    row.style.setProperty("--ruizhi-update-progress",Math.max(0,Math.min(100,progress))+"%");
+    statusEl.textContent=statusText();
+    statusEl.title=status==="ready"?"点击后退出锐智并安装新版本":"当前版本";
+    statusEl.dataset.clickable=status==="ready"?"true":"false";
+  }
+  function queueRender(){
+    if(disposed||renderQueued)return;
+    renderQueued=true;
+    requestAnimationFrame(()=>{renderQueued=false;if(!disposed)renderUpdateRow();});
+  }
+
+  function onUpdateStateChanged(_event,next){
+    if(disposed)return;
+    updateState={...updateState,...next};
+    queueRender();
+  }
+  ipcRenderer.on("ruizhi:update:state-changed",onUpdateStateChanged);
+  addCleanup(()=>ipcRenderer.removeListener("ruizhi:update:state-changed",onUpdateStateChanged));
+  onReady(()=>{
+    injectStyle();
+    ipcRenderer.invoke("ruizhi:update:get-state").then(next=>{updateState={...updateState,...next};queueRender();}).catch(()=>queueRender());
+    const observer=new MutationObserver(queueRender);
+    observer.observe(document.documentElement,{childList:true,subtree:true});
+    addCleanup(()=>observer.disconnect());
+    queueRender();
+    const timer=setInterval(queueRender,2000);
+    addCleanup(()=>clearInterval(timer));
+  });
+}catch(error){console.error("ruizhi preload integration failed",error)}})();
+`;
+}
+
+function patchPreloadIntegration() {
+  const preloadPath = path.join(extractedDir, ".vite", "build", "preload.js");
+  writePatchedFile(preloadPath, (source) =>
+    replaceExact(
+      source,
+      "\n//# sourceMappingURL=preload.js.map",
+      `${preloadIntegrationCode()}\n//# sourceMappingURL=preload.js.map`,
+      "注入锐智 macOS 更新状态 UI"
+    )
+  );
+  log("已补丁 preload 锐智更新 UI");
+}
+
+function nodeModuleTargetDir(targetNodeModules, packageName) {
+  return path.join(targetNodeModules, ...packageName.split("/"));
+}
+
+function copyRuntimeNodePackage(packageName, targetNodeModules, seen = new Set(), fromDir = projectRoot) {
+  const packageJsonPath = require.resolve(`${packageName}/package.json`, { paths: [fromDir] });
+  const packageDir = path.dirname(packageJsonPath);
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  const packageKey = `${packageJson.name ?? packageName}@${packageJson.version ?? "0.0.0"}`;
+  if (seen.has(packageKey)) {
+    return;
+  }
+  seen.add(packageKey);
+
+  const targetDir = nodeModuleTargetDir(targetNodeModules, packageName);
+  fs.rmSync(targetDir, { recursive: true, force: true });
+  fsExtra.copySync(packageDir, targetDir, {
+    filter(sourcePath) {
+      const relative = path.relative(packageDir, sourcePath);
+      if (!relative) {
+        return true;
+      }
+      return !relative.split(path.sep).includes("node_modules");
+    }
+  });
+
+  for (const dependencyName of Object.keys(packageJson.dependencies ?? {})) {
+    copyRuntimeNodePackage(dependencyName, targetNodeModules, seen, packageDir);
+  }
+}
+
+function copyUpdaterRuntimeDependencies() {
+  const targetNodeModules = path.join(extractedDir, "node_modules");
+  fs.mkdirSync(targetNodeModules, { recursive: true });
+  copyRuntimeNodePackage("electron-updater", targetNodeModules);
+  log("已内置 electron-updater 运行时依赖");
+}
+
+function patchBootstrap() {
+  const bootstrapPath = path.join(extractedDir, ".vite", "build", "bootstrap.js");
+
+  writePatchedFile(bootstrapPath, (source) => {
+    let next = source;
+    next = replaceRegex(
+      next,
+      /var v=\{"install-update":`Install Update`,"check-for-updates":`Check for Updates`,quit:`Quit`\};async function y\(e\)\{[\s\S]*?\}\}var b=/,
+      `${bootstrapInitCode()}${bootstrapForceUpdateCode()}var v={quit:\`Quit\`};async function y(e){await n.dialog.showMessageBox({type:\`error\`,buttons:[v.quit],defaultId:0,cancelId:0,message:\`${'${n.app.getName()}'} failed to start.\`,detail:e instanceof Error?e.message:\`The main desktop app failed during startup.\`,noLink:!0});n.app.quit();return}var b=`,
+      "移除 Codex 官方更新失败入口并注入锐智启动逻辑"
+    );
+    next = replaceExact(next, "await i.initialize();try{", "await ruizhiForceUpdateIfAvailable();try{", "禁用 Codex 官方 updater 初始化，改为锐智启动逻辑");
+    next = replaceExactIfPresent(next, "n.app.setName(e.H(x))", `n.app.setName(${jsonLiteral(config.productName)})`, "应用名称");
+    next = replaceAllIfPresent(next, "process.platform===`win32`&&n.app.setAppUserModelId(t.v(x))", "process.platform===`win32`&&n.app.setAppUserModelId(`cn.ruizhi.desktop`)");
+    return next;
+  });
+
+  log("已补丁 Electron bootstrap 初始化");
+}
+
+async function repackAppAsar() {
+  const resourcesDir = appResourcesDir();
+  const appAsarPath = path.join(resourcesDir, "app.asar");
+  const patchedAsarPath = path.join(workRoot, "app.patched.asar");
+
+  fs.rmSync(extractedDir, { recursive: true, force: true });
+  log("解包 app.asar");
+  asar.extractAll(appAsarPath, extractedDir);
+
+  patchPluginAccountGate();
+  patchOnboardingApiKeyTexts();
+  patchLoginRoute();
+  patchWebviewLocales();
+  patchPackageMetadata();
+  patchWebviewHtml();
+  patchDefaultLocale();
+  patchFrontendDefaultMessages();
+  patchAppSunsetGate();
+  patchModelAvailabilityAllowlist();
+  patchOfficialUpdateLogic();
+  patchHelpDocumentationLinks();
+  copyUpdaterRuntimeDependencies();
+  patchBootstrap();
+  patchPreloadIntegration();
+
+  fs.rmSync(patchedAsarPath, { force: true });
+  log("重新打包 app.asar");
+  await asar.createPackage(extractedDir, patchedAsarPath);
+  fs.copyFileSync(patchedAsarPath, appAsarPath);
+}
+
+function findMainExecutable() {
+  const macosDir = path.join(appOutRoot, "Contents", "MacOS");
+  const executables = fs.readdirSync(macosDir)
+    .map((name) => path.join(macosDir, name))
+    .filter((candidate) => fs.statSync(candidate).isFile());
+  if (executables.length === 0) {
+    throw new Error(`找不到 macOS 主程序：${macosDir}`);
+  }
+  return executables[0];
+}
+
+async function patchFuses() {
+  const executable = findMainExecutable();
+  fs.chmodSync(executable, 0o755);
+
+  log("关闭 app.asar 完整性校验 fuse");
+  await flipFuses(executable, {
+    version: FuseVersion.V1,
+    [FuseV1Options.RunAsNode]: false,
+    [FuseV1Options.EnableCookieEncryption]: true,
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+    [FuseV1Options.EnableNodeCliInspectArguments]: false,
+    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: false,
+    [FuseV1Options.OnlyLoadAppFromAsar]: true,
+    [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
+    [FuseV1Options.GrantFileProtocolExtraPrivileges]: true,
+    [FuseV1Options.WasmTrapHandlers]: true
+  });
+}
+
+function patchInfoPlist() {
+  const plist = path.join(appOutRoot, "Contents", "Info.plist");
+  execLogged("plutil", ["-replace", "CFBundleName", "-string", "Codex", plist]);
+  execLogged("plutil", ["-replace", "CFBundleDisplayName", "-string", config.productName, plist]);
+  execLogged("plutil", ["-replace", "CFBundleIdentifier", "-string", "cn.ruizhi.desktop", plist]);
+  execLogged("plutil", ["-replace", "CFBundleShortVersionString", "-string", appVersion, plist]);
+  execLogged("plutil", ["-replace", "CFBundleVersion", "-string", appVersion, plist]);
+  log("已补丁 Info.plist 元数据");
+}
+
+function assertAppBinaryArchMatchesHost() {
+  const plist = path.join(appOutRoot, "Contents", "Info.plist");
+  const executableName = execOutput("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleExecutable", plist]).trim();
+  const executablePath = path.join(appOutRoot, "Contents", "MacOS", executableName);
+  const archs = execOutput("lipo", ["-archs", executablePath]).trim().split(/\s+/);
+  assertMacosBuildArch(archs);
+  log(`已确认 macOS app 主程序包含目标架构 ${macosBuildArch}：${archs.join(", ")}`);
+  return archs;
+}
+
+function copyPluginMarketplaces() {
+  const resourcesDir = appResourcesDir();
+
+  for (const marketplace of pluginMarketplaces()) {
+    const sourceRoot = path.join(projectRoot, ...splitConfigPath(marketplace.sourcePath));
+    const targetRoot = path.join(resourcesDir, ...splitConfigPath(marketplace.resourcePath));
+    const marketplaceJson = path.join(sourceRoot, ".agents", "plugins", "marketplace.json");
+    const versionManifest = path.join(sourceRoot, ...splitConfigPath(marketplace.versionManifestPath));
+
+    if (!fs.existsSync(marketplaceJson)) {
+      throw new Error(`插件 marketplace 缺少 marketplace.json：${marketplaceJson}`);
+    }
+    if (!fs.existsSync(versionManifest)) {
+      throw new Error(`插件 marketplace 缺少版本清单：${versionManifest}`);
+    }
+
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+    fsExtra.copySync(sourceRoot, targetRoot);
+    log(`已内置插件 marketplace：${marketplace.displayName ?? marketplace.name}`);
+  }
+}
+
+function copyRuntimeOverrides() {
+  const resourcesDir = appResourcesDir();
+
+  const modelTargetDir = path.join(resourcesDir, "models");
+  if (modelCatalogEnabled()) {
+    fs.mkdirSync(modelTargetDir, { recursive: true });
+    fs.copyFileSync(modelCatalogPath(), path.join(modelTargetDir, "ruizhi-model-catalog.json"));
+    log("已内置运行态模型缓存目录");
+  } else {
+    fs.rmSync(modelTargetDir, { recursive: true, force: true });
+    log("已关闭运行态自定义模型目录");
+  }
+
+  if (modelBridgeEnabled()) {
+    const bridgeTargetPath = path.join(resourcesDir, modelBridgeRuntimeResourcePath());
+    fs.mkdirSync(path.dirname(bridgeTargetPath), { recursive: true });
+    fs.copyFileSync(modelBridgeRuntimeSourcePath(), bridgeTargetPath);
+    log(`已内置模型协议 bridge：${path.relative(projectRoot, bridgeTargetPath)}`);
+  }
+
+  const skillTargetDir = path.join(resourcesDir, "skills", ".system", "imagegen");
+  fs.mkdirSync(skillTargetDir, { recursive: true });
+  fs.copyFileSync(imageGenSkillSourcePath(), path.join(skillTargetDir, "SKILL.md"));
+  log("已内置运行态 imagegen skill 覆盖");
+}
+
+function writeAppUpdateConfig() {
+  if (!macosUpdatesEnabled()) {
+    log("macOS 更新已禁用，跳过 app-update.yml");
+    return;
+  }
+
+  const publishUrl = macosUpdateDownloadBaseUrl();
+  if (!publishUrl) {
+    throw new Error("macOS 自动更新已启用，但缺少 updates.macos.downloadBaseUrl。");
+  }
+
+  const appUpdatePath = path.join(appResourcesDir(), "app-update.yml");
+  fs.writeFileSync(
+    appUpdatePath,
+    `provider: generic\nurl: ${yamlString(publishUrl)}\nupdaterCacheDirName: ruizhi-desktop-updater\n`,
+    "utf8"
+  );
+  log(`已写入 macOS electron-updater 配置：${appUpdatePath}`);
+}
+
+function buildImageGenHelper() {
+  const outputPath = path.join(appResourcesDir(), "bin", imageGenHelperName());
+  fs.rmSync(outputPath, { force: true });
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  log("编译锐智生图工具");
+  execLogged("go", [
+    "build",
+    "-trimpath",
+    "-ldflags",
+    "-s -w",
+    "-o",
+    outputPath,
+    path.join(projectRoot, "cmd", "ruizhi-imagegen")
+  ], {
+    env: {
+      ...process.env,
+      GOOS: "darwin",
+      GOARCH: macosGoArch()
+    }
+  });
+  fs.chmodSync(outputPath, 0o755);
+}
+
+function sha256File(filePath) {
+  const hash = createHash("sha256");
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest("hex");
+}
+
+function sha512File(filePath) {
+  const hash = createHash("sha512");
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest("base64");
+}
+
+function artifactManifestInfo(filePath, downloadBaseUrl) {
+  const fileName = path.basename(filePath);
+  return {
+    fileName,
+    url: joinUrl(downloadBaseUrl, fileName),
+    sha256: sha256File(filePath),
+    sha512: sha512File(filePath),
+    size: fs.statSync(filePath).size
+  };
+}
+
+function assertMacosBuildArch(appArchs) {
+  const hostArch = normalizeMacosBuildArch(process.arch);
+  if (hostArch !== macosBuildArch) {
+    throw new Error(`当前 macOS 构建机是 ${hostArch}，但目标打包架构是 ${macosBuildArch}。请使用对应原生 runner。`);
+  }
+  const expectedMachArch = macosMachArch();
+  if (!appArchs.includes(expectedMachArch)) {
+    throw new Error(`目标架构是 ${expectedMachArch}，但 app 主程序架构是 ${appArchs.join(", ") || "unknown"}。`);
+  }
+}
+
+function createZip() {
+  const updateZipPath = path.join(distDir, macosUpdateArtifactName("app.zip"));
+  fs.rmSync(updateZipPath, { force: true });
+  log("压缩 macOS 产物");
+  execLogged("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", appOutRoot, updateZipPath]);
+  log(`macOS zip 已输出：${updateZipPath}`);
+  return updateZipPath;
+}
+
+function signDmg(dmgPath, signingState) {
+  if (!signingState.signed || !process.env.MACOS_CODESIGN_IDENTITY?.trim()) {
+    return;
+  }
+  const signArgs = ["--force", "--sign", process.env.MACOS_CODESIGN_IDENTITY, dmgPath];
+  if (useTestSigningCertificate()) {
+    signArgs.splice(1, 0, "--timestamp=none");
+  } else {
+    signArgs.splice(1, 0, "--timestamp");
+  }
+  execLogged("codesign", signArgs);
+  execLogged("codesign", ["--verify", "--verbose=2", dmgPath]);
+}
+
+function createDmg(signingState) {
+  const dmgPath = path.join(distDir, macosDmgArtifactName());
+  const volumeName = `${config.productName} ${appVersion}`;
+
+  fs.rmSync(dmgPath, { force: true });
+  cleanDir(dmgStagingDir);
+  fsExtra.copySync(appOutRoot, path.join(dmgStagingDir, `${config.productName}.app`));
+  fs.symlinkSync("/Applications", path.join(dmgStagingDir, "Applications"));
+
+  log("生成 macOS DMG 安装包");
+  execLogged("hdiutil", [
+    "create",
+    "-volname",
+    volumeName,
+    "-srcfolder",
+    dmgStagingDir,
+    "-ov",
+    "-format",
+    "UDZO",
+    dmgPath
+  ]);
+  signDmg(dmgPath, signingState);
+  log(`macOS DMG 已输出：${dmgPath}`);
+  return dmgPath;
+}
+
+function createTestKit(signingState) {
+  const kitRoot = path.join(macDistDir, `${config.productName}-macos-test-kit`);
+  const kitApp = path.join(kitRoot, `${config.productName}.app`);
+  const commandPath = path.join(kitRoot, `打开${config.productName}.command`);
+  const installScriptPath = path.join(kitRoot, "install.sh");
+  const installCommandPath = path.join(kitRoot, `安装${config.productName}.command`);
+  const readmePath = path.join(kitRoot, "README-先看这里.txt");
+  const kitZipPath = path.join(distDir, `${config.productName}-macos-test-kit-${appVersion}.zip`);
+  const shouldRepairAdHocSignature = !signingState.signed;
+
+  fs.rmSync(kitRoot, { recursive: true, force: true });
+  fs.mkdirSync(kitRoot, { recursive: true });
+  fsExtra.copySync(appOutRoot, kitApp);
+
+  const command = `#!/bin/zsh
+set -euo pipefail
+KIT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$KIT_DIR"
+APP="./${config.productName}.app"
+echo "准备打开 ${config.productName}..."
+if [[ ! -d "$APP" ]]; then
+  echo "找不到 $APP，请确认这个脚本和 ${config.productName}.app 在同一个目录。"
+  read -k 1 "?按任意键退出..."
+  exit 1
+fi
+xattr -cr "$KIT_DIR" 2>/dev/null || true
+find "$APP/Contents" -path "*/Contents/MacOS/*" -type f -exec chmod +x {} \\; 2>/dev/null || true
+if [[ "${shouldRepairAdHocSignature ? "1" : "0"}" == "1" ]]; then
+  echo "刷新本机 ad-hoc 签名..."
+  codesign --force --deep --sign - "$APP"
+fi
+codesign --verify --deep --strict --verbose=2 "$APP"
+open "$APP"
+echo "已发送启动命令。如果 macOS 仍提示拦截，请右键 ${config.productName}.app，选择打开。"
+`;
+
+  const installScript = `#!/bin/zsh
+set -euo pipefail
+KIT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$KIT_DIR"
+
+APP_NAME="${config.productName}.app"
+APP_SOURCE="./$APP_NAME"
+SYSTEM_TARGET="/Applications/$APP_NAME"
+USER_TARGET="$HOME/Applications/$APP_NAME"
+
+echo "准备安装 ${config.productName}..."
+if [[ ! -d "$APP_SOURCE" ]]; then
+  echo "找不到 $APP_SOURCE，请确认安装脚本和 ${config.productName}.app 在同一个目录。"
+  exit 1
+fi
+
+TARGET="$SYSTEM_TARGET"
+if [[ ! -w "/Applications" ]]; then
+  mkdir -p "$HOME/Applications"
+  TARGET="$USER_TARGET"
+fi
+
+echo "安装目标：$TARGET"
+xattr -cr "$KIT_DIR" 2>/dev/null || true
+find "$APP_SOURCE/Contents" -path "*/Contents/MacOS/*" -type f -exec chmod +x {} \\; 2>/dev/null || true
+if [[ "${shouldRepairAdHocSignature ? "1" : "0"}" == "1" ]]; then
+  echo "刷新本机 ad-hoc 签名..."
+  codesign --force --deep --sign - "$APP_SOURCE"
+fi
+codesign --verify --deep --strict --verbose=2 "$APP_SOURCE"
+rm -rf "$TARGET"
+ditto "$APP_SOURCE" "$TARGET"
+xattr -cr "$TARGET" 2>/dev/null || true
+if [[ "${shouldRepairAdHocSignature ? "1" : "0"}" == "1" ]]; then
+  codesign --force --deep --sign - "$TARGET"
+fi
+codesign --verify --deep --strict --verbose=2 "$TARGET"
+open "$TARGET"
+echo "安装完成，已尝试启动 ${config.productName}。"
+`;
+
+  const installCommand = `#!/bin/zsh
+set -e
+cd "$(dirname "$0")"
+"./install.sh"
+`;
+
+  const readme = `这是 ${config.productName} macOS 测试包。
+
+没有 Apple Developer ID 和 notarization，所以不能做到普通用户双击完全无拦截。这个包只用于测试能不能在 Mac 上跑。
+
+推荐方式：
+1. 解压这个 zip。
+2. 命令行安装：在 Terminal 里进入解压目录后执行：
+
+   chmod +x install.sh
+   ./install.sh
+
+3. 或者双击“安装${config.productName}.command”。
+4. 如果只想原地启动、不安装到 Applications，双击“打开${config.productName}.command”。
+
+备用方式：
+
+   xattr -dr com.apple.quarantine .
+   chmod +x "安装${config.productName}.command"
+   ./"安装${config.productName}.command"
+
+如果系统提示“应用已损坏”，这通常是 Gatekeeper 对未公证测试包的拦截文案。当前测试包会自动清理扩展属性，并在 ad-hoc 签名包上刷新本机签名。
+
+如果系统 Applications 不可写，安装脚本会自动改装到：
+
+   ~/Applications/${config.productName}.app
+
+这不是正式签名包。正式分发仍然需要 Apple Developer ID 和 notarization。
+`;
+
+  fs.writeFileSync(commandPath, command, { mode: 0o755 });
+  fs.writeFileSync(installScriptPath, installScript, { mode: 0o755 });
+  fs.writeFileSync(installCommandPath, installCommand, { mode: 0o755 });
+  fs.writeFileSync(readmePath, readme, "utf8");
+  fs.rmSync(kitZipPath, { force: true });
+  log("压缩 macOS 测试包");
+  execLogged("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", kitRoot, kitZipPath]);
+  log(`测试包已输出：${kitZipPath}`);
+  return kitZipPath;
+}
+
+function hasDeveloperSigningConfig() {
+  return Boolean(
+    process.env.MACOS_CERTIFICATE_P12_BASE64?.trim() &&
+    process.env.MACOS_CERTIFICATE_PASSWORD?.trim() &&
+    process.env.MACOS_CODESIGN_IDENTITY?.trim()
+  );
+}
+
+function useTestSigningCertificate() {
+  return process.env.RUIZHI_MACOS_SIGNING_STYLE === "test"
+    || process.env.RUIZHI_MACOS_TEST_CERTIFICATE === "1";
+}
+
+function hasNotarizationConfig() {
+  return Boolean(
+    process.env.APP_STORE_CONNECT_KEY_ID?.trim() &&
+    process.env.APP_STORE_CONNECT_ISSUER_ID?.trim() &&
+    (process.env.APP_STORE_CONNECT_PRIVATE_KEY_BASE64?.trim() || process.env.APP_STORE_CONNECT_PRIVATE_KEY?.trim())
+  );
+}
+
+function importDeveloperCertificate() {
+  const keychainPassword = `ruizhi-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const keychainPath = path.join(workRoot, "ruizhi-signing.keychain-db");
+  const certificatePath = path.join(workRoot, "developer-id.p12");
+  const trustCertificatePath = path.join(workRoot, "codesign-trust.cer");
+
+  fs.writeFileSync(
+    certificatePath,
+    Buffer.from(process.env.MACOS_CERTIFICATE_P12_BASE64.trim(), "base64")
+  );
+  if (useTestSigningCertificate() && process.env.MACOS_CERTIFICATE_CER_BASE64?.trim()) {
+    fs.writeFileSync(
+      trustCertificatePath,
+      Buffer.from(process.env.MACOS_CERTIFICATE_CER_BASE64.trim(), "base64")
+    );
+  }
+
+  execSensitive("security", ["create-keychain", "-p", keychainPassword, keychainPath], "security create-keychain");
+  execLogged("security", ["set-keychain-settings", "-lut", "21600", keychainPath]);
+  execSensitive("security", ["unlock-keychain", "-p", keychainPassword, keychainPath], "security unlock-keychain");
+  execSensitive("security", [
+    "import",
+    certificatePath,
+    "-k",
+    keychainPath,
+    "-P",
+    process.env.MACOS_CERTIFICATE_PASSWORD,
+    "-T",
+    "/usr/bin/codesign",
+    "-T",
+    "/usr/bin/productsign"
+  ], "security import Developer ID certificate");
+  if (useTestSigningCertificate() && fs.existsSync(trustCertificatePath)) {
+    execLogged("security", ["add-trusted-cert", "-r", "trustRoot", "-p", "codeSign", "-k", keychainPath, trustCertificatePath]);
+  }
+  execSensitive("security", [
+    "set-key-partition-list",
+    "-S",
+    "apple-tool:,apple:,codesign:",
+    "-s",
+    "-k",
+    keychainPassword,
+    keychainPath
+  ], "security set-key-partition-list");
+  execLogged("security", ["list-keychains", "-d", "user", "-s", keychainPath, "login.keychain-db"]);
+  log("已导入 Developer ID 证书到临时 keychain");
+}
+
+function verifyCodeSignature() {
+  execLogged("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appOutRoot]);
+}
+
+function signApp() {
+  execLogged("xattr", ["-cr", appOutRoot]);
+
+  if (!hasDeveloperSigningConfig()) {
+    log("未配置 Developer ID 签名 secrets，使用 ad-hoc 签名");
+    execLogged("codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", appOutRoot]);
+    verifyCodeSignature();
+    return { signed: false, notarized: false };
+  }
+
+  importDeveloperCertificate();
+  const signArgs = [
+    "--force",
+    "--deep",
+    "--sign",
+    process.env.MACOS_CODESIGN_IDENTITY,
+    appOutRoot
+  ];
+  if (useTestSigningCertificate()) {
+    signArgs.splice(2, 0, "--timestamp=none");
+  } else {
+    signArgs.splice(2, 0, "--options", "runtime", "--timestamp");
+  }
+  execLogged("codesign", signArgs);
+  verifyCodeSignature();
+  log(useTestSigningCertificate() ? "已使用测试证书签名 macOS app" : "已使用 Developer ID 签名 macOS app");
+  return { signed: true, notarized: false, testSigned: useTestSigningCertificate() };
+}
+
+function notaryPrivateKeyContent() {
+  if (process.env.APP_STORE_CONNECT_PRIVATE_KEY_BASE64?.trim()) {
+    return Buffer.from(process.env.APP_STORE_CONNECT_PRIVATE_KEY_BASE64.trim(), "base64").toString("utf8");
+  }
+  return process.env.APP_STORE_CONNECT_PRIVATE_KEY.replace(/\\n/g, "\n");
+}
+
+function notarizeAndStaple(zipPath) {
+  if (!hasNotarizationConfig()) {
+    log("未配置 App Store Connect notary secrets，跳过 notarization");
+    return false;
+  }
+
+  const keyPath = path.join(workRoot, "AuthKey.p8");
+  fs.writeFileSync(keyPath, notaryPrivateKeyContent(), { mode: 0o600 });
+
+  execLogged("xcrun", [
+    "notarytool",
+    "submit",
+    zipPath,
+    "--key",
+    keyPath,
+    "--key-id",
+    process.env.APP_STORE_CONNECT_KEY_ID,
+    "--issuer",
+    process.env.APP_STORE_CONNECT_ISSUER_ID,
+    "--wait"
+  ]);
+  execLogged("xcrun", ["stapler", "staple", appOutRoot]);
+  execLogged("spctl", ["-a", "-vv", "--type", "execute", appOutRoot]);
+  log("已完成 notarization 并 staple 到 app");
+  return true;
+}
+
+function adHocSignApp() {
+  signApp();
+  log("已使用 ad-hoc 签名 macOS app");
+}
+
+function writeUpdateManifest(zipPath, signingState) {
+  preserveExistingMacUpdateManifests();
+
+  const downloadBaseUrl = macosUpdateDownloadBaseUrl();
+  const updateArtifact = artifactManifestInfo(zipPath, downloadBaseUrl);
+  const manifest = {
+    version: appVersion,
+    arch: macosBuildArch,
+    mandatory: false,
+    macos: {
+      arch: macosBuildArch,
+      ...updateArtifact,
+      signed: Boolean(signingState.signed),
+      notarized: Boolean(signingState.notarized)
+    },
+    manualDownload: {
+      platform: "macos",
+      arch: macosBuildArch,
+      kind: "app",
+      ...updateArtifact
+    }
+  };
+
+  fs.writeFileSync(updateManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  log(`macOS 更新清单已输出：${updateManifestPath}`);
+  fs.writeFileSync(archUpdateManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  log(`macOS 架构更新清单已输出：${archUpdateManifestPath}`);
+  fs.writeFileSync(versionedMacUpdateManifestPath(), `${JSON.stringify(manifest, null, 2)}\n`);
+  log(`macOS 版本更新清单已输出：${versionedMacUpdateManifestPath()}`);
+
+  const latestMacYml = [
+    `version: ${yamlString(appVersion)}`,
+    "files:",
+    `  - url: ${yamlString(updateArtifact.fileName)}`,
+    `    sha512: ${yamlString(updateArtifact.sha512)}`,
+    `    size: ${updateArtifact.size}`,
+    `path: ${yamlString(updateArtifact.fileName)}`,
+    `sha512: ${yamlString(updateArtifact.sha512)}`,
+    `releaseDate: ${yamlString(new Date().toISOString())}`,
+    ""
+  ].join("\n");
+  fs.writeFileSync(latestMacYmlPath, latestMacYml, "utf8");
+  log(`macOS electron-updater 清单已输出：${latestMacYmlPath}`);
+  fs.writeFileSync(legacyLatestMacYmlPath, latestMacYml, "utf8");
+  log(`macOS legacy electron-updater 清单已输出：${legacyLatestMacYmlPath}`);
+  fs.writeFileSync(archLatestMacYmlPath, latestMacYml, "utf8");
+  log(`macOS 架构 electron-updater 清单已输出：${archLatestMacYmlPath}`);
+  fs.writeFileSync(versionedLatestMacYmlPath(), latestMacYml, "utf8");
+  log(`macOS 版本 electron-updater 清单已输出：${versionedLatestMacYmlPath()}`);
+}
+
+async function main() {
+  if (process.platform !== "darwin") {
+    throw new Error("build:macos 必须在 macOS 上运行。本地 Windows 不要硬搓 .app，没那个命。");
+  }
+
+  fs.mkdirSync(distDir, { recursive: true });
+  cleanDir(macDistDir);
+  cleanDir(workRoot);
+
+  const sourceAppRoot = findSourceAppRoot();
+  log(`目标 macOS 架构：${macosBuildArch}`);
+  log(`使用 Codex.app：${sourceAppRoot}`);
+
+  log("复制 Codex.app");
+  await fsExtra.copy(sourceAppRoot, appOutRoot);
+
+  patchInfoPlist();
+  assertAppBinaryArchMatchesHost();
+  buildImageGenHelper();
+  copyRuntimeOverrides();
+  copyPluginMarketplaces();
+  writeAppUpdateConfig();
+  await repackAppAsar();
+  await patchFuses();
+  const signingState = signApp();
+  let zipPath = createZip();
+  if (signingState.signed) {
+    signingState.notarized = notarizeAndStaple(zipPath);
+    if (signingState.notarized) {
+      zipPath = createZip();
+    }
+  }
+  createDmg(signingState);
+  writeUpdateManifest(zipPath, signingState);
+
+  log("macOS 构建完成");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -1,0 +1,41 @@
+{
+  "name": "ruizhi-desktop-builder",
+  "version": "0.1.24",
+  "private": true,
+  "type": "module",
+  "description": "锐智桌面端初版补丁构建工程",
+  "scripts": {
+    "import:codex-windows-source": "node scripts/import-codex-windows-source.mjs",
+    "export:windows-overrides": "node scripts/export-windows-overrides.mjs",
+    "sync:windows-test": "node scripts/sync-windows-test.mjs",
+    "watch:windows-test": "node scripts/sync-windows-test.mjs --watch",
+    "validate:windows-test": "node scripts/validate-windows-runtime.mjs",
+    "build:windows": "node scripts/build-windows.mjs",
+    "build:macos": "node scripts/build-macos.mjs",
+    "build:website-docker": "docker compose build",
+    "serve:website-docker": "docker compose up -d",
+    "push:website-docker": "docker compose push"
+  },
+  "dependencies": {
+    "@electron/fuses": "^2.1.1",
+    "asar": "^3.2.0",
+    "electron-updater": "^6.8.3",
+    "fs-extra": "^11.3.2"
+  },
+  "devDependencies": {
+    "electron-builder": "^26.8.1",
+    "rcedit": "^5.0.2"
+  },
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/772778995/rj-codex.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/772778995/rj-codex/issues"
+  },
+  "homepage": "https://github.com/772778995/rj-codex#readme"
+}

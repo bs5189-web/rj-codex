@@ -1,0 +1,3472 @@
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import fsExtra from "fs-extra";
+import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
+import { rcedit } from "rcedit";
+import {
+  applyWindowsAsarOverrides,
+  codexClientVersionFromExe,
+  copyWindowsPrerequisites,
+  copyWindowsResourceOverrides,
+  patchWindowsHelpDocumentationLinks,
+  patchOpenAIBundledPluginDescriptions,
+  refreshWindowsAsarBuildMetadata,
+  validateRuizhiRuntimeBundle,
+  writeRuntimeModelCatalog
+} from "./windows-asar-overrides.mjs";
+
+const require = createRequire(import.meta.url);
+const asar = require("asar");
+
+const __filename = fileURLToPath(import.meta.url);
+const projectRoot = path.resolve(path.dirname(__filename), "..");
+const config = JSON.parse(fs.readFileSync(path.join(projectRoot, "config", "rj-codex.json"), "utf8"));
+const appVersion = process.env.RUIZHI_BUILD_VERSION ?? config.version;
+const runtimeConfig = config.runtime ?? {};
+const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
+const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
+const imageGenerationConfig = config.imageGeneration ?? {};
+const apiKeyTestConfig = config.apiKeyTest ?? {};
+const modelBridgeConfig = config.modelBridge ?? {};
+const openAIBundledPluginDefinitions = [
+  { name: "browser-use", path: "./plugins/browser-use", category: "浏览器" },
+  { name: "chrome", path: "./plugins/chrome", category: "实验性" },
+  { name: "latex-tectonic", path: "./plugins/latex-tectonic", category: "研究" }
+];
+
+function windowsTaskManagerName() {
+  return config.windows?.taskManagerName ?? config.productName;
+}
+
+function log(message) {
+  console.log(`[ruizhi] ${message}`);
+}
+
+function assertInsideProject(targetPath) {
+  const resolvedRoot = path.resolve(projectRoot).toLowerCase();
+  const resolvedTarget = path.resolve(targetPath).toLowerCase();
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error(`拒绝删除项目外路径：${targetPath}`);
+  }
+}
+
+function resolveProjectPath(targetPath) {
+  const resolvedTarget = path.isAbsolute(targetPath)
+    ? path.resolve(targetPath)
+    : path.resolve(projectRoot, targetPath);
+  assertInsideProject(resolvedTarget);
+  return resolvedTarget;
+}
+
+function cleanDir(targetPath) {
+  assertInsideProject(targetPath);
+  fs.mkdirSync(targetPath, { recursive: true });
+  for (const entry of fs.readdirSync(targetPath)) {
+    fs.rmSync(path.join(targetPath, entry), { recursive: true, force: true });
+  }
+}
+
+function windowsIconPath() {
+  const configured = config.windows?.iconPath;
+  if (!configured) {
+    throw new Error("缺少 windows.iconPath 配置。");
+  }
+  const resolved = resolveProjectPath(configured);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Windows 图标文件不存在：${resolved}`);
+  }
+  return resolved;
+}
+
+function electronBuilderCliPath() {
+  return path.join(projectRoot, "node_modules", "electron-builder", "cli.js");
+}
+
+function electronRuntimeVersion() {
+  const versionPath = path.join(appOutRoot, "version");
+  if (!fs.existsSync(versionPath)) {
+    throw new Error(`缺少 Electron runtime version 文件：${versionPath}`);
+  }
+  const version = fs.readFileSync(versionPath, "utf8").trim();
+  if (!/^\d+\.\d+\.\d+/.test(version)) {
+    throw new Error(`Electron runtime version 格式异常：${version}`);
+  }
+  return version;
+}
+
+function modelCatalogPath() {
+  const configured = config.models?.catalogPath;
+  if (!configured) {
+    throw new Error("缺少 models.catalogPath 配置。");
+  }
+  const resolved = resolveProjectPath(configured);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`锐智模型目录不存在：${resolved}`);
+  }
+  return resolved;
+}
+
+function modelCatalogEnabled() {
+  return config.models?.enabled !== false;
+}
+
+function modelBridgeEnabled() {
+  return modelCatalogEnabled() && modelBridgeConfig.enabled === true;
+}
+
+function modelBridgeHost() {
+  return modelBridgeConfig.host ?? "127.0.0.1";
+}
+
+function modelBridgePort() {
+  const port = modelBridgeConfig.port ?? 17888;
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`modelBridge.port 无效：${port}`);
+  }
+  return port;
+}
+
+function modelProviderBaseUrl() {
+  if (!modelBridgeEnabled()) {
+    return config.openai.baseUrl;
+  }
+  return `http://${modelBridgeHost()}:${modelBridgePort()}/v1`;
+}
+
+function modelBridgeRuntimeSourcePath() {
+  const configured = modelBridgeConfig.runtimeScriptPath ?? "resources/bridge/ruizhi-responses-bridge.cjs";
+  const resolved = resolveProjectPath(configured);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`模型协议 bridge 脚本不存在：${resolved}`);
+  }
+  return resolved;
+}
+
+function modelBridgeRuntimeResourcePath() {
+  return path.join("bridge", path.basename(modelBridgeRuntimeSourcePath()));
+}
+
+function modelBridgeRoutes() {
+  return modelBridgeConfig.routes && typeof modelBridgeConfig.routes === "object"
+    ? modelBridgeConfig.routes
+    : {};
+}
+
+function imageGenHelperExeName() {
+  return imageGenerationConfig.helperExeName ?? "ruizhi-imagegen.exe";
+}
+
+function builtInAllowPrefixRules() {
+  const configuredRules = Array.isArray(config.execPolicy?.allowPrefixRules)
+    ? config.execPolicy.allowPrefixRules
+    : [];
+  const imageGenHelperPath = path.join("bin", imageGenHelperExeName());
+  return [
+    ...configuredRules,
+    {
+      commandResourcePath: imageGenHelperPath,
+      prefix: ["generate"]
+    },
+    {
+      commandResourcePath: imageGenHelperPath,
+      prefix: ["generate-batch"]
+    }
+  ];
+}
+
+function imageGenSkillSourcePath() {
+  return resolveProjectPath(path.join("resources", "skills", "imagegen", "SKILL.md"));
+}
+
+function systemSkillsSourceRoot() {
+  return resolveProjectPath(path.join("resources", "skills"));
+}
+
+const hiddenSystemSkillNames = ["openai-docs"];
+const hiddenSystemSkillNameSet = new Set(hiddenSystemSkillNames);
+
+function listSystemSkillSourceDirs() {
+  const sourceRoot = systemSkillsSourceRoot();
+  return fs.readdirSync(sourceRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((skillName) => !hiddenSystemSkillNameSet.has(skillName))
+    .filter((skillName) => fs.existsSync(path.join(sourceRoot, skillName, "SKILL.md")))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+const workRoot = path.join(projectRoot, ".work", "windows");
+const distRoot = resolveProjectPath(process.env.RUIZHI_WINDOWS_DIST_SUBDIR ?? path.join(".work", "windows-app-out"));
+const appOutRoot = distRoot;
+const extractedDir = path.join(workRoot, "app");
+const codexSourceRoot = path.join(projectRoot, ".work", "codex-source");
+const installerInputRoot = resolveProjectPath(path.join(".work", "windows-installer-input"));
+const installerOutDir = resolveProjectPath(path.join("dist", "installer"));
+const testAppOutDir = resolveProjectPath(process.env.RUIZHI_WINDOWS_TEST_APP_SUBDIR ?? path.join("dist", windowsTestAppDirName()));
+
+function sha256File(filePath) {
+  const hash = createHash("sha256");
+  const handle = fs.openSync(filePath, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+
+  try {
+    while (true) {
+      const bytesRead = fs.readSync(handle, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    fs.closeSync(handle);
+  }
+
+  return hash.digest("hex");
+}
+
+function verifyWindowsSourceManifest(appRoot) {
+  const manifestConfigPath = config.windows.sourceManifestPath;
+  if (!manifestConfigPath) {
+    throw new Error("缺少 windows.sourceManifestPath 配置。");
+  }
+
+  const manifestPath = resolveProjectPath(manifestConfigPath);
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`缺少固定 Codex Desktop 源 manifest：${manifestPath}。请先运行 npm run import:codex-windows-source。`);
+  }
+
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  const files = manifest.files ?? {};
+
+  for (const relativePath of ["resources/app.asar", config.windows.sourceExeName]) {
+    const expected = files[relativePath]?.sha256;
+    if (!expected) {
+      throw new Error(`固定 Codex Desktop 源 manifest 缺少 ${relativePath} 校验值。请重新运行 npm run import:codex-windows-source。`);
+    }
+
+    const actualPath = path.join(appRoot, ...relativePath.split("/"));
+    const actual = sha256File(actualPath);
+    if (actual !== expected) {
+      throw new Error(`固定 Codex Desktop 源已变化：${relativePath}。请确认来源后重新运行 npm run import:codex-windows-source。`);
+    }
+  }
+
+  return manifest;
+}
+
+function findPinnedCodexAppRoot() {
+  const configured = config.windows.sourceAppRoot;
+  if (!configured) {
+    throw new Error("缺少 windows.sourceAppRoot 配置。");
+  }
+
+  const appRoot = resolveProjectPath(configured);
+  const appAsarPath = path.join(appRoot, "resources", "app.asar");
+  const sourceExePath = path.join(appRoot, config.windows.sourceExeName);
+
+  if (!fs.existsSync(appAsarPath) || !fs.existsSync(sourceExePath)) {
+    throw new Error(`固定 Codex Desktop 源不存在或不完整：${appRoot}。请先运行 npm run import:codex-windows-source。`);
+  }
+
+  const manifest = verifyWindowsSourceManifest(appRoot);
+  log(`固定源版本：${manifest.packageVersion ?? "unknown"}`);
+  return appRoot;
+}
+
+function findOneFile(dir, pattern, label) {
+  const matches = fs.readdirSync(dir)
+    .filter((name) => pattern.test(name))
+    .map((name) => path.join(dir, name));
+
+  if (matches.length !== 1) {
+    throw new Error(`${label} 匹配数量异常：${matches.length}`);
+  }
+
+  return matches[0];
+}
+
+function findOneFileByContent(dir, filePattern, contentPattern, label) {
+  const matches = fs.readdirSync(dir)
+    .filter((name) => filePattern.test(name))
+    .map((name) => path.join(dir, name))
+    .filter((filePath) => contentPattern.test(fs.readFileSync(filePath, "utf8")));
+
+  if (matches.length !== 1) {
+    throw new Error(`${label} 匹配数量异常：${matches.length}`);
+  }
+
+  return matches[0];
+}
+
+function replaceExact(source, from, to, label) {
+  if (!source.includes(from)) {
+    throw new Error(`补丁点不存在：${label}`);
+  }
+  return source.replace(from, to);
+}
+
+function replaceRegex(source, pattern, to, label) {
+  if (!pattern.test(source)) {
+    throw new Error(`补丁点不存在：${label}`);
+  }
+  return source.replace(pattern, to);
+}
+
+function replaceRegexAll(source, pattern, to, label) {
+  const next = source.replace(pattern, to);
+  if (next === source) {
+    throw new Error(`补丁点不存在：${label}`);
+  }
+  return next;
+}
+
+function replaceAllIfPresent(source, from, to) {
+  return source.split(from).join(to);
+}
+
+function replaceAnyExact(source, replacements, label) {
+  let next = source;
+  let changed = false;
+
+  for (const [from, to] of replacements) {
+    if (next.includes(from)) {
+      next = next.replace(from, to);
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    throw new Error(`补丁点不存在：${label}`);
+  }
+
+  return next;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function writePatchedFile(filePath, transform) {
+  const original = fs.readFileSync(filePath, "utf8");
+  const patched = transform(original);
+  if (patched === original) {
+    throw new Error(`文件没有发生变化：${filePath}`);
+  }
+  fs.writeFileSync(filePath, patched);
+}
+
+function writeUtf8BomFile(filePath, content) {
+  fs.writeFileSync(filePath, `\uFEFF${content}`, "utf8");
+}
+
+function execLogged(command, args, options = {}) {
+  log([command, ...args].join(" "));
+  execFileSync(command, args, { stdio: "inherit", ...options });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function tomlValue(value) {
+  if (typeof value === "string") {
+    return jsonLiteral(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  throw new Error(`不支持的 TOML 默认值：${value}`);
+}
+
+function splitConfigPath(value) {
+  return String(value).split(/[\\/]+/).filter(Boolean);
+}
+
+function pluginMarketplaces() {
+  return Array.isArray(config.pluginMarketplaces) ? config.pluginMarketplaces : [];
+}
+
+function marketplaceSourceToken(name) {
+  return `__RUIZHI_MARKETPLACE_SOURCE_${name.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}__`;
+}
+
+function defaultConfigTomlLines(marketplaceSourceValues = {}) {
+  const openai = config.openai;
+  const baseUrl = modelProviderBaseUrl();
+  const defaultConfig = config.defaultConfig ?? {};
+  const features = defaultConfig.features ?? {};
+
+  const lines = [
+    `model = ${jsonLiteral(openai.defaultModel)}`,
+    `model_reasoning_effort = ${jsonLiteral(openai.defaultReasoningEffort)}`,
+    `model_provider = "ruizhi"`,
+    `openai_base_url = ${jsonLiteral(baseUrl)}`,
+    ""
+  ];
+
+  lines.push("[model_providers.ruizhi]");
+  lines.push(`name = "锐擎API"`);
+  lines.push(`base_url = ${jsonLiteral(baseUrl)}`);
+  lines.push(`wire_api = "responses"`);
+  lines.push(`requires_openai_auth = true`);
+  lines.push(`supports_websockets = false`);
+  if (Number.isInteger(openai.streamMaxRetries)) {
+    lines.push(`stream_max_retries = ${openai.streamMaxRetries}`);
+  }
+  if (Number.isInteger(openai.requestMaxRetries)) {
+    lines.push(`request_max_retries = ${openai.requestMaxRetries}`);
+  }
+  lines.push("");
+
+  const featureEntries = Object.entries(features);
+  if (featureEntries.length > 0) {
+    lines.push("[features]");
+    for (const [key, value] of featureEntries) {
+      lines.push(`${key} = ${tomlValue(value)}`);
+    }
+    lines.push("");
+  }
+
+  const managedMarketplaces = [
+    ...pluginMarketplaces(),
+    { name: "openai-bundled" }
+  ];
+
+  for (const marketplace of managedMarketplaces) {
+    lines.push(`[marketplaces.${marketplace.name}]`);
+    lines.push(`source_type = "local"`);
+    lines.push(`source = ${marketplaceSourceValues[marketplace.name] ?? marketplaceSourceToken(marketplace.name)}`);
+    lines.push("");
+  }
+
+  return lines;
+}
+
+function managedConfigTomlLines(marketplaceSourceValues = {}) {
+  return [
+    "# BEGIN Ruizhi Managed Defaults",
+    ...defaultConfigTomlLines(marketplaceSourceValues),
+    "# END Ruizhi Managed Defaults",
+    ""
+  ];
+}
+
+function patchPluginAccountGate() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const gradientFile = findOneFile(assetsDir, /^gradient-.*\.js$/, "插件账号模式 gate bundle");
+
+  writePatchedFile(gradientFile, (source) =>
+    replaceExact(
+      source,
+      "function e(e){return e!==`chatgpt`}",
+      "function e(e){return !1}",
+      "APIKey 模式插件置灰判断"
+    )
+  );
+
+  log(`已补丁插件账号模式 gate：${path.basename(gradientFile)}`);
+}
+
+function patchOnboardingApiKeyTexts() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const onboardingFile = findOneFile(assetsDir, /^onboarding-login-content-.*\.js$/, "onboarding 登录内容 bundle");
+
+  writePatchedFile(onboardingFile, (source) => {
+    let next = source;
+    next = replaceExact(next, "defaultMessage:`OpenAI API key`", "defaultMessage:`APIKey`", "APIKey 输入标题");
+    next = replaceAllIfPresent(next, "defaultMessage:`sk-...`", "defaultMessage:`请输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`sk-…`", "defaultMessage:`请输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Continue`", "defaultMessage:`登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Enter API key`", "defaultMessage:`输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Continue with ChatGPT`", "defaultMessage:`APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Cancel sign-in`", "defaultMessage:`取消`");
+    const inputMatch = next.match(
+      /\(0,([A-Za-z_$][\w$]*\.jsx)\)\(`input`,\{autoFocus:!0,(?!type:`password`,)className:`mt-2 w-full rounded-xl border border-token-border bg-token-input-background px-4 py-2\.5 focus:ring-2 focus:ring-black\/15 focus:outline-none`,placeholder:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,onChange:[A-Za-z_$][\w$]*\}\)/
+    );
+    if (!inputMatch) {
+      throw new Error("补丁点不存在：APIKey 输入框使用密码类型");
+    }
+    const jsxRuntime = inputMatch[1];
+    next = replaceRegex(
+      next,
+      /(\(0,[A-Za-z_$][\w$]*\.jsx\)\(`input`,\{autoFocus:!0,)(?!type:`password`,)(className:`mt-2 w-full rounded-xl border border-token-border bg-token-input-background px-4 py-2\.5 focus:ring-2 focus:ring-black\/15 focus:outline-none`,placeholder:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,onChange:[A-Za-z_$][\w$]*\}\))/,
+      "$1type:`password`,$2",
+      "APIKey 输入框使用密码类型"
+    );
+    next = replaceRegex(
+      next,
+      /children:\[([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\]\}\),t\[23\]=\1,t\[24\]=\2,t\[25\]=([A-Za-z_$][\w$]*)\):\3=t\[25\],\3\}/,
+      `children:[$1,(0,${jsxRuntime})(\`a\`,{href:\`${config.openai.tokenUrl}\`,target:\`_blank\`,rel:\`noreferrer\`,className:\`text-sm text-token-text-link-foreground hover:underline\`,children:\`获取锐擎API Key\`}),$2]}),t[23]=$1,t[24]=$2,t[25]=$3):$3=t[25],$3}`,
+      "APIKey 表单获取链接"
+    );
+    return next;
+  });
+
+  log(`已补丁 APIKey 登录文案：${path.basename(onboardingFile)}`);
+}
+
+function patchLoginRoute() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const loginRouteFile = findOneFile(assetsDir, /^login-route-.*\.js$/, "登录路由 bundle");
+
+  writePatchedFile(loginRouteFile, (source) => {
+    let next = source;
+
+    next = replaceAnyExact(
+      next,
+      [
+        [",[F,z]=(0,G.useState)(!1),[H,U]=", ",[F,z]=(0,G.useState)(!0),[H,U]="],
+        [",[f,g]=(0,G.useState)(!1),[E,D]=", ",[f,g]=(0,G.useState)(!0),[E,D]="],
+        [",[H,U]=(0,G.useState)(!1),[W,le]=", ",[H,U]=(0,G.useState)(!0),[W,le]="]
+      ],
+      "桌面登录页默认展示 APIKey 表单"
+    );
+
+    next = replaceAnyExact(
+      next,
+      [
+        ["ce=()=>{F&&Z(`api_key_cancel`),z(!1),Y(!1),q(``)}", "ce=()=>{F&&Z(`api_key_cancel`),z(!0),Y(!1),q(``)}"],
+        ["g=()=>{o(!1),s(!1)}", "g=()=>{o(!1),s(!0)}"],
+        ["de=()=>{U(!1),X(!1),J(``)}", "de=()=>{U(!0),X(!1),J(``)}"]
+      ],
+      "APIKey 表单取消后不回到 ChatGPT 登录选择"
+    );
+
+    next = replaceAnyExact(
+      next,
+      [
+        ["let g=h;if(a&&!r){", "let g=!1;if(a&&!r){"],
+        ["let _=g;if(a&&!r){", "let _=!1;if(a&&!r){"]
+      ],
+      "隐藏 ChatGPT 方案徽标"
+    );
+    next = replaceAllIfPresent(next, "https://platform.openai.com/api-keys", config.openai.tokenUrl);
+    next = replaceAllIfPresent(next, "defaultMessage:`Welcome to Codex`", "defaultMessage:`欢迎使用锐智`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Get started with Codex`", "defaultMessage:`使用 APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`The best way to build with agents`", "defaultMessage:`输入 APIKey 开始使用`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Sign in with ChatGPT`", "defaultMessage:`APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Continue with ChatGPT`", "defaultMessage:`APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Sign in another way`", "defaultMessage:`输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Sign up`", "defaultMessage:`注册入口已关闭`");
+    next = replaceAllIfPresent(next, "defaultMessage:`OpenAI API key`", "defaultMessage:`APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Enter your OpenAI API key`", "defaultMessage:`输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`sk-...`", "defaultMessage:`请输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`sk-…`", "defaultMessage:`请输入 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Get API Key`", "defaultMessage:`获取锐擎API Key`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Cloud tasks disabled with API key`", "defaultMessage:`请使用 APIKey 登录`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Use API Key`", "defaultMessage:`使用 APIKey`");
+    next = replaceAllIfPresent(next, "defaultMessage:`Cancel`", "defaultMessage:`清空`");
+    next = replaceAllIfPresent(next, "defaultMessage:`OK`", "defaultMessage:`登录`");
+    next = replaceRegexAll(
+      next,
+      /try\{await ([A-Za-z_$][\w$]*)\(`login-with-api-key`,\{hostId:([A-Za-z_$][\w$]*),apiKey:([A-Za-z_$][\w$]*)\}\)([),;])/g,
+      "try{if(!window.ruizhiDesktop?.auth?.setAndTest)throw new Error(`APIKey 校验模块未加载`);const ruizhiResult=await window.ruizhiDesktop.auth.setAndTest($3);if(!ruizhiResult?.ok)throw new Error(ruizhiResult?.error||`APIKey 校验失败`);const ruizhiApiKey=ruizhiResult.apiKey||$3;await $1(`login-with-api-key`,{hostId:$2,apiKey:ruizhiApiKey})$4",
+      "登录页 APIKey 提交前校验"
+    );
+    next = replaceRegex(
+      next,
+      /(\(0,[A-Za-z_$][\w$]*\.jsx\)\(`input`,\{ref:[A-Za-z_$][\w$]*,)(?!type:`password`,)(className:`mt-4 w-full rounded-lg border border-token-border bg-token-input-background px-3 py-2 text-sm text-token-foreground focus:border-token-focus-border focus:outline-none`,placeholder:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,onChange:[A-Za-z_$][\w$]*,onFocus:[A-Za-z_$][\w$]*\}\))/,
+      "$1type:`password`,$2",
+      "退出登录页 APIKey 输入框使用密码类型"
+    );
+
+    return next;
+  });
+
+  log(`已补丁登录路由：${path.basename(loginRouteFile)}`);
+}
+
+function replaceLocaleMessage(source, key, value) {
+  const pattern = new RegExp(`("${escapeRegExp(key)}":)\`[^\`]*\``);
+  if (!pattern.test(source)) {
+    throw new Error(`找不到中文翻译键：${key}`);
+  }
+  return source.replace(pattern, `$1\`${value}\``);
+}
+
+function patchWebviewLocales() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const localeFiles = fs.readdirSync(assetsDir)
+    .filter((name) => /^zh-(CN|HK|TW)-.*\.js$/.test(name))
+    .map((name) => path.join(assetsDir, name));
+
+  if (localeFiles.length === 0) {
+    throw new Error("找不到中文 webview locale bundle");
+  }
+
+  const replacements = new Map([
+    ["codex.archiveInfo.electron", "查看已删除的聊天：{settingsLink}"],
+    ["codex.archiveInfo.extension", "在你的 .codex 文件夹中查看已删除的聊天。"],
+    ["codex.gallery.dropdowns.submenu.tertiary", "删除"],
+    ["codex.localTaskRow.archiveTask", "删除对话"],
+    ["electron.onboarding.login.apikey.cancel", "清空"],
+    ["electron.onboarding.login.apikey.continue", "登录"],
+    ["electron.onboarding.login.apikey.label", "APIKey"],
+    ["electron.onboarding.login.apikey.open", "输入 APIKey"],
+    ["electron.onboarding.login.apikey.open.welcomeV2", "输入 APIKey"],
+    ["electron.onboarding.login.apikey.placeholder", "请输入 APIKey"],
+    ["electron.onboarding.login.chatgpt.cancel", "取消"],
+    ["electron.onboarding.login.chatgpt.cancel.welcomeV2", "取消"],
+    ["electron.onboarding.login.chatgpt.continue", "APIKey 登录"],
+    ["electron.onboarding.login.chatgpt.signIn", "APIKey 登录"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "APIKey 登录"],
+    ["electron.onboarding.login.includedPlans.welcomeV2", ""],
+    ["electron.onboarding.login.signup.welcomeV2", "注册入口已关闭"],
+    ["electron.onboarding.login.subtitle", "输入 APIKey 开始使用"],
+    ["electron.onboarding.login.title", "欢迎使用锐智"],
+    ["electron.onboarding.login.welcomeV2.title", "使用 APIKey 登录"],
+    ["electron.onboarding.login.welcomeV2.title.streamlined", "欢迎使用锐智"],
+    ["localTaskRow.archiveError", "无法删除对话"],
+    ["settings.dataControls.archivedChats.empty", "暂无已删除的聊天。"],
+    ["settings.dataControls.archivedChats.error", "无法加载已删除的聊天。"],
+    ["settings.dataControls.archivedChats.loading", "正在加载已删除的聊天…"],
+    ["settings.dataControls.archivedChats.unarchive", "恢复"],
+    ["settings.dataControls.archivedChats.unarchiveError", "无法恢复聊天"],
+    ["settings.dataControls.archivedChats.unarchiveSuccessPlain", "对话已恢复。"],
+    ["settings.nav.data-controls", "已删除对话"],
+    ["settings.section.data-controls", "已删除对话"],
+    ["sidebarElectron.archiveProjectThreads", "删除对话"],
+    ["sidebarElectron.archiveProjectThreads.archiving", "正在删除…"],
+    ["sidebarElectron.archiveProjectThreads.confirm", "全部删除"],
+    ["sidebarElectron.archiveProjectThreads.confirmSubtitle", "这会将 {projectLabel} 中的对话移到已删除对话。之后你可以在那里恢复它们"],
+    ["sidebarElectron.archiveProjectThreads.confirmTitle", "{count, plural, one {删除 # 个对话？} other {删除 # 个对话？}}"],
+    ["sidebarElectron.archiveProjectThreads.error", "无法删除 {projectLabel} 中的活跃对话"],
+    ["sidebarElectron.archiveProjectThreads.partialError", "已删除 {projectLabel} 中的 {successCount, plural, one {# 个对话} other {# 个对话}}；{failedCount} 个失败"],
+    ["sidebarElectron.archiveProjectThreads.success", "已删除 {count, plural, one {# 个对话} other {# 个对话}}"],
+    ["sidebarElectron.archiveRemoteProjectThreads", "删除对话"],
+    ["sidebarElectron.archiveThread", "删除对话"],
+    ["sidebarElectron.archiveThreadError", "无法删除对话"],
+    ["threadHeader.archiveConfirmConfirm", "删除"],
+    ["threadHeader.archiveConfirmHeartbeatConfirm", "删除并移除"],
+    ["threadHeader.archiveConfirmHeartbeatSubtitleNamed", "此对话有一个正在运行的心跳自动化：{name}。删除对话也会将其移除并停止后续运行。"],
+    ["threadHeader.archiveConfirmHeartbeatSubtitleUnnamed", "此对话有一个正在运行的心跳自动化。删除对话也会将其移除并停止后续运行。"],
+    ["threadHeader.archiveConfirmHeartbeatTitle", "删除对话并移除自动化？"],
+    ["threadHeader.archiveConfirmSubtitle", "稍后可在已删除对话中恢复。"],
+    ["threadHeader.archiveConfirmTitle", "删除对话？"]
+  ]);
+
+  for (const localeFile of localeFiles) {
+    writePatchedFile(localeFile, (source) => {
+      let next = source;
+      for (const [key, value] of replacements) {
+        next = replaceLocaleMessage(next, key, value);
+      }
+      return next;
+    });
+    log(`已补丁中文翻译：${path.basename(localeFile)}`);
+  }
+}
+
+function patchPackageMetadata() {
+  const packagePath = path.join(extractedDir, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packagePath, "utf8"));
+  packageJson.name = "ruizhi-desktop";
+  packageJson.productName = windowsTaskManagerName();
+  packageJson.version = appVersion;
+  packageJson.description = "锐智桌面端";
+  fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  log("已补丁 package 元数据");
+}
+
+function patchWebviewHtml() {
+  const htmlPath = path.join(extractedDir, "webview", "index.html");
+  writePatchedFile(htmlPath, (source) =>
+    replaceExact(source, "<title>Codex</title>", `<title>${windowsTaskManagerName()}</title>`, "窗口标题")
+  );
+  log("已补丁 webview HTML 标题");
+}
+
+function patchDefaultLocale() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const localeResolverFile = findOneFile(assetsDir, /^locale-resolver-.*\.js$/, "locale resolver bundle");
+
+  writePatchedFile(localeResolverFile, (source) =>
+    replaceExact(source, "var t=`en-US`", `var t=\`${config.locale}\``, "默认语言")
+  );
+
+  log(`已补丁默认语言：${path.basename(localeResolverFile)}`);
+}
+
+function templateLiteralValuePattern() {
+  return /`((?:\\.|[^`\\])*)`/g;
+}
+
+function replaceBrandInVisibleText(value) {
+  return value.replace(/Codex/g, (match, offset, source) => {
+    const before = source.slice(Math.max(0, offset - 16), offset);
+    if (/GPT-[0-9A-Za-z_. -]*$/i.test(before)) {
+      return match;
+    }
+    return config.productName;
+  });
+}
+
+function localeBundlePattern(locale) {
+  return new RegExp(`^${escapeRegExp(locale)}-.*\\.js$`);
+}
+
+function loadLocaleMessages(locale) {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const localeFile = findOneFile(assetsDir, localeBundlePattern(locale), `${locale} locale bundle`);
+  const source = fs.readFileSync(localeFile, "utf8");
+  const messages = new Map();
+  const pattern = /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g;
+
+  for (const match of source.matchAll(pattern)) {
+    messages.set(match[1], replaceBrandInVisibleText(match[2]));
+  }
+
+  if (messages.size === 0) {
+    throw new Error(`${locale} locale bundle 为空：${localeFile}`);
+  }
+
+  return { localeFile, messages };
+}
+
+function patchTemplateLiteralValues(source, transform) {
+  return source.replace(templateLiteralValuePattern(), (literal, value) => {
+    const next = transform(value);
+    return next === value ? literal : `\`${next}\``;
+  });
+}
+
+function patchLocaleBundleBrandText(localeFile) {
+  const original = fs.readFileSync(localeFile, "utf8");
+  const patched = patchTemplateLiteralValues(original, replaceBrandInVisibleText);
+  if (patched !== original) {
+    fs.writeFileSync(localeFile, patched, "utf8");
+  }
+}
+
+function listWebviewTextFiles() {
+  const webviewRoot = path.join(extractedDir, "webview");
+  const allowedExtensions = new Set([".js", ".html"]);
+  const files = [];
+
+  function walk(dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.isFile() && allowedExtensions.has(path.extname(entry.name))) {
+        files.push(fullPath);
+      }
+    }
+  }
+
+  walk(webviewRoot);
+  return files;
+}
+
+function patchFrontendDefaultMessages() {
+  const { localeFile, messages } = loadLocaleMessages(config.locale);
+  let changedFiles = 0;
+  let changedMessages = 0;
+
+  patchLocaleBundleBrandText(localeFile);
+
+  for (const filePath of listWebviewTextFiles()) {
+    if (filePath === localeFile) {
+      continue;
+    }
+    const original = fs.readFileSync(filePath, "utf8");
+    const patched = original.replace(
+      /id:`([^`]+)`,defaultMessage:`((?:\\.|[^`\\])*)`/g,
+      (match, id, defaultMessage) => {
+        const localized = messages.get(id);
+        const nextMessage = localized ?? replaceBrandInVisibleText(defaultMessage);
+        if (nextMessage === defaultMessage) {
+          return match;
+        }
+        changedMessages += 1;
+        return `id:\`${id}\`,defaultMessage:\`${nextMessage}\``;
+      }
+    );
+
+    if (patched !== original) {
+      fs.writeFileSync(filePath, patched, "utf8");
+      changedFiles += 1;
+    }
+  }
+
+  log(`已补丁前端默认中文文案：${changedMessages} 条，${changedFiles} 个文件`);
+}
+
+function patchAppSunsetGate() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const appSunsetFile = findOneFileByContent(
+    assetsDir,
+    /\.js$/,
+    /appSunset\.title[\s\S]*`2929582856`/,
+    "app sunset gate bundle"
+  );
+
+  writePatchedFile(appSunsetFile, (source) =>
+    replaceRegex(
+      source,
+      /if\(([A-Za-z_$][\w$]*)\(`2929582856`\)\)\{/,
+      "if(false&&$1(`2929582856`)){",
+      "禁用远端 app sunset 强制更新拦截"
+    )
+  );
+  log(`已禁用 app sunset 强制更新拦截：${path.basename(appSunsetFile)}`);
+}
+
+function patchModelAvailabilityAllowlist() {
+  if (!modelCatalogEnabled()) {
+    log("跳过模型白名单补丁：自定义模型目录已关闭");
+    return;
+  }
+
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const modelSettingsFile = findOneFileByContent(
+    assetsDir,
+    /^(use-model-settings|model-queries)-.*\.js$/,
+    /useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`/,
+    "model settings bundle"
+  );
+
+  writePatchedFile(modelSettingsFile, (source) =>
+    replaceRegex(
+      source,
+      /let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\.useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`,([A-Za-z_$][\w$]*);/,
+      "let $1=!1,$2;",
+      "禁用官方模型 available_models 白名单过滤"
+    )
+  );
+
+  log(`已禁用模型白名单过滤：${path.basename(modelSettingsFile)}`);
+}
+
+function patchOfficialUpdateLogic() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+
+  writePatchedFile(mainFile, (source) =>
+    replaceRegex(
+      source,
+      /([A-Za-z_$][\w$]*)=t\.[A-Za-z_$][\w$]*\.shouldIncludeSparkle\(([A-Za-z_$][\w$]*),process\.platform,process\.env\),([A-Za-z_$][\w$]*)=t\.[A-Za-z_$][\w$]*\.shouldIncludeUpdater\(\2,process\.platform,process\.env\)/,
+      "$1=!1,$3=!1",
+      "禁用 Codex 官方 Sparkle/updater 能力"
+    )
+  );
+
+  log(`已禁用 Codex 官方更新逻辑：${path.basename(mainFile)}`);
+}
+
+function patchOnboardingWindowMode() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+
+  writePatchedFile(mainFile, (source) =>
+    replaceRegex(
+      source,
+      /function ([A-Za-z_$][\w$]*)\(e\)\{return e\.mode===`onboarding`\?e\.onboardingVariant===`v2`\?\{width:[A-Za-z_$][\w$]*,height:[A-Za-z_$][\w$]*\}:\{width:[A-Za-z_$][\w$]*,height:[A-Za-z_$][\w$]*\}:null\}/,
+      "function $1(e){return null}",
+      "禁用 onboarding 紧凑窗口尺寸，登录页沿用主窗口尺寸"
+    )
+  );
+
+  log(`已禁用 onboarding 紧凑窗口尺寸：${path.basename(mainFile)}`);
+}
+
+function jsonLiteral(value) {
+  return JSON.stringify(value);
+}
+
+function bootstrapInitCode() {
+  const posixLocale = config.locale.replace("-", "_");
+  const configLines = managedConfigTomlLines().map((line) => jsonLiteral(line)).join(",");
+  const imageGenHelper = imageGenHelperExeName();
+  const marketplaceSpecs = pluginMarketplaces().map((marketplace) => ({
+    name: marketplace.name,
+    resourcePath: splitConfigPath(marketplace.resourcePath),
+    installPath: splitConfigPath(marketplace.installPath),
+    versionManifestPath: splitConfigPath(marketplace.versionManifestPath),
+    sourceToken: marketplaceSourceToken(marketplace.name)
+  }));
+  marketplaceSpecs.push({
+    name: "openai-bundled",
+    resourcePath: ["plugins", "openai-bundled"],
+    installPath: [".tmp", "bundled-marketplaces", "openai-bundled"],
+    versionManifestPath: [".agents", "plugins", "marketplace.json"],
+    sourceToken: marketplaceSourceToken("openai-bundled"),
+    alwaysCopy: true,
+    hardcodedPlugins: true
+  });
+  const execPolicyConfig = config.execPolicy ?? {};
+  const managedRulesFileName = execPolicyConfig.managedRulesFileName ?? "ruizhi-managed.rules";
+  const allowPrefixRules = builtInAllowPrefixRules();
+  const oldGenerated = `model = ${jsonLiteral(config.openai.defaultModel)}\nmodel_provider = "openai"\nmodel_reasoning_effort = ${jsonLiteral(config.openai.defaultReasoningEffort)}\nopenai_base_url = ${jsonLiteral(config.openai.baseUrl)}\n\n[features]\nplugins = true\napps = true\nbrowser_use = true\n`;
+
+  return `
+function ruizhiInit(){
+  try{
+    const fs=require("node:fs");
+    const os=require("node:os");
+    const path=require("node:path");
+    const productName=${jsonLiteral(config.productName)};
+    const locale=${jsonLiteral(config.locale)};
+    const posixLocale=${jsonLiteral(posixLocale)};
+    const ruizhiHomeEnvName=${jsonLiteral(ruizhiHomeEnvName)};
+    const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
+    const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
+    const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
+    const modelBridgeConfig=${jsonLiteral({
+      enabled: modelBridgeEnabled(),
+      host: modelBridgeHost(),
+      port: modelBridgePort(),
+      scriptResourcePath: splitConfigPath(modelBridgeRuntimeResourcePath()),
+      routes: modelBridgeRoutes()
+    })};
+    const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabled())};
+    const imageGenHelper=${jsonLiteral(imageGenHelper)};
+    const modelCatalogFile="ruizhi-model-catalog.json";
+    const systemSkillsRoot=["skills",".system"];
+    const hiddenSystemSkillNames=${jsonLiteral(hiddenSystemSkillNames)};
+    const managedRulesFileName=${jsonLiteral(managedRulesFileName)};
+    const allowPrefixRules=${jsonLiteral(allowPrefixRules)};
+    const home=os.homedir();
+    const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
+    function defaultUserDataPath(){
+      if(process.platform==="win32"){
+        return path.join(process.env.APPDATA||path.join(home,"AppData","Roaming"),productName);
+      }
+      if(process.platform==="darwin"){
+        return path.join(home,"Library","Application Support",productName);
+      }
+      return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),productName);
+    }
+    const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
+    const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
+    const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
+    function stableModelBridgePort(basePort,seed){
+      let hash=0;
+      for(const char of String(seed||"")){
+        hash=(hash*31+char.charCodeAt(0))>>>0;
+      }
+      return basePort+1+(hash%997);
+    }
+    modelBridgeConfig.port=stableModelBridgePort(modelBridgeConfig.port,resourcesRoot);
+    function ensureLoopbackNoProxy(){
+      const required=["127.0.0.1","localhost","::1"];
+      const existing=[process.env.NO_PROXY,process.env.no_proxy].filter(value=>typeof value==="string"&&value.trim()).join(",");
+      const parts=existing.split(",").map(value=>value.trim()).filter(Boolean);
+      const lower=new Set(parts.map(value=>value.toLowerCase()));
+      for(const host of required){
+        if(!lower.has(host.toLowerCase()))parts.push(host);
+      }
+      const next=parts.join(",");
+      process.env.NO_PROXY=next;
+      process.env.no_proxy=next;
+    }
+    ensureLoopbackNoProxy();
+    function startModelBridge(){
+      if(!modelBridgeConfig.enabled)return null;
+      const scriptPath=path.join(resourcesRoot,...modelBridgeConfig.scriptResourcePath);
+      const bridge=require(scriptPath).startRuizhiResponsesBridge({
+        host:modelBridgeConfig.host,
+        port:modelBridgeConfig.port,
+        upstreamBaseUrl:openaiBaseUrl,
+        authHome:codexHome,
+        catalogPath:path.join(resourcesRoot,"models",modelCatalogFile),
+        routes:modelBridgeConfig.routes
+      });
+      return bridge.baseUrl;
+    }
+    const runtimeBridgeBaseUrl=startModelBridge();
+    const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
+    function rewriteRuntimeModelProviderBaseUrl(text){
+      if(runtimeModelProviderBaseUrl===modelProviderBaseUrl)return text;
+      return String(text).split(JSON.stringify(modelProviderBaseUrl)).join(JSON.stringify(runtimeModelProviderBaseUrl));
+    }
+    process.env[ruizhiHomeEnvName]=codexHome;
+    process.env.CODEX_HOME=codexHome;
+    process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
+    process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
+    process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
+    process.env.RUIZHI_IMAGEGEN_EXE=path.join(resourcesRoot,"bin",imageGenHelper);
+    process.env.LANG=${jsonLiteral(`${posixLocale}.UTF-8`)};
+    process.env.LANGUAGE=posixLocale;
+    process.env.LC_ALL=${jsonLiteral(`${posixLocale}.UTF-8`)};
+    try{n.app.commandLine.appendSwitch("lang",locale)}catch{}
+    fs.mkdirSync(codexHome,{recursive:true});
+    fs.mkdirSync(userData,{recursive:true});
+
+    function copyIfChanged(source,target){
+      if(!fs.existsSync(source))return false;
+      let changed=true;
+      try{
+        changed=!fs.existsSync(target)||fs.readFileSync(source).compare(fs.readFileSync(target))!==0;
+      }catch{
+        changed=true;
+      }
+      if(changed){
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.copyFileSync(source,target);
+      }
+      return changed;
+    }
+    function syncModelCache(){
+      const source=path.join(resourcesRoot,"models",modelCatalogFile);
+      const target=path.join(codexHome,"models_cache.json");
+      if(!modelCatalogEnabled||!fs.existsSync(source)){
+        fs.rmSync(target,{force:true});
+        return;
+      }
+      let sourceJson=null;
+      let targetJson=null;
+      let shouldCopy=true;
+      try{
+        sourceJson=JSON.parse(fs.readFileSync(source,"utf8"));
+        targetJson=fs.existsSync(target)?JSON.parse(fs.readFileSync(target,"utf8")):null;
+        shouldCopy=!targetJson||sourceJson.client_version!==targetJson.client_version||sourceJson.etag!==targetJson.etag||!Array.isArray(targetJson.models)||targetJson.models.length!==sourceJson.models.length;
+      }catch{
+        shouldCopy=true;
+      }
+      if(shouldCopy||sourceJson){
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        if(!sourceJson)sourceJson=JSON.parse(fs.readFileSync(source,"utf8"));
+        sourceJson.fetched_at=new Date().toISOString();
+        fs.writeFileSync(target,JSON.stringify(sourceJson,null,2)+"\\n","utf8");
+      }
+    }
+    function syncSystemSkills(){
+      const sourceRoot=path.join(resourcesRoot,...systemSkillsRoot);
+      const targetRoot=path.join(codexHome,...systemSkillsRoot);
+      for(const skillName of hiddenSystemSkillNames){
+        fs.rmSync(path.join(targetRoot,skillName),{recursive:true,force:true});
+      }
+      if(!fs.existsSync(sourceRoot))return;
+      for(const skillName of fs.readdirSync(sourceRoot)){
+        if(hiddenSystemSkillNames.includes(skillName))continue;
+        const source=path.join(sourceRoot,skillName,"SKILL.md");
+        if(!fs.existsSync(source))continue;
+        copyIfChanged(source,path.join(targetRoot,skillName,"SKILL.md"));
+      }
+    }
+    function copyDirectoryEntriesIfMissing(sourceRoot,targetRoot){
+      if(!fs.existsSync(sourceRoot))return 0;
+      let copied=0;
+      fs.mkdirSync(targetRoot,{recursive:true});
+      for(const entry of fs.readdirSync(sourceRoot,{withFileTypes:true})){
+        if(entry.name.startsWith(".")||entry.name==="openai-docs")continue;
+        const source=path.join(sourceRoot,entry.name);
+        const target=path.join(targetRoot,entry.name);
+        if(fs.existsSync(target))continue;
+        fs.cpSync(source,target,{recursive:true});
+        copied+=1;
+      }
+      return copied;
+    }
+    function syncLegacyCodexGlobalSkills(){
+      copyDirectoryEntriesIfMissing(path.join(home,".codex","skills"),path.join(home,".agents","skills"));
+    }
+    syncModelCache();
+    syncSystemSkills();
+    syncLegacyCodexGlobalSkills();
+
+    const marketplaceSpecs=${jsonLiteral(marketplaceSpecs)};
+    const hardcodedOpenAIBundledPlugins=${jsonLiteral(openAIBundledPluginDefinitions)};
+    function assertInside(base,target){
+      const relative=path.relative(path.resolve(base),path.resolve(target));
+      if(!relative||relative.startsWith("..")||path.isAbsolute(relative)){
+        throw new Error("拒绝覆盖锐智目录外的 marketplace："+target);
+      }
+    }
+    function readMarketplaceVersion(root,spec){
+      const manifestPath=path.join(root,...spec.versionManifestPath);
+      if(!fs.existsSync(manifestPath))return null;
+      const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
+      return [manifest.name||"",manifest.version||""].join("@");
+    }
+    function hardcodedOpenAIBundledMarketplace(){
+      return {
+        name:"openai-bundled",
+        interface:{displayName:"OpenAI"},
+        plugins:hardcodedOpenAIBundledPlugins.map(plugin=>({
+          name:plugin.name,
+          source:{source:"local",path:plugin.path},
+          policy:{installation:"AVAILABLE",authentication:"ON_INSTALL"},
+          category:plugin.category
+        }))
+      };
+    }
+    function writeHardcodedOpenAIBundledMarketplace(root){
+      const missing=[];
+      for(const plugin of hardcodedOpenAIBundledPlugins){
+        const pluginRoot=path.join(root,"plugins",plugin.name);
+        const manifestPath=path.join(pluginRoot,".codex-plugin","plugin.json");
+        if(!fs.existsSync(manifestPath))missing.push(plugin.name);
+      }
+      if(missing.length>0){
+        throw new Error("内置 OpenAI 插件资源缺失："+missing.join(", "));
+      }
+      const marketplacePath=path.join(root,".agents","plugins","marketplace.json");
+      fs.mkdirSync(path.dirname(marketplacePath),{recursive:true});
+      fs.writeFileSync(marketplacePath,JSON.stringify(hardcodedOpenAIBundledMarketplace(),null,2)+"\\n","utf8");
+    }
+    function copyMarketplaceDirectory(sourceRoot,targetRoot,spec){
+      const stagingRoot=targetRoot+".staging-"+process.pid+"-"+Date.now();
+      assertInside(codexHome,targetRoot);
+      assertInside(codexHome,stagingRoot);
+      fs.rmSync(stagingRoot,{recursive:true,force:true});
+      try{
+        fs.mkdirSync(path.dirname(stagingRoot),{recursive:true});
+        fs.cpSync(sourceRoot,stagingRoot,{recursive:true});
+        if(spec.hardcodedPlugins)writeHardcodedOpenAIBundledMarketplace(stagingRoot);
+        fs.rmSync(targetRoot,{recursive:true,force:true});
+        fs.renameSync(stagingRoot,targetRoot);
+      }catch(error){
+        fs.rmSync(stagingRoot,{recursive:true,force:true});
+        throw error;
+      }
+    }
+    function syncMarketplaces(){
+      const tokenValues={};
+      for(const spec of marketplaceSpecs){
+        const sourceRoot=path.join(resourcesRoot,...spec.resourcePath);
+        const targetRoot=path.join(codexHome,...spec.installPath);
+        tokenValues[spec.sourceToken]=targetRoot;
+        try{
+          const sourceVersion=readMarketplaceVersion(sourceRoot,spec);
+          if(!sourceVersion)throw new Error("缺少 marketplace 版本清单："+sourceRoot);
+          const targetVersion=readMarketplaceVersion(targetRoot,spec);
+          if(spec.alwaysCopy||sourceVersion!==targetVersion){
+            copyMarketplaceDirectory(sourceRoot,targetRoot,spec);
+          }else if(spec.hardcodedPlugins){
+            writeHardcodedOpenAIBundledMarketplace(targetRoot);
+          }
+        }catch(error){
+          console.error("ruizhi marketplace sync failed",spec.name,error);
+        }
+      }
+      return tokenValues;
+    }
+    function readPluginVersion(root){
+      const manifestPath=path.join(root,".codex-plugin","plugin.json");
+      if(!fs.existsSync(manifestPath))return null;
+      const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
+      return String(manifest.version||"").trim()||null;
+    }
+    function copyPluginDisplayFiles(sourceRoot,targetRoot){
+      const entries=[[".codex-plugin"],["assets"],["skills"]];
+      for(const entry of entries){
+        const source=path.join(sourceRoot,...entry);
+        if(!fs.existsSync(source))continue;
+        const target=path.join(targetRoot,...entry);
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.cpSync(source,target,{recursive:true,force:true});
+      }
+    }
+    function syncInstalledOpenAIBundledPluginCache(){
+      const sourcePluginsRoot=path.join(codexHome,".tmp","bundled-marketplaces","openai-bundled","plugins");
+      const cacheRoot=path.join(codexHome,"plugins","cache","openai-bundled");
+      if(!fs.existsSync(sourcePluginsRoot)||!fs.existsSync(cacheRoot))return;
+      for(const entry of fs.readdirSync(sourcePluginsRoot,{withFileTypes:true})){
+        if(!entry.isDirectory())continue;
+        const pluginCacheRoot=path.join(cacheRoot,entry.name);
+        if(!fs.existsSync(pluginCacheRoot))continue;
+        try{
+          const sourceRoot=path.join(sourcePluginsRoot,entry.name);
+          const version=readPluginVersion(sourceRoot);
+          if(!version)continue;
+          copyPluginDisplayFiles(sourceRoot,path.join(pluginCacheRoot,version));
+        }catch(error){
+          console.error("ruizhi OpenAI plugin cache sync failed",entry.name,error);
+        }
+      }
+    }
+    function marketplaceRoot(name,marketplaceSources){
+      const spec=marketplaceSpecs.find(item=>item.name===name);
+      return spec?marketplaceSources[spec.sourceToken]:null;
+    }
+    function splitRulePath(value){
+      return String(value??"").split(/[\\\\/]+/).filter(Boolean);
+    }
+    function resolveRulePath(rule,marketplaceSources){
+      if(rule.marketplace&&rule.path){
+        const root=marketplaceRoot(rule.marketplace,marketplaceSources);
+        return root?path.join(root,...splitRulePath(rule.path)):null;
+      }
+      if(rule.homePath){
+        return path.join(home,...splitRulePath(rule.homePath));
+      }
+      if(rule.codexHomePath){
+        return path.join(codexHome,...splitRulePath(rule.codexHomePath));
+      }
+      if(rule.resourcePath){
+        return path.join(resourcesRoot,...splitRulePath(rule.resourcePath));
+      }
+      return null;
+    }
+    function resolveRuleCommandPath(rule,marketplaceSources){
+      if(rule.commandMarketplace&&rule.commandPath){
+        const root=marketplaceRoot(rule.commandMarketplace,marketplaceSources);
+        return root?path.join(root,...splitRulePath(rule.commandPath)):null;
+      }
+      if(rule.commandHomePath){
+        return path.join(home,...splitRulePath(rule.commandHomePath));
+      }
+      if(rule.commandCodexHomePath){
+        return path.join(codexHome,...splitRulePath(rule.commandCodexHomePath));
+      }
+      if(rule.commandResourcePath){
+        return path.join(resourcesRoot,...splitRulePath(rule.commandResourcePath));
+      }
+      return null;
+    }
+    function syncExecPolicyRules(marketplaceSources){
+      if(!Array.isArray(allowPrefixRules)||allowPrefixRules.length===0)return;
+      const lines=[];
+      for(const rule of allowPrefixRules){
+        const prefix=Array.isArray(rule.prefix)?rule.prefix.filter(item=>typeof item==="string"&&item.length>0):[];
+        const commandPath=resolveRuleCommandPath(rule,marketplaceSources);
+        if(prefix.length===0&&!commandPath)continue;
+        const resolvedPath=resolveRulePath(rule,marketplaceSources);
+        const pattern=commandPath?[commandPath,...prefix]:(resolvedPath?[...prefix,resolvedPath]:prefix);
+        lines.push("prefix_rule(pattern="+JSON.stringify(pattern)+", decision=\\"allow\\")");
+      }
+      if(lines.length===0)return;
+      const rulesPath=path.join(codexHome,"rules",managedRulesFileName);
+      const next=lines.join("\\n")+"\\n";
+      const existing=fs.existsSync(rulesPath)?fs.readFileSync(rulesPath,"utf8"):"";
+      if(existing!==next){
+        fs.mkdirSync(path.dirname(rulesPath),{recursive:true});
+        fs.writeFileSync(rulesPath,next,"utf8");
+      }
+    }
+
+    const managedBegin="# BEGIN Ruizhi Managed Defaults";
+    const managedEnd="# END Ruizhi Managed Defaults";
+    const configTemplateLines=[${configLines}];
+    const marketplaceSources=syncMarketplaces();
+    syncInstalledOpenAIBundledPluginCache();
+    syncExecPolicyRules(marketplaceSources);
+    let managedBlock=configTemplateLines.join("\\n");
+    for(const [token,source] of Object.entries(marketplaceSources)){
+      managedBlock=managedBlock.split(token).join(JSON.stringify(source));
+    }
+    if(!managedBlock.endsWith("\\n"))managedBlock+="\\n";
+
+    function withFinalNewline(text){
+      return text.endsWith("\\n")?text:text+"\\n";
+    }
+    function stripLegacyManagedPrefix(text){
+      const normalized=text.charCodeAt(0)===0xfeff?text.slice(1):text;
+      if(!normalized.startsWith("# Managed by Ruizhi Desktop."))return text;
+      const matches=Array.from(normalized.matchAll(/\\n\\[[^\\]]+\\]/g));
+      for(const match of matches){
+        if(match[0].trim()!=="[features]"){
+          return normalized.slice(match.index+1).trimStart();
+        }
+      }
+      return "";
+    }
+    function mergeManagedConfig(existing){
+      if(!existing.trim())return managedBlock;
+      const beginIndex=existing.indexOf(managedBegin);
+      const endIndex=existing.indexOf(managedEnd);
+      if(beginIndex>=0&&endIndex>=beginIndex){
+        const before=existing.slice(0,beginIndex).trimEnd();
+        const after=existing.slice(endIndex+managedEnd.length).trimStart();
+        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\\n\\n"));
+      }
+      if(beginIndex>=0&&endIndex<beginIndex){
+        const before=existing.slice(0,beginIndex).trimEnd();
+        const body=existing.slice(beginIndex);
+        const tailMatch=body.match(/\\n\\[(?:windows|plugins\\.|projects\\.|mcp_servers\\.|profiles\\.)[^\\n]*\\]/);
+        const after=tailMatch?body.slice(tailMatch.index+1).trimStart():"";
+        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\\n\\n"));
+      }
+      const oldGenerated=${jsonLiteral(oldGenerated)};
+      if(existing.trim()===oldGenerated.trim()||existing.replace(/^\\uFEFF/,"").startsWith("# Managed by Ruizhi Desktop.")){
+        const rest=stripLegacyManagedPrefix(existing);
+        return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\\n\\n"));
+      }
+      if(!/^\\s*\\[/m.test(existing)){
+        return withFinalNewline([existing.trimEnd(),managedBlock.trimEnd()].filter(Boolean).join("\\n\\n"));
+      }
+      console.warn("ruizhi bootstrap kept unmanaged config.toml unchanged");
+      return existing;
+    }
+
+    function readWindowsSandboxModeFromConfig(text){
+      let inWindowsSection=false;
+      for(const rawLine of String(text??"").split(/\\r?\\n/)){
+        const line=rawLine.trim();
+        if(!line||line.startsWith("#"))continue;
+        const section=line.match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
+        if(section){
+          inWindowsSection=section[1].trim()==="windows";
+          continue;
+        }
+        if(!inWindowsSection)continue;
+        const match=line.match(/^sandbox\\s*=\\s*["']?([^"'\\s#]+)["']?\\s*(?:#.*)?$/);
+        if(match&&(match[1]==="elevated"||match[1]==="unelevated"))return match[1];
+      }
+      return null;
+    }
+    function hasWindowsSandboxSetup(root){
+      return process.platform==="win32"&&fs.existsSync(path.join(root,".sandbox","setup_marker.json"))&&fs.existsSync(path.join(root,".sandbox-secrets","sandbox_users.json"));
+    }
+    function ensureWindowsSandboxMode(text,mode){
+      if(process.platform!=="win32"||!mode||readWindowsSandboxModeFromConfig(text)!=null)return text;
+      const nextLines=withFinalNewline(text).split(/\\r?\\n/);
+      let windowsSectionIndex=-1;
+      for(let index=0;index<nextLines.length;index+=1){
+        const section=nextLines[index].trim().match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
+        if(section&&section[1].trim()==="windows"){
+          windowsSectionIndex=index;
+          break;
+        }
+      }
+      if(windowsSectionIndex>=0){
+        nextLines.splice(windowsSectionIndex+1,0,"sandbox = "+JSON.stringify(mode));
+        return withFinalNewline(nextLines.join("\\n").trimEnd());
+      }
+      return withFinalNewline([text.trimEnd(),"","[windows]","sandbox = "+JSON.stringify(mode)].filter(Boolean).join("\\n"));
+    }
+    function readConfigIfExists(root){
+      const target=path.join(root,"config.toml");
+      return fs.existsSync(target)?fs.readFileSync(target,"utf8"):"";
+    }
+    function inferWindowsSandboxMode(primaryText){
+      const fallbackCodexHome=path.join(home,".codex");
+      return readWindowsSandboxModeFromConfig(primaryText)||readWindowsSandboxModeFromConfig(readConfigIfExists(fallbackCodexHome))||"elevated";
+    }
+    function syncWindowsSandboxConfig(root,preferredMode){
+      if(!hasWindowsSandboxSetup(root))return;
+      const target=path.join(root,"config.toml");
+      const existing=readConfigIfExists(root);
+      const mode=readWindowsSandboxModeFromConfig(existing)||preferredMode||"elevated";
+      const next=ensureWindowsSandboxMode(existing,mode);
+      if(next!==existing){
+        fs.mkdirSync(path.dirname(target),{recursive:true});
+        fs.writeFileSync(target,next,"utf8");
+      }
+    }
+    function syncFallbackWindowsSandboxConfig(preferredMode){
+      if(process.platform!=="win32")return;
+      const roots=[codexHome,path.join(home,".codex")];
+      const seen=new Set();
+      for(const root of roots){
+        const resolved=path.resolve(root);
+        if(seen.has(resolved))continue;
+        seen.add(resolved);
+        syncWindowsSandboxConfig(root,preferredMode);
+      }
+    }
+
+    const configPath=path.join(codexHome,"config.toml");
+    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+    let next=mergeManagedConfig(existing);
+    next=rewriteRuntimeModelProviderBaseUrl(next);
+    const sandboxMode=hasWindowsSandboxSetup(codexHome)?inferWindowsSandboxMode(next):readWindowsSandboxModeFromConfig(next);
+    if(hasWindowsSandboxSetup(codexHome))next=ensureWindowsSandboxMode(next,sandboxMode);
+    if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
+    syncFallbackWindowsSandboxConfig(readWindowsSandboxModeFromConfig(next));
+  }catch(e){
+    console.error("ruizhi bootstrap init failed",e);
+  }
+}
+ruizhiInit();
+`;
+}
+
+function bootstrapLegacyUpdateCode() {
+  const updates = config.updates ?? {};
+  const updateConfig = {
+    enabled: updates.enabled !== false,
+    manifestUrl: process.env.RUIZHI_UPDATE_MANIFEST_URL ?? updates.manifestUrl ?? "",
+    requestTimeoutMs: updates.requestTimeoutMs ?? 8000,
+    downloadTimeoutMs: updates.downloadTimeoutMs ?? 600000,
+    downloadConcurrency: updates.downloadConcurrency ?? 8,
+    downloadChunkSizeBytes: updates.downloadChunkSizeBytes ?? 4194304,
+    currentVersion: appVersion
+  };
+  const authConfig = {
+    productName: config.productName,
+    ruizhiHomeEnvName,
+    ruizhiDefaultHomeDirName,
+    baseUrl: config.openai.baseUrl,
+    testModel: apiKeyTestConfig.model ?? "qwen3.6-flash",
+    testTimeoutMs: apiKeyTestConfig.timeoutMs ?? 15000
+  };
+
+  return `
+function ruizhiStartBackgroundUpdateCheck(){
+  const updateConfig=${jsonLiteral(updateConfig)};
+  const authConfig=${jsonLiteral(authConfig)};
+  if(process.platform!=="win32"||!n.app.isPackaged)return;
+  const fs=require("node:fs");
+  const os=require("node:os");
+  const path=require("node:path");
+  const crypto=require("node:crypto");
+  const childProcess=require("node:child_process");
+  const http=require("node:http");
+  const https=require("node:https");
+  const stream=require("node:stream");
+  const streamPromises=require("node:stream/promises");
+  function readRuizhiEnvironment(){
+    const markerPath=path.join(process.resourcesPath,"ruizhi-environment.json");
+    if(!fs.existsSync(markerPath))return {name:"production"};
+    try{
+      const marker=JSON.parse(fs.readFileSync(markerPath,"utf8"));
+      const name=String(marker.environment||"production").trim()||"production";
+      return {name};
+    }catch(error){
+      console.warn("ruizhi environment marker invalid",error);
+      return {name:"production"};
+    }
+  }
+  const ruizhiEnvironment=readRuizhiEnvironment();
+  function ruizhiVersionLabel(){
+    const base=updateConfig.currentVersion||n.app.getVersion();
+    return ruizhiEnvironment.name==="production"?base:base+"-"+ruizhiEnvironment.name;
+  }
+  let pendingInstaller=null;
+  let checking=false;
+  let installing=false;
+  let installWatcherStarted=false;
+  let updateState={
+    status:"idle",
+    currentVersion:ruizhiVersionLabel(),
+    environment:ruizhiEnvironment.name,
+    version:null,
+    progress:0,
+    downloadedBytes:0,
+    totalBytes:0,
+    message:""
+  };
+  let lastProgressEmit=0;
+
+  function publicUpdateState(){
+    return {...updateState};
+  }
+  function broadcastUpdateState(force=false){
+    const now=Date.now();
+    if(!force&&now-lastProgressEmit<250)return;
+    lastProgressEmit=now;
+    const snapshot=publicUpdateState();
+    for(const win of n.BrowserWindow.getAllWindows()){
+      if(!win.isDestroyed())win.webContents.send("ruizhi:update:state-changed",snapshot);
+    }
+  }
+  function setUpdateState(patch,force=false){
+    updateState={...updateState,...patch};
+    broadcastUpdateState(force);
+  }
+
+  function compareVersions(left,right){
+    const parse=value=>String(value??"").split(/[^0-9]+/).filter(Boolean).map(part=>Number(part));
+    const a=parse(left),b=parse(right),length=Math.max(a.length,b.length);
+    for(let index=0;index<length;index+=1){
+      const diff=(a[index]??0)-(b[index]??0);
+      if(diff!==0)return diff;
+    }
+    return 0;
+  }
+  function updateReadyWindow(){
+    let win=null,lastVersion="";
+    const html="<html><head><meta charset='utf-8'><style>body{margin:0;font-family:'Microsoft YaHei',sans-serif;background:#101418;color:#f4f7fb;display:flex;align-items:center;justify-content:center;height:100vh}main{width:360px}.title{font-size:18px;font-weight:600;margin-bottom:12px}.message{font-size:13px;color:#b8c2cc;line-height:1.7}.version{color:#fff;font-weight:600}.actions{margin-top:20px;text-align:right}button{border:0;border-radius:8px;background:#43b883;color:#07110c;font-size:13px;font-weight:600;padding:8px 18px;cursor:pointer}button:hover{background:#56d396}</style></head><body><main><div class='title'>锐智更新已就绪</div><div class='message'>新版本 <span id='version' class='version'></span> 已下载，退出锐智后将自动安装。</div><div class='actions'><button id='ok'>知道了</button></div></main><script>document.getElementById('ok').addEventListener('click',()=>window.close());</script></body></html>";
+    function applyVersion(){
+      if(win==null||win.isDestroyed())return;
+      win.webContents.executeJavaScript("(()=>{const v=document.getElementById('version');if(v)v.textContent="+JSON.stringify(lastVersion)+";})()",true).catch(()=>{});
+    }
+    return {
+      show(version){
+        lastVersion=String(version??"");
+        if(win==null||win.isDestroyed()){
+          win=new n.BrowserWindow({width:460,height:190,resizable:false,maximizable:false,minimizable:false,alwaysOnTop:false,show:false,title:"锐智更新已就绪",webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true}});
+          win.setMenu(null);
+          win.loadURL("data:text/html;charset=utf-8,"+encodeURIComponent(html)).catch(()=>{});
+          win.webContents.once("did-finish-load",applyVersion);
+          win.once("ready-to-show",()=>{win!=null&&!win.isDestroyed()&&win.show()});
+        }else{
+          applyVersion();
+          win.show();
+          win.focus();
+        }
+      }
+    };
+  }
+  function requestUrl(url,timeoutMs,responseHandler,options={}){
+    const parsed=new URL(url);
+    if(parsed.protocol!=="https:"&&parsed.protocol!=="http:")throw new Error("更新 URL 协议不受支持："+parsed.protocol);
+    const transport=parsed.protocol==="https:"?https:http;
+    const redirectCount=Number(options.redirectCount)||0;
+    const headers={...options.headers};
+    return new Promise((resolve,reject)=>{
+      let settled=false;
+      function settle(error,value){
+        if(settled)return;
+        settled=true;
+        if(error)reject(error);
+        else resolve(value);
+      }
+      const body=options.body;
+      const request=transport.request(parsed,{method:options.method||"GET",headers:{"Cache-Control":"no-store","User-Agent":"Ruizhi-Updater/"+n.app.getVersion(),...headers}},response=>{
+        const status=response.statusCode??0;
+        if([301,302,303,307,308].includes(status)&&response.headers.location){
+          response.resume();
+          if(redirectCount>=3){
+            settle(new Error("更新请求重定向过多"));
+            return;
+          }
+          let nextUrl;
+          try{
+            nextUrl=new URL(response.headers.location,parsed).toString();
+          }catch(error){
+            settle(error);
+            return;
+          }
+          requestUrl(nextUrl,timeoutMs,responseHandler,{redirectCount:redirectCount+1,headers}).then(value=>settle(null,value),settle);
+          return;
+        }
+        Promise.resolve(responseHandler(response,status)).then(value=>settle(null,value),settle);
+      });
+      request.on("error",settle);
+      request.setTimeout(timeoutMs,()=>request.destroy(new Error("更新请求超时："+url)));
+      if(body!=null)request.write(body);
+      request.end();
+    });
+  }
+  async function readResponseText(response){
+    const chunks=[];
+    for await(const chunk of response){
+      chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  function delay(ms){
+    return new Promise(resolve=>setTimeout(resolve,ms));
+  }
+  function sha256Path(filePath){
+    const hash=crypto.createHash("sha256");
+    hash.update(fs.readFileSync(filePath));
+    return hash.digest("hex").toLowerCase();
+  }
+  function authHome(){
+    const home=os.homedir();
+    const explicit=(process.env[authConfig.ruizhiHomeEnvName]||"").trim()||(process.env.CODEX_HOME||"").trim();
+    return explicit||path.join(home,authConfig.ruizhiDefaultHomeDirName);
+  }
+  function authPath(){
+    return path.join(authHome(),"auth.json");
+  }
+  function maskApiKey(key){
+    const value=String(key||"").trim();
+    if(!value)return "";
+    if(value.length<=18)return value.slice(0,4)+"*******"+value.slice(-4);
+    return value.slice(0,10)+"*******"+value.slice(-7);
+  }
+  function readApiKeyStatus(){
+    const filePath=authPath();
+    let key="";
+    try{
+      if(fs.existsSync(filePath)){
+        const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
+        key=String(auth.OPENAI_API_KEY||"").trim();
+      }
+    }catch(error){
+      return {configured:false,masked:"",error:String(error?.message||error),version:n.app.getVersion()};
+    }
+    return {configured:key.length>0,masked:maskApiKey(key),version:n.app.getVersion()};
+  }
+  function writeApiKey(key){
+    const filePath=authPath();
+    fs.mkdirSync(path.dirname(filePath),{recursive:true});
+    fs.writeFileSync(filePath,JSON.stringify({auth_mode:"apikey",OPENAI_API_KEY:key},null,2)+"\\n","utf8");
+    process.env.OPENAI_API_KEY=key;
+    process.env.RUIZHI_API_KEY=key;
+  }
+  function normalizeApiKey(input){
+    const value=String(input??"").trim().replace(/[\\s\\uFEFF]+/g,"");
+    if(value&&/[^\\x21-\\x7E]/.test(value)){
+      throw new Error("APIKey 包含无效字符，请重新复制完整 APIKey");
+    }
+    return value;
+  }
+  function resetAuthToLogin(){
+    const filePath=authPath();
+    let removed=false;
+    let backupPath=null;
+    if(fs.existsSync(filePath)){
+      backupPath=filePath+".before-api-key-change."+Date.now()+".bak";
+      try{
+        fs.copyFileSync(filePath,backupPath);
+      }catch(error){
+        console.warn("ruizhi auth backup failed",error);
+        backupPath=null;
+      }
+      fs.rmSync(filePath,{force:true});
+      removed=true;
+    }
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.RUIZHI_API_KEY;
+    return {removed,backupPath};
+  }
+  function relaunchCurrentApp(){
+    const child=childProcess.spawn(process.execPath,process.argv.slice(1),{
+      cwd:path.dirname(process.execPath),
+      detached:true,
+      stdio:"ignore",
+      env:process.env
+    });
+    child.unref();
+    n.app.exit(0);
+  }
+  async function testApiKey(key){
+    const baseUrl=String(authConfig.baseUrl||"").replace(/\\/+$/,"");
+    if(!baseUrl)throw new Error("缺少 API Base URL");
+    const url=baseUrl+"/chat/completions";
+    const payload=JSON.stringify({
+      model:authConfig.testModel,
+      messages:[{role:"user",content:"ping"}],
+      max_tokens:1,
+      stream:false
+    });
+    await requestUrl(url,authConfig.testTimeoutMs,async(response,status)=>{
+      const text=await readResponseText(response);
+      if(status<200||status>=300){
+        let detail=text.slice(0,500);
+        try{
+          const json=JSON.parse(text);
+          detail=json.error?.message||json.message||detail;
+        }catch{}
+        throw new Error("APIKey 校验失败："+status+" "+(response.statusMessage||"")+" "+detail);
+      }
+      return true;
+    },{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+key,"Content-Length":Buffer.byteLength(payload)},body:payload});
+  }
+  function vcRedistInstallerPath(){
+    return path.join(process.resourcesPath||path.dirname(process.execPath),"prerequisites","vc_redist.x64.exe");
+  }
+  function vcRedistLaunchLogPath(){
+    return path.join(os.tmpdir(),"ruizhi-vc-redist-launch.log");
+  }
+  function vcRedistInstallerScriptPath(){
+    return path.join(os.tmpdir(),"ruizhi-install-vc-redist.ps1");
+  }
+  function vcRedistAppWorkingDirectory(){
+    return path.dirname(process.execPath);
+  }
+  function windowsPowerShellPath(){
+    const systemRoot=process.env.SystemRoot||process.env.windir||"C:\\Windows";
+    return path.join(systemRoot,"System32","WindowsPowerShell","v1.0","powershell.exe");
+  }
+  function writeVcRedistInstallerScript(scriptPath){
+    const script=[
+      "param([string]$Installer,[string]$RedistLog,[string]$LaunchLog,[string]$AppExe,[string]$WorkingDirectory,[int]$ParentPid)",
+      "$ErrorActionPreference = 'Stop'",
+      "function Write-LaunchLog([string]$Message) {",
+      "  $stamp = Get-Date -Format o",
+      "  Add-Content -LiteralPath $LaunchLog -Value ($stamp + ' ' + $Message) -Encoding UTF8",
+      "}",
+      "try {",
+      "  Write-LaunchLog ('installer=' + $Installer)",
+      "  Write-LaunchLog ('redistLog=' + $RedistLog)",
+      "  if (!(Test-Path -LiteralPath $Installer)) { throw ('installer not found: ' + $Installer) }",
+      "  $arguments = @('/install','/passive','/norestart','/log',$RedistLog)",
+      "  Write-LaunchLog 'starting vc_redist with UAC'",
+      "  $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Verb RunAs -Wait -PassThru",
+      "  $exitCode = $process.ExitCode",
+      "  if ($null -eq $exitCode) { $exitCode = 0 }",
+      "  Write-LaunchLog ('vc_redist_exit=' + $exitCode)",
+      "  if ($exitCode -eq 0 -or $exitCode -eq 3010 -or $exitCode -eq 1638) {",
+      "    Write-LaunchLog 'vc_redist_success'",
+      "    exit 0",
+      "  }",
+      "  exit $exitCode",
+    "} catch {",
+      "  Write-LaunchLog ('failed=' + $_.Exception.Message)",
+      "  exit 1",
+      "}"
+    ].join("\r\n");
+    fs.writeFileSync(scriptPath,script,"utf8");
+  }
+  function installVcRedist(){
+    if(process.platform!=="win32")return {ok:false,error:"仅 Windows 需要安装该依赖"};
+    const installerPath=vcRedistInstallerPath();
+    const logPath=path.join(os.tmpdir(),"ruizhi-vc-redist.log");
+    const launchLogPath=vcRedistLaunchLogPath();
+    const scriptPath=vcRedistInstallerScriptPath();
+    const workingDirectory=vcRedistAppWorkingDirectory();
+    const powershellPath=windowsPowerShellPath();
+    if(!fs.existsSync(installerPath))return {ok:false,error:"缺少内置运行依赖安装包",logPath,launchLogPath};
+    if(!fs.existsSync(powershellPath))return {ok:false,error:"未找到 Windows PowerShell："+powershellPath,logPath,launchLogPath};
+    try{
+      writeVcRedistInstallerScript(scriptPath);
+      fs.appendFileSync(launchLogPath,new Date().toISOString()+" launch requested installer="+installerPath+" cwd="+workingDirectory+"\n","utf8");
+    }catch(error){
+      return {ok:false,error:String(error?.message||error),logPath,launchLogPath};
+    }
+    return new Promise(resolve=>{
+      let settled=false;
+      const finish=result=>{if(settled)return;settled=true;resolve(result)};
+      const child=childProcess.spawn(powershellPath,["-NoProfile","-ExecutionPolicy","Bypass","-File",scriptPath,"-Installer",installerPath,"-RedistLog",logPath,"-LaunchLog",launchLogPath,"-AppExe",process.execPath,"-WorkingDirectory",workingDirectory,"-ParentPid",String(process.pid)],{detached:true,windowsHide:true,stdio:"ignore"});
+      child.on("error",error=>finish({ok:false,error:String(error?.message||error),logPath,launchLogPath}));
+      child.on("close",code=>{
+        const exitCode=typeof code==="number"?code:null;
+        const ok=exitCode===0||exitCode===3010||exitCode===1638;
+        finish({ok,exitCode,logPath,launchLogPath,...ok?{launched:true}:{error:"VC++ 运行库安装启动失败："+String(exitCode)}});
+        if(ok)setTimeout(relaunchCurrentApp,300);
+      });
+    });
+  }
+  function registerRuizhiIpc(){
+    n.ipcMain.handle("ruizhi:update:get-state",()=>publicUpdateState());
+    n.ipcMain.handle("ruizhi:update:install-now",()=>{
+      if(!pendingInstaller||!fs.existsSync(pendingInstaller.path))return {ok:false,error:"没有已下载的更新包"};
+      setUpdateState({status:"installing",message:"正在退出并安装更新"},true);
+      installing=true;
+      startInstallerAfterExit(pendingInstaller.path);
+      return {ok:true};
+    });
+    n.ipcMain.handle("ruizhi:auth:get",()=>readApiKeyStatus());
+    n.ipcMain.handle("ruizhi:auth:set-and-test",async(_event,key)=>{
+      try{
+        const value=normalizeApiKey(key);
+        if(value.length<20)return {ok:false,error:"APIKey 长度不正确",status:readApiKeyStatus()};
+        await testApiKey(value);
+        writeApiKey(value);
+        return {ok:true,apiKey:value,status:readApiKeyStatus()};
+      }catch(error){
+        return {ok:false,error:String(error?.message||error),status:readApiKeyStatus()};
+      }
+    });
+    n.ipcMain.handle("ruizhi:auth:reset-to-login",()=>{
+      const result=resetAuthToLogin();
+      setImmediate(relaunchCurrentApp);
+      return {ok:true,...result};
+    });
+    n.ipcMain.handle("ruizhi:runtime:install-vc-redist",()=>installVcRedist());
+  }
+  async function fetchManifest(){
+    const cacheBusted=new URL(updateConfig.manifestUrl);
+    if(cacheBusted.protocol!=="https:"&&cacheBusted.protocol!=="http:")throw new Error("更新清单 URL 协议不受支持："+cacheBusted.protocol);
+    cacheBusted.searchParams.set("_",String(Date.now()));
+    const text=await requestUrl(cacheBusted.toString(),updateConfig.requestTimeoutMs,async(response,status)=>{
+      if(status<200||status>=300){
+        response.resume();
+        throw new Error("更新清单请求失败："+status+" "+(response.statusMessage||""));
+      }
+      return await readResponseText(response);
+    });
+    const trimmed=text.trimStart();
+    if(trimmed.startsWith("{"))return JSON.parse(text);
+    const manifest={files:[]};
+    let currentFile=null;
+    function stripYamlScalar(rawValue){
+      const value=String(rawValue??"").trim();
+      if(!value)return "";
+      if((value.startsWith("'")&&value.endsWith("'"))||(value.startsWith('"')&&value.endsWith('"')))return value.slice(1,-1);
+      return value;
+    }
+    for(const line of text.split(/\\r?\\n/)){
+      if(!line.trim())continue;
+      const fileUrlMatch=line.match(/^\\s*-\\s+url:\\s*(.+)$/);
+      if(fileUrlMatch){
+        currentFile={url:stripYamlScalar(fileUrlMatch[1])};
+        manifest.files.push(currentFile);
+        continue;
+      }
+      const nestedMatch=line.match(/^\\s{4}([A-Za-z0-9_]+):\\s*(.+)$/);
+      if(nestedMatch&&currentFile){
+        currentFile[nestedMatch[1]]=stripYamlScalar(nestedMatch[2]);
+        continue;
+      }
+      const topLevelMatch=line.match(/^([A-Za-z0-9_]+):\\s*(.+)$/);
+      if(topLevelMatch){
+        manifest[topLevelMatch[1]]=stripYamlScalar(topLevelMatch[2]);
+      }
+    }
+    return manifest;
+  }
+  function resolveInstaller(manifest){
+    const platformAsset=manifest.windows&&typeof manifest.windows==="object"?manifest.windows:manifest;
+    const firstFile=Array.isArray(platformAsset.files)&&platformAsset.files.length>0&&platformAsset.files[0]&&typeof platformAsset.files[0]==="object"?platformAsset.files[0]:null;
+    const rawUrl=platformAsset.url||platformAsset.installerUrl||platformAsset.path||firstFile?.url;
+    if(!rawUrl)throw new Error("更新清单缺少 windows.url");
+    const resolved=new URL(rawUrl,updateConfig.manifestUrl);
+    if(resolved.protocol!=="https:"&&resolved.protocol!=="http:")throw new Error("更新包 URL 协议不受支持："+resolved.protocol);
+    return {url:resolved.toString(),sha256:platformAsset.sha256||manifest.sha256||firstFile?.sha256||"",size:platformAsset.size||manifest.size||firstFile?.size||null};
+  }
+  async function downloadInstaller(asset,targetPath,onProgress){
+    fs.mkdirSync(path.dirname(targetPath),{recursive:true});
+    const partialPath=targetPath+".download";
+    let downloadedBytes=0;
+    function reportProgress(delta,total){
+      downloadedBytes+=delta;
+      if(typeof onProgress==="function")onProgress(downloadedBytes,total);
+    }
+    async function downloadSequential(){
+      downloadedBytes=0;
+      await requestUrl(asset.url,updateConfig.downloadTimeoutMs,async(response,status)=>{
+        if(status<200||status>=300){
+          response.resume();
+          throw new Error("更新包下载失败："+status+" "+(response.statusMessage||""));
+        }
+        const total=Number(asset.size)||Number(response.headers["content-length"])||0;
+        const meter=new stream.Transform({
+          transform(chunk,encoding,callback){
+            reportProgress(chunk.length,total);
+            callback(null,chunk);
+          }
+        });
+        await streamPromises.pipeline(response,meter,fs.createWriteStream(partialPath,{mode:0o755}));
+      });
+    }
+    async function downloadRange(start,end){
+      await requestUrl(asset.url,updateConfig.downloadTimeoutMs,async(response,status)=>{
+        const fullBodyOk=start===0&&Number(asset.size)===end+1&&status===200;
+        if(status!==206&&!fullBodyOk){
+          response.resume();
+          throw new Error("更新包分片下载失败："+status+" "+(response.statusMessage||"")+" range="+start+"-"+end);
+        }
+        let written=0;
+        const meter=new stream.Transform({
+          transform(chunk,encoding,callback){
+            written+=chunk.length;
+            reportProgress(chunk.length,Number(asset.size)||0);
+            callback(null,chunk);
+          }
+        });
+        await streamPromises.pipeline(response,meter,fs.createWriteStream(partialPath,{flags:"r+",start}));
+        const expected=end-start+1;
+        if(written!==expected)throw new Error("更新包分片大小不匹配，range="+start+"-"+end+" expected="+expected+" actual="+written);
+      },{headers:{Range:"bytes="+start+"-"+end,"Accept-Encoding":"identity"}});
+    }
+    async function downloadRangeWithRetry(start,end){
+      let lastError=null;
+      for(let attempt=0;attempt<3;attempt+=1){
+        try{
+          await downloadRange(start,end);
+          return;
+        }catch(error){
+          lastError=error;
+          await delay(1000*(attempt+1));
+        }
+      }
+      throw lastError;
+    }
+    async function supportsRangeDownloads(){
+      return await requestUrl(asset.url,updateConfig.requestTimeoutMs,async(response,status)=>{
+        response.resume();
+        return status===206;
+      },{headers:{Range:"bytes=0-0","Accept-Encoding":"identity"}});
+    }
+    async function downloadInRanges(){
+      const total=Number(asset.size);
+      if(!Number.isSafeInteger(total)||total<=0){
+        await downloadSequential();
+        return;
+      }
+      if(!await supportsRangeDownloads()){
+        await downloadSequential();
+        return;
+      }
+      const chunkSize=Math.max(262144,Number(updateConfig.downloadChunkSizeBytes)||4194304);
+      const concurrency=Math.min(16,Math.max(1,Number(updateConfig.downloadConcurrency)||8));
+      const fd=fs.openSync(partialPath,"w",0o755);
+      try{
+        fs.ftruncateSync(fd,total);
+      }finally{
+        fs.closeSync(fd);
+      }
+      const ranges=[];
+      for(let start=0;start<total;start+=chunkSize){
+        ranges.push({start,end:Math.min(total-1,start+chunkSize-1)});
+      }
+      let nextIndex=0;
+      async function worker(){
+        for(;;){
+          const range=ranges[nextIndex++];
+          if(range==null)return;
+          await downloadRangeWithRetry(range.start,range.end);
+        }
+      }
+      await Promise.all(Array.from({length:Math.min(concurrency,ranges.length)},()=>worker()));
+    }
+    try{
+      await downloadInRanges();
+    }catch(error){
+      fs.rmSync(partialPath,{force:true});
+      throw error;
+    }
+    const digest=sha256Path(partialPath);
+    if(asset.sha256&&digest!==String(asset.sha256).toLowerCase()){
+      fs.rmSync(partialPath,{force:true});
+      throw new Error("更新包校验失败，期望 "+asset.sha256+"，实际 "+digest);
+    }
+    fs.renameSync(partialPath,targetPath);
+  }
+  function psQuote(value){
+    return "'"+String(value).replace(/'/g,"''")+"'";
+  }
+  function spawnInstallerAfterExit(installerPath){
+    if(installWatcherStarted)return;
+    installWatcherStarted=true;
+    const installDir=path.dirname(process.execPath);
+    const scriptPath=path.join(os.tmpdir(),"ruizhi-update-install-"+Date.now()+".ps1");
+    const logPath=path.join(os.tmpdir(),"ruizhi-update-install-"+Date.now()+".log");
+    const script=[
+      "$ErrorActionPreference = 'Stop'",
+      "$logPath = "+psQuote(logPath),
+      "function Write-UpdateLog([string]$message) { Add-Content -LiteralPath $logPath -Value ((Get-Date -Format o) + ' ' + $message) -Encoding UTF8 }",
+      "$installer = "+psQuote(installerPath),
+      "$installDir = "+psQuote(installDir),
+      "$appPid = "+String(process.pid),
+      "try {",
+      "  Write-UpdateLog ('started installer=' + $installer + ' installDir=' + $installDir + ' appPid=' + $appPid)",
+      "  if (-not (Test-Path -LiteralPath $installer)) { throw ('installer missing: ' + $installer) }",
+      "  try { Wait-Process -Id $appPid -ErrorAction SilentlyContinue } catch { Start-Sleep -Milliseconds 800 }",
+      "  Start-Sleep -Milliseconds 500",
+      "  Write-UpdateLog 'app exited; launching installer'",
+      "  $process = Start-Process -FilePath $installer -ArgumentList @('/S',('/D=' + $installDir)) -Wait -PassThru -WindowStyle Hidden",
+      "  Write-UpdateLog ('installer exitCode=' + $process.ExitCode)",
+      "  if ($process.ExitCode -ne 0) { exit $process.ExitCode }",
+      "} catch {",
+      "  Write-UpdateLog ('failed: ' + $_.Exception.Message)",
+      "  exit 1",
+      "}"
+    ].join("\\n");
+    fs.writeFileSync(scriptPath,script,"utf8");
+    const child=childProcess.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-File",scriptPath],{detached:true,stdio:"ignore",windowsHide:true});
+    child.unref();
+  }
+  function startInstallerAfterExit(installerPath){
+    setUpdateState({status:"installing",message:"正在退出并安装更新"},true);
+    spawnInstallerAfterExit(installerPath);
+    n.app.exit(0);
+  }
+  function registerInstallOnQuit(){
+    n.app.on("before-quit",event=>{
+      if(installing||pendingInstaller==null)return;
+      if(!fs.existsSync(pendingInstaller.path)){
+        pendingInstaller=null;
+        return;
+      }
+      installing=true;
+      event.preventDefault();
+      console.info("ruizhi update will install on quit",pendingInstaller.version);
+      startInstallerAfterExit(pendingInstaller.path);
+    });
+  }
+  async function checkAndDownloadUpdate(){
+    if(checking)return;
+    checking=true;
+    try{
+      setUpdateState({status:"checking",message:"正在检查更新",progress:0,downloadedBytes:0,totalBytes:0},true);
+      const manifest=await fetchManifest();
+      if(!manifest||typeof manifest!=="object"||!manifest.version){
+        console.error("ruizhi update manifest is invalid",manifest);
+        setUpdateState({status:"idle",message:""},true);
+        return;
+      }
+      if(compareVersions(manifest.version,n.app.getVersion())<=0){
+        setUpdateState({status:"idle",version:null,progress:0,downloadedBytes:0,totalBytes:0,message:""},true);
+        return;
+      }
+      const asset=resolveInstaller(manifest);
+      const targetPath=path.join(os.tmpdir(),"ruizhi-update-"+manifest.version+"-"+Date.now()+".exe");
+      setUpdateState({status:"downloading",version:String(manifest.version),progress:0,downloadedBytes:0,totalBytes:Number(asset.size)||0,message:"正在下载更新"},true);
+      await downloadInstaller(asset,targetPath,(downloaded,total)=>{
+        const safeTotal=Number(total)||0;
+        const progress=safeTotal>0?Math.max(0,Math.min(100,Math.floor(downloaded/safeTotal*100))):0;
+        setUpdateState({status:"downloading",version:String(manifest.version),progress,downloadedBytes:downloaded,totalBytes:safeTotal,message:"正在下载更新"});
+      });
+      pendingInstaller={path:targetPath,version:String(manifest.version)};
+      console.info("ruizhi update downloaded; install is deferred until quit",pendingInstaller.version);
+      setUpdateState({status:"ready",version:pendingInstaller.version,progress:100,downloadedBytes:Number(asset.size)||0,totalBytes:Number(asset.size)||0,message:"更新已下载"},true);
+    }catch(error){
+      console.error("ruizhi update check failed",error);
+      setUpdateState({status:"error",message:String(error?.message||error)},true);
+    }finally{
+      checking=false;
+    }
+  }
+  try{
+    registerRuizhiIpc();
+    registerInstallOnQuit();
+    n.app.whenReady().then(()=>{
+      broadcastUpdateState(true);
+      if(ruizhiEnvironment.name!=="production")return;
+      if(!updateConfig.enabled||!updateConfig.manifestUrl)return;
+      const timer=setTimeout(()=>{checkAndDownloadUpdate().catch(error=>console.error("ruizhi update check failed",error));},15000);
+      timer.unref?.();
+    }).catch(error=>console.error("ruizhi update scheduling failed",error));
+  }catch(error){
+    console.error("ruizhi update bootstrap failed",error);
+  }
+}
+`;
+}
+
+function bootstrapForceUpdateCode() {
+  const updates = config.updates ?? {};
+  const updateConfig = {
+    enabled: updates.enabled !== false,
+    feedUrl: process.env.RUIZHI_UPDATE_DOWNLOAD_BASE_URL ?? updates.downloadBaseUrl ?? "",
+    currentVersion: appVersion
+  };
+  const authConfig = {
+    productName: config.productName,
+    ruizhiHomeEnvName,
+    ruizhiDefaultHomeDirName,
+    baseUrl: config.openai.baseUrl,
+    testModel: apiKeyTestConfig.model ?? "qwen3.6-flash",
+    testTimeoutMs: apiKeyTestConfig.timeoutMs ?? 15000
+  };
+
+  return `
+function ruizhiStartBackgroundUpdateCheck(){
+  const updateConfig=${jsonLiteral(updateConfig)};
+  const authConfig=${jsonLiteral(authConfig)};
+  if(!n.app.isPackaged)return;
+  const fs=require("node:fs");
+  const os=require("node:os");
+  const path=require("node:path");
+  const childProcess=require("node:child_process");
+  const http=require("node:http");
+  const https=require("node:https");
+  function readRuizhiEnvironment(){
+    const markerPath=path.join(process.resourcesPath,"ruizhi-environment.json");
+    if(!fs.existsSync(markerPath))return {name:"production"};
+    try{
+      const marker=JSON.parse(fs.readFileSync(markerPath,"utf8"));
+      const name=String(marker.environment||"production").trim()||"production";
+      return {name};
+    }catch(error){
+      console.warn("ruizhi environment marker invalid",error);
+      return {name:"production"};
+    }
+  }
+  const ruizhiEnvironment=readRuizhiEnvironment();
+  function ruizhiVersionLabel(){
+    const base=updateConfig.currentVersion||n.app.getVersion();
+    return ruizhiEnvironment.name==="production"?base:base+"-"+ruizhiEnvironment.name;
+  }
+  let autoUpdater=null;
+  let updateReady=false;
+  let updateState={
+    status:"idle",
+    currentVersion:ruizhiVersionLabel(),
+    environment:ruizhiEnvironment.name,
+    version:null,
+    progress:0,
+    downloadedBytes:0,
+    totalBytes:0,
+    message:""
+  };
+  let lastProgressEmit=0;
+
+  function publicUpdateState(){
+    return {...updateState};
+  }
+  function broadcastUpdateState(force=false){
+    const now=Date.now();
+    if(!force&&now-lastProgressEmit<250)return;
+    lastProgressEmit=now;
+    const snapshot=publicUpdateState();
+    for(const win of n.BrowserWindow.getAllWindows()){
+      if(!win.isDestroyed())win.webContents.send("ruizhi:update:state-changed",snapshot);
+    }
+  }
+  function setUpdateState(patch,force=false){
+    updateState={...updateState,...patch};
+    broadcastUpdateState(force);
+  }
+  function requestUrl(url,timeoutMs,responseHandler,options={}){
+    const parsed=new URL(url);
+    if(parsed.protocol!=="https:"&&parsed.protocol!=="http:")throw new Error("请求 URL 协议不受支持："+parsed.protocol);
+    const transport=parsed.protocol==="https:"?https:http;
+    const redirectCount=Number(options.redirectCount)||0;
+    const headers={...options.headers};
+    return new Promise((resolve,reject)=>{
+      let settled=false;
+      function settle(error,value){
+        if(settled)return;
+        settled=true;
+        if(error)reject(error);
+        else resolve(value);
+      }
+      const body=options.body;
+      const request=transport.request(parsed,{method:options.method||"GET",headers:{"Cache-Control":"no-store","User-Agent":"Ruizhi/"+n.app.getVersion(),...headers}},response=>{
+        const status=response.statusCode??0;
+        if([301,302,303,307,308].includes(status)&&response.headers.location){
+          response.resume();
+          if(redirectCount>=3){
+            settle(new Error("请求重定向过多"));
+            return;
+          }
+          let nextUrl;
+          try{
+            nextUrl=new URL(response.headers.location,parsed).toString();
+          }catch(error){
+            settle(error);
+            return;
+          }
+          requestUrl(nextUrl,timeoutMs,responseHandler,{...options,redirectCount:redirectCount+1}).then(value=>settle(null,value),settle);
+          return;
+        }
+        Promise.resolve(responseHandler(response,status)).then(value=>settle(null,value),settle);
+      });
+      request.on("error",settle);
+      request.setTimeout(timeoutMs,()=>request.destroy(new Error("请求超时："+url)));
+      if(body!=null)request.write(body);
+      request.end();
+    });
+  }
+  async function readResponseText(response){
+    const chunks=[];
+    for await(const chunk of response){
+      chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  }
+  function authHome(){
+    const home=os.homedir();
+    const explicit=(process.env[authConfig.ruizhiHomeEnvName]||"").trim()||(process.env.CODEX_HOME||"").trim();
+    return explicit||path.join(home,authConfig.ruizhiDefaultHomeDirName);
+  }
+  function authPath(){
+    return path.join(authHome(),"auth.json");
+  }
+  function maskApiKey(key){
+    const value=String(key||"").trim();
+    if(!value)return "";
+    if(value.length<=18)return value.slice(0,4)+"*******"+value.slice(-4);
+    return value.slice(0,10)+"*******"+value.slice(-7);
+  }
+  function readApiKeyStatus(){
+    const filePath=authPath();
+    let key="";
+    try{
+      if(fs.existsSync(filePath)){
+        const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
+        key=String(auth.OPENAI_API_KEY||"").trim();
+      }
+    }catch(error){
+      return {configured:false,masked:"",error:String(error?.message||error),version:n.app.getVersion()};
+    }
+    return {configured:key.length>0,masked:maskApiKey(key),version:n.app.getVersion()};
+  }
+  function writeApiKey(key){
+    const filePath=authPath();
+    fs.mkdirSync(path.dirname(filePath),{recursive:true});
+    fs.writeFileSync(filePath,JSON.stringify({auth_mode:"apikey",OPENAI_API_KEY:key},null,2)+"\\n","utf8");
+    process.env.OPENAI_API_KEY=key;
+    process.env.RUIZHI_API_KEY=key;
+  }
+  function normalizeApiKey(input){
+    const value=String(input??"").trim().replace(/[\\s\\uFEFF]+/g,"");
+    if(value&&/[^\\x21-\\x7E]/.test(value)){
+      throw new Error("APIKey 包含无效字符，请重新复制完整 APIKey");
+    }
+    return value;
+  }
+  function resetAuthToLogin(){
+    const filePath=authPath();
+    let removed=false;
+    let backupPath=null;
+    if(fs.existsSync(filePath)){
+      backupPath=filePath+".before-api-key-change."+Date.now()+".bak";
+      try{
+        fs.copyFileSync(filePath,backupPath);
+      }catch(error){
+        console.warn("ruizhi auth backup failed",error);
+        backupPath=null;
+      }
+      fs.rmSync(filePath,{force:true});
+      removed=true;
+    }
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.RUIZHI_API_KEY;
+    return {removed,backupPath};
+  }
+  function relaunchCurrentApp(){
+    const child=childProcess.spawn(process.execPath,process.argv.slice(1),{
+      cwd:path.dirname(process.execPath),
+      detached:true,
+      stdio:"ignore",
+      env:process.env
+    });
+    child.unref();
+    n.app.exit(0);
+  }
+  async function testApiKey(key){
+    const baseUrl=String(authConfig.baseUrl||"").replace(/\\/+$/,"");
+    if(!baseUrl)throw new Error("缺少 API Base URL");
+    const url=baseUrl+"/chat/completions";
+    const payload=JSON.stringify({
+      model:authConfig.testModel,
+      messages:[{role:"user",content:"ping"}],
+      max_tokens:1,
+      stream:false
+    });
+    await requestUrl(url,authConfig.testTimeoutMs,async(response,status)=>{
+      const text=await readResponseText(response);
+      if(status<200||status>=300){
+        let detail=text.slice(0,500);
+        try{
+          const json=JSON.parse(text);
+          detail=json.error?.message||json.message||detail;
+        }catch{}
+        throw new Error("APIKey 校验失败："+status+" "+(response.statusMessage||"")+" "+detail);
+      }
+      return true;
+    },{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+key,"Content-Length":String(Buffer.byteLength(payload))},body:payload});
+  }
+  function vcRedistInstallerPath(){
+    return path.join(process.resourcesPath||path.dirname(process.execPath),"prerequisites","vc_redist.x64.exe");
+  }
+  function vcRedistLaunchLogPath(){
+    return path.join(os.tmpdir(),"ruizhi-vc-redist-launch.log");
+  }
+  function vcRedistInstallerScriptPath(){
+    return path.join(os.tmpdir(),"ruizhi-install-vc-redist.ps1");
+  }
+  function vcRedistAppWorkingDirectory(){
+    return path.dirname(process.execPath);
+  }
+  function windowsPowerShellPath(){
+    const systemRoot=process.env.SystemRoot||process.env.windir||"C:\\Windows";
+    return path.join(systemRoot,"System32","WindowsPowerShell","v1.0","powershell.exe");
+  }
+  function writeVcRedistInstallerScript(scriptPath){
+    const script=[
+      "param([string]$Installer,[string]$RedistLog,[string]$LaunchLog,[string]$AppExe,[string]$WorkingDirectory,[int]$ParentPid)",
+      "$ErrorActionPreference = 'Stop'",
+      "function Write-LaunchLog([string]$Message) {",
+      "  $stamp = Get-Date -Format o",
+      "  Add-Content -LiteralPath $LaunchLog -Value ($stamp + ' ' + $Message) -Encoding UTF8",
+      "}",
+      "try {",
+      "  Write-LaunchLog ('installer=' + $Installer)",
+      "  Write-LaunchLog ('redistLog=' + $RedistLog)",
+      "  if (!(Test-Path -LiteralPath $Installer)) { throw ('installer not found: ' + $Installer) }",
+      "  $arguments = @('/install','/passive','/norestart','/log',$RedistLog)",
+      "  Write-LaunchLog 'starting vc_redist with UAC'",
+      "  $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Verb RunAs -Wait -PassThru",
+      "  $exitCode = $process.ExitCode",
+      "  if ($null -eq $exitCode) { $exitCode = 0 }",
+      "  Write-LaunchLog ('vc_redist_exit=' + $exitCode)",
+      "  if ($exitCode -eq 0 -or $exitCode -eq 3010 -or $exitCode -eq 1638) {",
+      "    Write-LaunchLog 'vc_redist_success'",
+      "    exit 0",
+      "  }",
+      "  exit $exitCode",
+    "} catch {",
+      "  Write-LaunchLog ('failed=' + $_.Exception.Message)",
+      "  exit 1",
+      "}"
+    ].join("\r\n");
+    fs.writeFileSync(scriptPath,script,"utf8");
+  }
+  function installVcRedist(){
+    if(process.platform!=="win32")return {ok:false,error:"仅 Windows 需要安装该依赖"};
+    const installerPath=vcRedistInstallerPath();
+    const logPath=path.join(os.tmpdir(),"ruizhi-vc-redist.log");
+    const launchLogPath=vcRedistLaunchLogPath();
+    const scriptPath=vcRedistInstallerScriptPath();
+    const workingDirectory=vcRedistAppWorkingDirectory();
+    const powershellPath=windowsPowerShellPath();
+    if(!fs.existsSync(installerPath))return {ok:false,error:"缺少内置运行依赖安装包",logPath,launchLogPath};
+    if(!fs.existsSync(powershellPath))return {ok:false,error:"未找到 Windows PowerShell："+powershellPath,logPath,launchLogPath};
+    try{
+      writeVcRedistInstallerScript(scriptPath);
+      fs.appendFileSync(launchLogPath,new Date().toISOString()+" launch requested installer="+installerPath+" cwd="+workingDirectory+"\n","utf8");
+    }catch(error){
+      return {ok:false,error:String(error?.message||error),logPath,launchLogPath};
+    }
+    return new Promise(resolve=>{
+      let settled=false;
+      const finish=result=>{if(settled)return;settled=true;resolve(result)};
+      const child=childProcess.spawn(powershellPath,["-NoProfile","-ExecutionPolicy","Bypass","-File",scriptPath,"-Installer",installerPath,"-RedistLog",logPath,"-LaunchLog",launchLogPath,"-AppExe",process.execPath,"-WorkingDirectory",workingDirectory,"-ParentPid",String(process.pid)],{detached:true,windowsHide:true,stdio:"ignore"});
+      child.on("error",error=>finish({ok:false,error:String(error?.message||error),logPath,launchLogPath}));
+      child.on("close",code=>{
+        const exitCode=typeof code==="number"?code:null;
+        const ok=exitCode===0||exitCode===3010||exitCode===1638;
+        finish({ok,exitCode,logPath,launchLogPath,...ok?{launched:true}:{error:"VC++ 运行库安装启动失败："+String(exitCode)}});
+        if(ok)setTimeout(relaunchCurrentApp,300);
+      });
+    });
+  }
+  function registerRuizhiIpc(){
+    n.ipcMain.handle("ruizhi:update:get-state",()=>publicUpdateState());
+    n.ipcMain.handle("ruizhi:update:install-now",()=>{
+      if(!autoUpdater||!updateReady)return {ok:false,error:"没有已下载的更新包"};
+      setUpdateState({status:"installing",message:"正在重启并安装更新"},true);
+      setImmediate(()=>autoUpdater.quitAndInstall(true,true));
+      return {ok:true};
+    });
+    n.ipcMain.handle("ruizhi:auth:get",()=>readApiKeyStatus());
+    n.ipcMain.handle("ruizhi:auth:set-and-test",async(_event,key)=>{
+      try{
+        const value=normalizeApiKey(key);
+        if(value.length<20)return {ok:false,error:"APIKey 长度不正确",status:readApiKeyStatus()};
+        await testApiKey(value);
+        writeApiKey(value);
+        return {ok:true,apiKey:value,status:readApiKeyStatus()};
+      }catch(error){
+        return {ok:false,error:String(error?.message||error),status:readApiKeyStatus()};
+      }
+    });
+    n.ipcMain.handle("ruizhi:auth:reset-to-login",()=>{
+      const result=resetAuthToLogin();
+      setImmediate(relaunchCurrentApp);
+      return {ok:true,...result};
+    });
+    n.ipcMain.handle("ruizhi:runtime:install-vc-redist",()=>installVcRedist());
+  }
+  function configureUpdater(){
+    if(process.platform!=="win32")return false;
+    try{
+      autoUpdater=require("electron-updater").autoUpdater;
+    }catch(error){
+      console.error("ruizhi electron-updater load failed",error);
+      setUpdateState({status:"error",message:"更新模块加载失败："+String(error?.message||error)},true);
+      return false;
+    }
+    autoUpdater.logger=console;
+    autoUpdater.autoDownload=true;
+    autoUpdater.autoInstallOnAppQuit=true;
+    autoUpdater.allowDowngrade=false;
+    autoUpdater.allowPrerelease=false;
+    autoUpdater.disableWebInstaller=true;
+    autoUpdater.installDirectory=path.dirname(process.execPath);
+    if(updateConfig.feedUrl){
+      autoUpdater.setFeedURL({provider:"generic",url:updateConfig.feedUrl,useMultipleRangeRequest:false});
+    }
+    autoUpdater.on("checking-for-update",()=>{
+      updateReady=false;
+      setUpdateState({status:"checking",version:null,progress:0,downloadedBytes:0,totalBytes:0,message:"正在检查更新"},true);
+    });
+    autoUpdater.on("update-available",info=>{
+      updateReady=false;
+      setUpdateState({status:"downloading",version:String(info?.version||""),progress:0,downloadedBytes:0,totalBytes:0,message:"正在下载更新"},true);
+    });
+    autoUpdater.on("download-progress",progress=>{
+      const percent=Math.max(0,Math.min(100,Math.floor(Number(progress?.percent)||0)));
+      setUpdateState({
+        status:"downloading",
+        version:updateState.version,
+        progress:percent,
+        downloadedBytes:Number(progress?.transferred)||0,
+        totalBytes:Number(progress?.total)||0,
+        message:"正在下载更新"
+      });
+    });
+    autoUpdater.on("update-downloaded",info=>{
+      updateReady=true;
+      setUpdateState({status:"ready",version:String(info?.version||updateState.version||""),progress:100,message:"更新已下载"},true);
+    });
+    autoUpdater.on("update-not-available",()=>{
+      updateReady=false;
+      setUpdateState({status:"idle",version:null,progress:0,downloadedBytes:0,totalBytes:0,message:""},true);
+    });
+    autoUpdater.on("error",error=>{
+      updateReady=false;
+      console.error("ruizhi update failed",error);
+      setUpdateState({status:"error",message:String(error?.message||error)},true);
+    });
+    return true;
+  }
+  try{
+    registerRuizhiIpc();
+    const updaterReady=ruizhiEnvironment.name==="production"&&configureUpdater();
+    n.app.whenReady().then(()=>{
+      broadcastUpdateState(true);
+      if(!updateConfig.enabled||!updaterReady)return;
+      const timer=setTimeout(()=>{autoUpdater.checkForUpdates().catch(error=>{
+        console.error("ruizhi update check failed",error);
+        setUpdateState({status:"error",message:String(error?.message||error)},true);
+      });},15000);
+      timer.unref?.();
+    }).catch(error=>console.error("ruizhi update scheduling failed",error));
+  }catch(error){
+    console.error("ruizhi update bootstrap failed",error);
+  }
+}
+`;
+}
+
+function preloadIntegrationCode() {
+  return `
+;(()=>{try{
+  const electron=require("electron");
+  const ipcRenderer=electron.ipcRenderer;
+  const contextBridge=electron.contextBridge;
+  const appVersion=${jsonLiteral(appVersion)};
+  const integrationKey="__RUIZHI_DESKTOP_INTEGRATION__";
+  const previous=globalThis[integrationKey];
+  if(previous&&typeof previous.dispose==="function")previous.dispose();
+  const cleanup=[];
+  let disposed=false;
+  function addCleanup(fn){cleanup.push(fn);}
+  function cleanupNodes(){
+    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>el.remove());
+    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
+      el.classList.remove("ruizhi-settings-update-row");
+      delete el.dataset.ruizhiUpdateActive;
+      delete el.dataset.ruizhiUpdateStatus;
+      el.style.removeProperty("--ruizhi-update-progress");
+    });
+  }
+  function dispose(){
+    if(disposed)return;
+    disposed=true;
+    while(cleanup.length){
+      const fn=cleanup.pop();
+      try{fn()}catch{}
+    }
+    cleanupNodes();
+  }
+  globalThis[integrationKey]={dispose};
+  let updateState={status:"idle",currentVersion:appVersion,version:null,progress:0,message:""};
+  let row=null;
+  let progressEl=null;
+  let statusEl=null;
+  let renderQueued=false;
+
+  const api={
+    update:{
+      getState:()=>ipcRenderer.invoke("ruizhi:update:get-state"),
+      installNow:()=>ipcRenderer.invoke("ruizhi:update:install-now")
+    },
+    auth:{
+      get:()=>ipcRenderer.invoke("ruizhi:auth:get"),
+      setAndTest:key=>ipcRenderer.invoke("ruizhi:auth:set-and-test",key),
+      resetToLogin:()=>ipcRenderer.invoke("ruizhi:auth:reset-to-login")
+    },
+    runtime:{
+      installVcRedist:()=>ipcRenderer.invoke("ruizhi:runtime:install-vc-redist")
+    }
+  };
+  try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
+
+  function onReady(fn){
+    if(document.readyState==="loading"){
+      const listener=()=>{if(!disposed)fn();};
+      document.addEventListener("DOMContentLoaded",listener,{once:true});
+      addCleanup(()=>document.removeEventListener("DOMContentLoaded",listener));
+    }else if(!disposed)fn();
+  }
+  function injectStyle(){
+    if(document.getElementById("ruizhi-desktop-integration-style"))return;
+    const style=document.createElement("style");
+    style.id="ruizhi-desktop-integration-style";
+    style.textContent=[
+      ".ruizhi-settings-update-row{position:relative!important;overflow:hidden!important;}",
+      ".ruizhi-settings-update-row>.ruizhi-update-progress-bg{position:absolute;inset:1px auto 1px 1px;width:var(--ruizhi-update-progress,0%);border-radius:inherit;background:rgba(127,127,127,.12);pointer-events:none;z-index:0;transition:width .24s ease,opacity .2s ease;opacity:0;}",
+      ".ruizhi-settings-update-row[data-ruizhi-update-active='true']>.ruizhi-update-progress-bg{opacity:1;}",
+      ".ruizhi-settings-update-row>:not(.ruizhi-update-progress-bg):not(.ruizhi-update-status){position:relative;z-index:1;}",
+      ".ruizhi-update-status{position:relative;z-index:2;margin-left:auto;padding:0 2px;font:inherit;font-size:12px;line-height:inherit;font-weight:500;color:inherit;opacity:.62;background:transparent;white-space:nowrap;}",
+      ".ruizhi-update-status[data-clickable='true']{cursor:pointer;opacity:.82;}",
+      ".ruizhi-settings-update-row:hover .ruizhi-update-status[data-clickable='true']{opacity:1;text-decoration:underline;text-underline-offset:2px;}"
+    ].join("\\n");
+    document.head.appendChild(style);
+  }
+  function visible(el){
+    if(!(el instanceof HTMLElement))return false;
+    const rect=el.getBoundingClientRect();
+    const style=getComputedStyle(el);
+    return rect.width>=48&&rect.height>=24&&style.visibility!=="hidden"&&style.display!=="none";
+  }
+  function labelOf(el){
+    return [
+      el.getAttribute("aria-label"),
+      el.getAttribute("title"),
+      el.getAttribute("data-testid"),
+      el.textContent
+    ].filter(Boolean).join(" ");
+  }
+  function findSettingsRow(){
+    const nodes=Array.from(document.querySelectorAll("button,a,[role='button']"));
+    const matches=nodes.filter(el=>visible(el)&&/(设置|Settings|Preferences|setting)/i.test(labelOf(el)));
+    matches.sort((a,b)=>{
+      const ar=a.getBoundingClientRect();
+      const br=b.getBoundingClientRect();
+      return br.bottom-ar.bottom||ar.left-br.left;
+    });
+    return matches[0]||null;
+  }
+  function ensureRow(){
+    const target=findSettingsRow();
+    if(!target){
+      row=null;
+      progressEl=null;
+      statusEl=null;
+      cleanupNodes();
+      return false;
+    }
+    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
+      if(el!==target)el.classList.remove("ruizhi-settings-update-row");
+    });
+    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>{
+      if(!target.contains(el))el.remove();
+    });
+    if(row!==target){
+      row?.classList.remove("ruizhi-settings-update-row");
+      row=target;
+      row.classList.add("ruizhi-settings-update-row");
+      progressEl=null;
+      statusEl=null;
+    }
+    const progressNodes=Array.from(row.querySelectorAll(".ruizhi-update-progress-bg"));
+    if(!progressEl||!row.contains(progressEl))progressEl=progressNodes[0]||null;
+    for(const el of progressNodes){
+      if(el!==progressEl)el.remove();
+    }
+    if(!progressEl||!row.contains(progressEl)){
+      progressEl=document.createElement("span");
+      progressEl.className="ruizhi-update-progress-bg";
+      row.prepend(progressEl);
+    }
+    const statusNodes=Array.from(row.querySelectorAll(".ruizhi-update-status"));
+    if(!statusEl||!row.contains(statusEl))statusEl=statusNodes[0]||null;
+    for(const el of statusNodes){
+      if(el!==statusEl)el.remove();
+    }
+    if(!statusEl||!row.contains(statusEl)){
+      statusEl=document.createElement("span");
+      statusEl.className="ruizhi-update-status";
+      statusEl.addEventListener("click",event=>{
+        const status=updateState.status;
+        if(status==="ready"){
+          event.preventDefault();
+          event.stopPropagation();
+          ipcRenderer.invoke("ruizhi:update:install-now").catch(error=>console.error("ruizhi install-now failed",error));
+        }
+      });
+      row.appendChild(statusEl);
+    }
+    return true;
+  }
+  function statusText(){
+    const status=updateState.status;
+    if(status==="checking")return "检查更新";
+    if(status==="downloading")return Math.max(0,Math.min(100,Number(updateState.progress)||0))+"%";
+    if(status==="ready")return "重启并更新";
+    if(status==="installing")return "正在安装";
+    if(status==="error")return "更新失败";
+    return "v"+(updateState.currentVersion||appVersion);
+  }
+  function renderUpdateRow(){
+    if(disposed)return;
+    injectStyle();
+    if(!ensureRow())return;
+    const status=updateState.status;
+    const active=status==="checking"||status==="downloading"||status==="ready"||status==="installing";
+    const progress=status==="ready"||status==="installing"?100:status==="downloading"?Number(updateState.progress)||0:0;
+    row.dataset.ruizhiUpdateActive=active?"true":"false";
+    row.dataset.ruizhiUpdateStatus=status||"idle";
+    row.style.setProperty("--ruizhi-update-progress",Math.max(0,Math.min(100,progress))+"%");
+    statusEl.textContent=statusText();
+    statusEl.title=status==="ready"?"点击后退出锐智并安装新版本":"当前版本";
+    statusEl.dataset.clickable=status==="ready"?"true":"false";
+  }
+  function queueRender(){
+    if(disposed||renderQueued)return;
+    renderQueued=true;
+    requestAnimationFrame(()=>{renderQueued=false;if(!disposed)renderUpdateRow();});
+  }
+
+  function onUpdateStateChanged(_event,next){
+    if(disposed)return;
+    updateState={...updateState,...next};
+    queueRender();
+  }
+  ipcRenderer.on("ruizhi:update:state-changed",onUpdateStateChanged);
+  addCleanup(()=>ipcRenderer.removeListener("ruizhi:update:state-changed",onUpdateStateChanged));
+  onReady(()=>{
+    injectStyle();
+    ipcRenderer.invoke("ruizhi:update:get-state").then(next=>{updateState={...updateState,...next};queueRender();}).catch(()=>queueRender());
+    const observer=new MutationObserver(queueRender);
+    observer.observe(document.documentElement,{childList:true,subtree:true});
+    addCleanup(()=>observer.disconnect());
+    queueRender();
+    const timer=setInterval(queueRender,2000);
+    addCleanup(()=>clearInterval(timer));
+  });
+}catch(error){console.error("ruizhi preload integration failed",error)}})();
+`;
+}
+
+function patchPreloadIntegration() {
+  const preloadPath = path.join(extractedDir, ".vite", "build", "preload.js");
+  writePatchedFile(preloadPath, (source) =>
+    replaceExact(
+      source,
+      "\n//# sourceMappingURL=preload.js.map",
+      `${preloadIntegrationCode()}\n//# sourceMappingURL=preload.js.map`,
+      "注入锐智设置行更新状态"
+    )
+  );
+  log("已补丁 preload 锐智 UI 集成");
+}
+
+function nodeModuleTargetDir(targetNodeModules, packageName) {
+  return path.join(targetNodeModules, ...packageName.split("/"));
+}
+
+function copyRuntimeNodePackage(packageName, targetNodeModules, seen = new Set(), fromDir = projectRoot) {
+  const packageJsonPath = require.resolve(`${packageName}/package.json`, { paths: [fromDir] });
+  const packageDir = path.dirname(packageJsonPath);
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  const packageKey = `${packageJson.name ?? packageName}@${packageJson.version ?? "0.0.0"}`;
+  if (seen.has(packageKey)) {
+    return;
+  }
+  seen.add(packageKey);
+
+  const targetDir = nodeModuleTargetDir(targetNodeModules, packageName);
+  fs.rmSync(targetDir, { recursive: true, force: true });
+  fsExtra.copySync(packageDir, targetDir, {
+    filter(sourcePath) {
+      const relative = path.relative(packageDir, sourcePath);
+      if (!relative) {
+        return true;
+      }
+      return !relative.split(path.sep).includes("node_modules");
+    }
+  });
+
+  for (const dependencyName of Object.keys(packageJson.dependencies ?? {})) {
+    copyRuntimeNodePackage(dependencyName, targetNodeModules, seen, packageDir);
+  }
+}
+
+function copyUpdaterRuntimeDependencies() {
+  const targetNodeModules = path.join(extractedDir, "node_modules");
+  fs.mkdirSync(targetNodeModules, { recursive: true });
+  copyRuntimeNodePackage("electron-updater", targetNodeModules);
+  log("已内置 electron-updater 运行时依赖");
+}
+
+function patchBootstrap() {
+  const bootstrapPath = path.join(extractedDir, ".vite", "build", "bootstrap.js");
+
+  writePatchedFile(bootstrapPath, (source) => {
+    let next = source;
+    next = replaceRegex(
+      next,
+      /var v=\{"install-update":`Install Update`,"check-for-updates":`Check for Updates`,quit:`Quit`\};async function y\(e\)\{[\s\S]*?\}\}var b=/,
+      `${bootstrapInitCode()}${bootstrapForceUpdateCode()}var v={quit:\`Quit\`};async function y(e){await n.dialog.showMessageBox({type:\`error\`,buttons:[v.quit],defaultId:0,cancelId:0,message:\`${'${n.app.getName()}'} failed to start.\`,detail:e instanceof Error?e.message:\`The main desktop app failed during startup.\`,noLink:!0});n.app.quit();return}var b=`,
+      "移除 Codex 官方更新失败入口并注入锐智启动逻辑"
+    );
+    next = replaceExact(
+      next,
+      "await i.initialize();try{",
+      "ruizhiStartBackgroundUpdateCheck();try{",
+      "禁用 Codex 官方 updater 初始化，改为锐智后台无感更新"
+    );
+    next = replaceRegex(
+      next,
+      /n\.app\.setName\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)/,
+      `n.app.setName(${jsonLiteral(windowsTaskManagerName())})`,
+      "应用名称"
+    );
+    next = replaceRegex(
+      next,
+      /process\.platform===`win32`&&n\.app\.setAppUserModelId\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)/,
+      "process.platform===`win32`&&n.app.setAppUserModelId(`cn.ruizhi.desktop`)",
+      "Windows AppUserModelID"
+    );
+    return next;
+  });
+
+  log("已补丁 Electron bootstrap 初始化");
+}
+
+function applyLegacyAsarPatches() {
+  patchPluginAccountGate();
+  patchOnboardingApiKeyTexts();
+  patchLoginRoute();
+  patchWebviewLocales();
+  patchPackageMetadata();
+  patchWebviewHtml();
+  patchDefaultLocale();
+  patchFrontendDefaultMessages();
+  patchAppSunsetGate();
+  patchModelAvailabilityAllowlist();
+  patchOfficialUpdateLogic();
+  patchOnboardingWindowMode();
+  patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
+  copyUpdaterRuntimeDependencies();
+  patchBootstrap();
+  patchPreloadIntegration();
+}
+
+async function repackAppAsar() {
+  const resourcesDir = path.join(appOutRoot, "resources");
+  const appAsarPath = path.join(resourcesDir, "app.asar");
+  const patchedAsarPath = path.join(workRoot, "app.patched.asar");
+
+  cleanDir(workRoot);
+  log("解包 app.asar");
+  asar.uncache?.(appAsarPath);
+  asar.extractAll(appAsarPath, extractedDir);
+
+  if (process.env.RUIZHI_WINDOWS_USE_LEGACY_PATCHES === "1") {
+    log("使用旧版字符串补丁生成 asar");
+    applyLegacyAsarPatches();
+  } else {
+    applyWindowsAsarOverrides(extractedDir, { log });
+    refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log });
+    patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
+    copyUpdaterRuntimeDependencies();
+  }
+
+  fs.rmSync(patchedAsarPath, { force: true });
+  log("重新打包 app.asar");
+  asar.uncache?.(patchedAsarPath);
+  await asar.createPackage(extractedDir, patchedAsarPath);
+  asar.uncache?.(patchedAsarPath);
+  fs.copyFileSync(patchedAsarPath, appAsarPath);
+  asar.uncache?.(appAsarPath);
+}
+
+async function patchFuses() {
+  const exePath = path.join(appOutRoot, config.windows.sourceExeName);
+  fs.chmodSync(exePath, 0o755);
+
+  log("关闭 app.asar 完整性校验 fuse");
+  await flipFuses(exePath, {
+    version: FuseVersion.V1,
+    [FuseV1Options.RunAsNode]: false,
+    [FuseV1Options.EnableCookieEncryption]: true,
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+    [FuseV1Options.EnableNodeCliInspectArguments]: false,
+    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: false,
+    [FuseV1Options.OnlyLoadAppFromAsar]: true,
+    [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
+    [FuseV1Options.GrantFileProtocolExtraPrivileges]: true,
+    [FuseV1Options.WasmTrapHandlers]: true
+  });
+}
+
+function ensureCodexSource() {
+  const cliConfig = config.codexCli;
+  if (!cliConfig?.sourceRepo || !cliConfig?.tag) {
+    throw new Error("缺少 codexCli.sourceRepo 或 codexCli.tag 配置");
+  }
+
+  if (!fs.existsSync(path.join(codexSourceRoot, ".git"))) {
+    fs.rmSync(codexSourceRoot, { recursive: true, force: true });
+    execLogged("git", [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      cliConfig.sourceRepo,
+      codexSourceRoot
+    ]);
+  }
+
+  execLogged("git", [
+    "-C",
+    codexSourceRoot,
+    "fetch",
+    "--depth=1",
+    "origin",
+    `refs/tags/${cliConfig.tag}:refs/tags/${cliConfig.tag}`
+  ]);
+  execLogged("git", ["-C", codexSourceRoot, "checkout", "--force", cliConfig.tag]);
+}
+
+function patchCodexCliSource() {
+  patchCodexHomeSource();
+  patchCodexBundledModels();
+  patchCodexImageGenSkillSource();
+
+  if (config.codexCli?.disableOpenAIWebSockets) {
+    const providerInfoPath = path.join(
+      codexSourceRoot,
+      "codex-rs",
+      "model-provider-info",
+      "src",
+      "lib.rs"
+    );
+
+    const original = fs.readFileSync(providerInfoPath, "utf8");
+    const patched = original.replace(
+      /(pub fn create_openai_provider\([\s\S]*?requires_openai_auth: true,[\s\S]*?)supports_websockets: true,/,
+      "$1supports_websockets: false,"
+    );
+    if (patched !== original) {
+      fs.writeFileSync(providerInfoPath, patched);
+      log("已补丁内置 OpenAI provider：禁用 Responses WebSocket");
+    } else if (original.includes("supports_websockets: false")) {
+      log("内置 OpenAI provider 已禁用 Responses WebSocket");
+    } else {
+      throw new Error("补丁点不存在：OpenAI provider Responses WebSocket");
+    }
+  }
+}
+
+function patchCodexHomeSource() {
+  const homeDirPath = path.join(codexSourceRoot, "codex-rs", "utils", "home-dir", "src", "lib.rs");
+  writePatchedFile(homeDirPath, (source) => {
+    let next = source;
+    next = next.replace(
+      /let codex_home_env = std::env::var\("CODEX_HOME"\)\r?\n        \.ok\(\)\r?\n        \.filter\(\|val\| !val\.is_empty\(\)\);\r?\n    find_codex_home_from_env\(codex_home_env\.as_deref\(\)\)/,
+      `let codex_home_env = std::env::var("RUIZHI_HOME")
+        .ok()
+        .filter(|val| !val.is_empty())
+        .or_else(|| {
+            std::env::var("CODEX_HOME")
+                .ok()
+                .filter(|val| !val.is_empty())
+        });
+    find_codex_home_from_env(codex_home_env.as_deref())`
+    );
+    if (next === source) {
+      throw new Error("补丁点不存在：锐智 home 环境变量解析");
+    }
+    next = replaceExact(next, `p.push(".codex");`, `p.push(".ruizhi");`, "锐智默认 home 目录");
+    return next;
+  });
+  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，兼容 CODEX_HOME");
+}
+
+function patchCodexBundledModels() {
+  if (!modelCatalogEnabled()) {
+    log("跳过 Codex 内置模型目录替换：自定义模型目录已关闭");
+    return;
+  }
+
+  const sourcePath = modelCatalogPath();
+  const raw = fs.readFileSync(sourcePath, "utf8");
+  const catalog = JSON.parse(raw);
+  if (!Array.isArray(catalog.models) || catalog.models.length === 0) {
+    throw new Error("锐智模型目录为空或格式无效。");
+  }
+  const targetPath = path.join(codexSourceRoot, "codex-rs", "models-manager", "models.json");
+  fs.copyFileSync(sourcePath, targetPath);
+  log(`已替换 Codex 内置模型目录：${catalog.models.length} 个模型`);
+}
+
+function patchCodexImageGenSkillSource() {
+  const skillPath = path.join(
+    codexSourceRoot,
+    "codex-rs",
+    "skills",
+    "src",
+    "assets",
+    "samples",
+    "imagegen",
+    "SKILL.md"
+  );
+  const content = fs.readFileSync(imageGenSkillSourcePath(), "utf8");
+  fs.writeFileSync(skillPath, content, "utf8");
+  log("已补丁内置 imagegen skill：默认使用锐擎生图 helper");
+}
+
+function buildPatchedCodexCli() {
+  const cliConfig = config.codexCli;
+  const shouldBuild = process.env.RUIZHI_BUILD_CODEX === "1" || cliConfig?.rebuildByDefault === true;
+  if (!shouldBuild) {
+    log("跳过 Codex.exe 重编；默认使用前端/运行态覆盖。需要 Rust 侧补丁时设置 RUIZHI_BUILD_CODEX=1。");
+    return;
+  }
+
+  ensureCodexSource();
+  patchCodexCliSource();
+
+  const codexRsRoot = path.join(codexSourceRoot, "codex-rs");
+  const cargoEnv = {
+    ...process.env,
+    ...(cliConfig.rustupToolchain ? { RUSTUP_TOOLCHAIN: cliConfig.rustupToolchain } : {}),
+    CARGO_PROFILE_RELEASE_LTO: "false",
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
+    CARGO_PROFILE_RELEASE_INCREMENTAL: process.env.CARGO_PROFILE_RELEASE_INCREMENTAL ?? "true",
+    CARGO_PROFILE_RELEASE_DEBUG: process.env.CARGO_PROFILE_RELEASE_DEBUG ?? "0",
+    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? "6"
+  };
+  execLogged("cargo", ["build", "--release", "-p", "codex-cli", "--bin", "codex"], {
+    cwd: codexRsRoot,
+    env: cargoEnv
+  });
+
+  const builtExePath = path.join(codexRsRoot, "target", "release", "codex.exe");
+  const targetExePath = path.join(appOutRoot, "resources", "codex.exe");
+  if (!fs.existsSync(builtExePath)) {
+    throw new Error(`没有找到编译后的 codex.exe：${builtExePath}`);
+  }
+
+  fs.copyFileSync(builtExePath, targetExePath);
+  log("已替换 resources\\codex.exe：内置 OpenAI provider 默认禁用 WebSocket");
+}
+
+function copyPluginMarketplaces() {
+  const resourcesDir = path.join(appOutRoot, "resources");
+
+  for (const marketplace of pluginMarketplaces()) {
+    const sourceRoot = path.join(projectRoot, ...splitConfigPath(marketplace.sourcePath));
+    const targetRoot = path.join(resourcesDir, ...splitConfigPath(marketplace.resourcePath));
+    const marketplaceJson = path.join(sourceRoot, ".agents", "plugins", "marketplace.json");
+    const versionManifest = path.join(sourceRoot, ...splitConfigPath(marketplace.versionManifestPath));
+
+    if (!fs.existsSync(marketplaceJson)) {
+      throw new Error(`插件 marketplace 缺少 marketplace.json：${marketplaceJson}`);
+    }
+    if (!fs.existsSync(versionManifest)) {
+      throw new Error(`插件 marketplace 缺少版本清单：${versionManifest}`);
+    }
+
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+    fsExtra.copySync(sourceRoot, targetRoot);
+    log(`已内置插件 marketplace：${marketplace.displayName ?? marketplace.name}`);
+  }
+}
+
+function patchRuntimeResourceText() {
+  const resourcesDir = path.join(appOutRoot, "resources");
+  copyWindowsResourceOverrides(resourcesDir, { log });
+  patchOpenAIBundledPluginDescriptions(resourcesDir, { log });
+}
+
+function copyRuntimeOverrides() {
+  const resourcesDir = path.join(appOutRoot, "resources");
+
+  fs.copyFileSync(windowsIconPath(), path.join(resourcesDir, "icon.ico"));
+  log("已替换资源目录图标：icon.ico");
+
+  const modelTargetDir = path.join(resourcesDir, "models");
+  if (modelCatalogEnabled()) {
+    const codexClientVersion = codexClientVersionFromExe(path.join(resourcesDir, "codex.exe"));
+    writeRuntimeModelCatalog(
+      modelCatalogPath(),
+      path.join(modelTargetDir, "ruizhi-model-catalog.json"),
+      codexClientVersion,
+      { log }
+    );
+  } else {
+    fs.rmSync(modelTargetDir, { recursive: true, force: true });
+    log("已关闭运行态自定义模型目录");
+  }
+  copyWindowsPrerequisites(resourcesDir, { log });
+
+  if (modelBridgeEnabled()) {
+    const bridgeTargetPath = path.join(resourcesDir, modelBridgeRuntimeResourcePath());
+    fs.mkdirSync(path.dirname(bridgeTargetPath), { recursive: true });
+    fs.copyFileSync(modelBridgeRuntimeSourcePath(), bridgeTargetPath);
+    log(`已内置模型协议 bridge：${path.relative(projectRoot, bridgeTargetPath)}`);
+  }
+
+  const systemSkillNames = listSystemSkillSourceDirs();
+  for (const skillName of systemSkillNames) {
+    const skillTargetDir = path.join(resourcesDir, "skills", ".system", skillName);
+    fs.mkdirSync(skillTargetDir, { recursive: true });
+    fs.copyFileSync(
+      path.join(systemSkillsSourceRoot(), skillName, "SKILL.md"),
+      path.join(skillTargetDir, "SKILL.md")
+    );
+  }
+  log(`已内置运行态系统 skills 覆盖：${systemSkillNames.length} 个`);
+}
+
+function writeAppUpdateConfig() {
+  const publishUrl = updatePublishUrl();
+  if (!publishUrl) {
+    return;
+  }
+  const appUpdatePath = path.join(appOutRoot, "resources", "app-update.yml");
+  fs.writeFileSync(appUpdatePath, `provider: generic\nurl: ${JSON.stringify(publishUrl)}\nupdaterCacheDirName: ruizhi-desktop-updater\nuseMultipleRangeRequest: false\n`, "utf8");
+  log(`已写入 electron-updater 配置：${appUpdatePath}`);
+}
+
+function renameElectronExe() {
+  const source = path.join(appOutRoot, config.windows.sourceExeName);
+  const target = path.join(appOutRoot, config.windows.appExeName);
+  if (path.resolve(source).toLowerCase() === path.resolve(target).toLowerCase()) {
+    if (!fs.existsSync(source)) {
+      throw new Error(`没有找到主程序：${source}`);
+    }
+    log(`保留主程序文件名：${config.windows.appExeName}`);
+    return;
+  }
+  fs.rmSync(target, { force: true });
+  fs.renameSync(source, target);
+  log(`已重命名主程序：${config.windows.appExeName}`);
+}
+
+async function patchElectronExeIcon() {
+  const target = path.join(appOutRoot, config.windows.appExeName);
+  const icon = windowsIconPath();
+  let lastError;
+  for (const delayMs of [0, 1000, 2500]) {
+    if (delayMs > 0) {
+      await sleep(delayMs);
+    }
+    try {
+      await rcedit(target, { icon });
+      log(`已替换主程序图标：${path.basename(icon)}`);
+      return;
+    } catch (error) {
+      lastError = error;
+      log(`主程序图标替换失败，准备重试：${error.message}`);
+    }
+  }
+  throw lastError;
+}
+
+function buildGoIconSyso(packageDir, iconPath) {
+  const sysoPath = path.join(packageDir, "zz_build_icon_windows_amd64.syso");
+  fs.rmSync(sysoPath, { force: true });
+  execFileSync(
+    "go",
+    ["run", "github.com/akavel/rsrc@v0.10.2", "-ico", iconPath, "-o", sysoPath],
+    { stdio: "inherit" }
+  );
+  return sysoPath;
+}
+
+function buildGoExe(outputPath, packageDir, label, extraLdflags = []) {
+  fs.rmSync(outputPath, { force: true });
+  log(`编译${label}`);
+
+  const ldflags = ["-H=windowsgui", "-s", "-w", ...extraLdflags].join(" ");
+  const iconPath = windowsIconPath();
+  const sysoPath = buildGoIconSyso(packageDir, iconPath);
+  try {
+    execFileSync(
+      "go",
+      [
+        "build",
+        "-ldflags",
+        ldflags,
+        "-o",
+        outputPath,
+        packageDir
+      ],
+      { stdio: "inherit" }
+    );
+  } finally {
+    fs.rmSync(sysoPath, { force: true });
+  }
+}
+
+function buildGoConsoleExe(outputPath, packageDir, label) {
+  fs.rmSync(outputPath, { force: true });
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  log(`编译${label}`);
+  execFileSync(
+    "go",
+    [
+      "build",
+      "-ldflags",
+      "-s -w",
+      "-o",
+      outputPath,
+      packageDir
+    ],
+    { stdio: "inherit" }
+  );
+}
+
+function buildImageGenHelper() {
+  buildGoConsoleExe(
+    path.join(appOutRoot, "resources", "bin", imageGenHelperExeName()),
+    path.join(projectRoot, "cmd", "ruizhi-imagegen"),
+    "锐智生图工具"
+  );
+}
+
+function windowsZipName() {
+  const name = renderArtifactName(config.windows.zipName ?? `ruizhi-windows-\${version}.\${ext}`, "zip");
+  if (path.basename(name) !== name || !name.toLowerCase().endsWith(".zip")) {
+    throw new Error(`Windows zip 文件名无效：${name}`);
+  }
+  return name;
+}
+
+function assertVersionFilePart(version) {
+  if (!/^[0-9A-Za-z._+-]+$/.test(version)) {
+    throw new Error(`版本号不能用于产物文件名：${version}`);
+  }
+}
+
+function windowsTestAppDirName(version = appVersion) {
+  assertVersionFilePart(version);
+  return `test-app-${version}`;
+}
+
+function windowsLatestYmlPath() {
+  return path.join(installerOutDir, "latest.yml");
+}
+
+function versionedWindowsLatestYmlPath(version = appVersion) {
+  assertVersionFilePart(version);
+  return path.join(installerOutDir, `latest-${version}.yml`);
+}
+
+function readElectronUpdaterManifestVersion(manifestPath) {
+  const content = fs.readFileSync(manifestPath, "utf8");
+  const match = content.match(/^version:\s*['"]?([^'"\s]+)['"]?\s*$/m);
+  if (!match) {
+    throw new Error(`无法从 electron-updater 清单读取版本号：${manifestPath}`);
+  }
+  return match[1];
+}
+
+function preserveExistingWindowsLatestYml() {
+  const latestPath = windowsLatestYmlPath();
+  if (!fs.existsSync(latestPath)) {
+    return;
+  }
+
+  const version = readElectronUpdaterManifestVersion(latestPath);
+  const versionedPath = versionedWindowsLatestYmlPath(version);
+  fs.copyFileSync(latestPath, versionedPath);
+  log(`已保留历史 Windows 更新清单：${versionedPath}`);
+}
+
+function writeVersionedWindowsLatestYml() {
+  const latestPath = windowsLatestYmlPath();
+  if (!fs.existsSync(latestPath)) {
+    throw new Error(`缺少 Windows electron-updater 清单：${latestPath}`);
+  }
+
+  const versionedPath = versionedWindowsLatestYmlPath();
+  fs.copyFileSync(latestPath, versionedPath);
+  log(`Windows 版本更新清单已输出：${versionedPath}`);
+}
+
+function isSamePath(left, right) {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+function removeLegacyArtifact(artifactPath, options = {}) {
+  assertInsideProject(artifactPath);
+  try {
+    fs.rmSync(artifactPath, { force: true, ...options });
+  } catch (error) {
+    if (error?.code === "EPERM" || error?.code === "EBUSY") {
+      throw new Error(`历史产物被占用，无法清理：${artifactPath}。请先关闭正在运行的旧版锐智/Codex 进程后重新构建。`);
+    }
+    throw error;
+  }
+}
+
+function cleanLegacyWindowsArtifacts() {
+  const distDir = path.join(projectRoot, "dist");
+  const legacyArtifacts = [
+    path.join(distDir, "锐智-Setup.exe"),
+    path.join(distDir, "ruizhi-latest.json"),
+    path.join(distDir, "ruizhi-windows.zip"),
+    path.join(distDir, windowsZipName())
+  ];
+
+  for (const artifactPath of legacyArtifacts) {
+    removeLegacyArtifact(artifactPath);
+  }
+
+  if (!fs.existsSync(distDir)) {
+    return;
+  }
+
+  for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || (entry.name !== "windows" && !entry.name.startsWith("windows-"))) {
+      continue;
+    }
+
+    const windowsDistDir = path.join(distDir, entry.name);
+    if (isSamePath(windowsDistDir, distRoot)) {
+      continue;
+    }
+
+    removeLegacyArtifact(windowsDistDir, { recursive: true });
+  }
+}
+
+function createZip() {
+  const zipPath = path.join(installerOutDir, windowsZipName());
+  fs.mkdirSync(installerOutDir, { recursive: true });
+  fs.rmSync(zipPath, { force: true });
+
+  log("压缩 Windows 产物到 installer 目录");
+  execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `Compress-Archive -Path '${distRoot.replaceAll("'", "''")}\\*' -DestinationPath '${zipPath.replaceAll("'", "''")}' -Force`
+    ],
+    { stdio: "inherit" }
+  );
+  log(`zip 已输出：${zipPath}`);
+}
+
+function writeRuntimeEnvironmentMarker(targetRoot, environment) {
+  const resourcesDir = path.join(targetRoot, "resources");
+  fs.mkdirSync(resourcesDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(resourcesDir, "ruizhi-environment.json"),
+    `${JSON.stringify({
+      environment,
+      version: appVersion,
+      executableName: config.windows.appExeName,
+      builtAt: new Date().toISOString()
+    }, null, 2)}\n`,
+    "utf8"
+  );
+}
+
+function createTestApp() {
+  try {
+    cleanDir(testAppOutDir);
+  } catch (error) {
+    if (error?.code === "EPERM" || error?.code === "EBUSY") {
+      throw new Error(`测试程序目录被占用，无法清理：${testAppOutDir}。请先关闭正在运行的测试版锐智/Codex 进程后重新构建。`);
+    }
+    throw error;
+  }
+
+  fsExtra.copySync(appOutRoot, testAppOutDir);
+  writeRuntimeEnvironmentMarker(testAppOutDir, "test");
+
+  const exePath = path.join(testAppOutDir, config.windows.appExeName);
+  if (!fs.existsSync(exePath)) {
+    throw new Error(`测试程序缺少主程序：${exePath}`);
+  }
+
+  log(`测试环境可直接启动：${exePath}`);
+}
+
+function renderArtifactName(template, ext = "exe") {
+  return template
+    .replaceAll("${productName}", config.productName)
+    .replaceAll("${version}", appVersion)
+    .replaceAll("${ext}", ext);
+}
+
+function windowsInstallerArtifactTemplate() {
+  return config.updates?.artifactName ?? `Ruizhi-Setup-\${version}.\${ext}`;
+}
+
+function updateArtifactName() {
+  const name = renderArtifactName(windowsInstallerArtifactTemplate());
+  if (path.basename(name) !== name) {
+    throw new Error(`更新包文件名不能包含路径分隔符：${name}`);
+  }
+  return name;
+}
+
+function updatePublishUrl() {
+  const url = process.env.RUIZHI_UPDATE_DOWNLOAD_BASE_URL ?? config.updates?.downloadBaseUrl ?? "";
+  return url ? (url.endsWith("/") ? url : `${url}/`) : "";
+}
+
+function builderArtifactName() {
+  return windowsInstallerArtifactTemplate();
+}
+
+function legacyWindowsAppExeNames() {
+  const configured = config.windows?.previousAppExeNames ?? [];
+  const currentExeName = config.windows.appExeName.toLowerCase();
+  const seen = new Set();
+  const result = [];
+
+  for (const name of configured) {
+    if (typeof name !== "string" || !name.trim()) {
+      throw new Error(`windows.previousAppExeNames 包含无效文件名：${name}`);
+    }
+
+    if (path.basename(name) !== name || name.includes("\\") || name.includes("/") || name.includes('"') || name.includes("$")) {
+      throw new Error(`历史 Windows 主程序名只能是普通 exe 文件名：${name}`);
+    }
+
+    if (!name.toLowerCase().endsWith(".exe")) {
+      throw new Error(`历史 Windows 主程序名必须以 .exe 结尾：${name}`);
+    }
+
+    const normalized = name.toLowerCase();
+    if (normalized === currentExeName || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    result.push(name);
+  }
+
+  return result;
+}
+
+function writeNsisInstallerInclude() {
+  const includePath = path.join(workRoot, "installer.nsh");
+  const legacyExeNames = legacyWindowsAppExeNames();
+  const lines = ["!macro customInit"];
+
+  for (const exeName of legacyExeNames) {
+    lines.push(
+      `  nsExec::Exec \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "$$target = Join-Path '$INSTDIR' '${exeName}'; if (Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.Equals($$target, [System.StringComparison]::OrdinalIgnoreCase) }) { exit 0 } else { exit 1 }"\``,
+      "  Pop $R0",
+      "  ${if} $R0 == 0",
+      `    MessageBox MB_OK|MB_ICONEXCLAMATION "检测到旧版 ${exeName} 正在运行，请先退出锐智后再安装。"`,
+      "    Quit",
+      "  ${endIf}"
+    );
+  }
+
+  lines.push("!macroend", "", "!macro customInstall");
+
+  for (const exeName of legacyExeNames) {
+    lines.push(
+      `  Delete "$INSTDIR\\${exeName}"`,
+      `  IfFileExists "$INSTDIR\\${exeName}" 0 +3`,
+      `  MessageBox MB_OK|MB_ICONEXCLAMATION "旧版 ${exeName} 删除失败。请确认旧版锐智已完全退出后重新安装。"`,
+      "  Quit"
+    );
+  }
+
+  if (legacyExeNames.length > 0) {
+    lines.push("  ClearErrors");
+  }
+
+  lines.push("!macroend", "");
+  fs.mkdirSync(workRoot, { recursive: true });
+  fs.writeFileSync(includePath, lines.join("\n"));
+  return includePath;
+}
+
+function electronBuilderConfig() {
+  const publishUrl = updatePublishUrl();
+  return {
+    appId: "cn.ruizhi.desktop",
+    productName: config.productName,
+    electronVersion: electronRuntimeVersion(),
+    publish: publishUrl ? [{ provider: "generic", url: publishUrl, useMultipleRangeRequest: false }] : null,
+    copyright: `Copyright © ${new Date().getFullYear()} ${config.productName}`,
+    directories: {
+      output: installerOutDir
+    },
+    extraMetadata: {
+      name: "ruizhi-desktop",
+      productName: config.productName,
+      version: appVersion
+    },
+    win: {
+      icon: windowsIconPath(),
+      executableName: path.basename(config.windows.appExeName, ".exe"),
+      target: [
+        {
+          target: "nsis",
+          arch: ["x64"]
+        }
+      ],
+      artifactName: builderArtifactName()
+    },
+    nsis: {
+      oneClick: false,
+      perMachine: false,
+      allowElevation: false,
+      allowToChangeInstallationDirectory: true,
+      createDesktopShortcut: true,
+      createStartMenuShortcut: true,
+      shortcutName: config.windows.shortcutName ?? config.productName,
+      include: writeNsisInstallerInclude(),
+      uninstallDisplayName: config.productName,
+      deleteAppDataOnUninstall: false,
+      runAfterFinish: true
+    }
+  };
+}
+
+function createInstallerExe() {
+  cleanLegacyWindowsArtifacts();
+  fs.mkdirSync(installerOutDir, { recursive: true });
+  preserveExistingWindowsLatestYml();
+  removeLegacyArtifact(path.join(installerOutDir, updateArtifactName()));
+  removeLegacyArtifact(path.join(installerOutDir, `${updateArtifactName()}.blockmap`));
+  cleanDir(installerInputRoot);
+  fsExtra.copySync(appOutRoot, installerInputRoot);
+  validateRuizhiRuntimeBundle(installerInputRoot, config, {
+    log,
+    label: "Windows 安装包输入目录",
+    expectedVersion: appVersion
+  });
+
+  const builderConfigPath = path.join(workRoot, "electron-builder.json");
+  fs.writeFileSync(builderConfigPath, `${JSON.stringify(electronBuilderConfig(), null, 2)}\n`);
+
+  log("生成 NSIS 安装包");
+  execLogged(process.execPath, [
+    electronBuilderCliPath(),
+    "--win",
+    "nsis",
+    "--x64",
+    "--prepackaged",
+    installerInputRoot,
+    "--config",
+    builderConfigPath,
+    "--publish",
+    "never"
+  ]);
+
+  const versionedInstallerPath = path.join(installerOutDir, updateArtifactName());
+  if (!fs.existsSync(versionedInstallerPath)) {
+    throw new Error(`没有找到 NSIS 安装包：${versionedInstallerPath}`);
+  }
+
+  fs.rmSync(path.join(installerOutDir, "builder-debug.yml"), { force: true });
+  log(`NSIS 安装包已输出：${versionedInstallerPath}`);
+  writeVersionedWindowsLatestYml();
+}
+
+async function main() {
+  if (process.platform !== "win32") {
+    throw new Error("build:windows 只能在 Windows 上运行。");
+  }
+
+  const installedAppRoot = findPinnedCodexAppRoot();
+  log(`使用固定 Codex Desktop 源：${installedAppRoot}`);
+
+  cleanDir(distRoot);
+  log("复制 Codex Desktop 文件");
+  await fsExtra.copy(installedAppRoot, appOutRoot);
+
+  buildPatchedCodexCli();
+  buildImageGenHelper();
+  copyRuntimeOverrides();
+  writeAppUpdateConfig();
+  copyPluginMarketplaces();
+  patchRuntimeResourceText();
+  await repackAppAsar();
+  await patchFuses();
+  renameElectronExe();
+  await patchElectronExeIcon();
+  validateRuizhiRuntimeBundle(appOutRoot, config, {
+    log,
+    label: "Windows 打包运行目录",
+    expectedVersion: appVersion
+  });
+  createZip();
+  createTestApp();
+  validateRuizhiRuntimeBundle(testAppOutDir, config, {
+    log,
+    label: "Windows 测试程序目录",
+    expectedVersion: appVersion,
+    expectedEnvironment: "test"
+  });
+  createInstallerExe();
+  writeRuntimeEnvironmentMarker(appOutRoot, "development");
+
+  log("构建完成");
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

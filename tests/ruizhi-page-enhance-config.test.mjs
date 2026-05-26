@@ -24,6 +24,7 @@ test("page enhance enables first migration scope and leaves high risk features d
   assert.equal(features?.projectMove, true);
   assert.equal(features?.timeline, true);
   assert.equal(features?.threadScrollRestore, true);
+  assert.equal(features?.threadSort, true);
 
   assert.equal(features?.modelWhitelistUnlock, false);
   assert.equal(features?.zedRemoteOpen, false);

@@ -303,6 +303,7 @@ function pageEnhanceFeatures() {
     projectMove: true,
     timeline: true,
     threadScrollRestore: true,
+    threadSort: true,
     modelWhitelistUnlock: false,
     zedRemoteOpen: false,
     upstreamWorktreeCreate: false,
@@ -315,6 +316,7 @@ function pageEnhanceBootstrapConfig() {
   return {
     enabled: pageEnhanceEnabled(),
     features: pageEnhanceFeatures(),
+    appVersion,
     rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
     serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
   };
@@ -322,6 +324,10 @@ function pageEnhanceBootstrapConfig() {
 
 function pageEnhanceRendererSourcePath() {
   return resolveProjectPath(path.join("resources", "renderer", "ruizhi-page-enhance.js"));
+}
+
+function pageEnhanceRendererInstallerSource() {
+  return fs.readFileSync(pageEnhanceRendererSourcePath(), "utf8");
 }
 
 function pageEnhanceServiceSourcePath() {
@@ -1055,6 +1061,40 @@ function patchOfficialUpdateLogic() {
   log(`已禁用 Codex 官方更新逻辑：${path.basename(mainFile)}`);
 }
 
+function applicationMenuPatchSource() {
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=e?.items?.[0]?.submenu;if(!a||!Array.isArray(a.items))return;let o=e=>String(e?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),s=()=>a.items.some(e=>/^(Settings|设置|Preferences|偏好设置)/.test(o(e))),c=()=>a.items.some(e=>/^(Automations|自动化)$/.test(o(e)));if(!s()){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:async()=>{let e=await n();e&&r(e,i)}});a.insert(Math.min(2,a.items.length),e)}if(!c()){let e=new t({label:\`自动化\`,click:async()=>{let e=await n();e&&r(e,\`/automations\`)}});a.insert(Math.min(3,a.items.length),e)}}`;
+}
+
+function patchApplicationMenu() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  writePatchedFileIfChanged(mainFile, (source) => {
+    let next = source;
+    if (!next.includes("function ruizhiTranslateApplicationMenu(")) {
+      next = replaceExact(
+        next,
+        "let Qe=[],$e=",
+        `${applicationMenuPatchSource()}let Qe=[],$e=`,
+        "注入 macOS 顶部菜单修复函数"
+      );
+    }
+    next = next.replace(
+      /\{label:`Automations`,click:\(\)=>\{[A-Za-z_$][\w$]*\.shell\.openExternal\(`[^`]+`\)\}\}/,
+      "{label:`Automations`,click:async()=>{let e=await d();e&&m(e,`/automations`)}}"
+    );
+    if (!next.includes("ruizhiEnsureNativeMenuItems({menu:et")) {
+      next = replaceExact(
+        next,
+        "n.Menu.setApplicationMenu(et),dV(g)",
+        "try{ruizhiEnsureNativeMenuItems({menu:et,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:LW});ruizhiTranslateApplicationMenu(et)}catch(e){console.error(`锐智菜单修复失败`,e)}n.Menu.setApplicationMenu(et),dV(g)",
+        "挂载 macOS 顶部菜单修复"
+      );
+    }
+    return next;
+  });
+  log(`已补丁 macOS 顶部菜单：${path.basename(mainFile)}`);
+}
+
 function bootstrapInitCode() {
   const posixLocale = config.locale.replace("-", "_");
   const configLines = managedConfigTomlLines().map((line) => jsonLiteral(line)).join(",");
@@ -1637,6 +1677,7 @@ function ruizhiStartBackgroundUpdateCheck(){
 
 function preloadIntegrationCode() {
   return `
+${pageEnhanceRendererInstallerSource()}
 ;(()=>{try{
   const electron=require("electron");
   const ipcRenderer=electron.ipcRenderer;
@@ -1649,15 +1690,6 @@ function preloadIntegrationCode() {
   const cleanup=[];
   let disposed=false;
   function addCleanup(fn){cleanup.push(fn);}
-  function cleanupNodes(){
-    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>el.remove());
-    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
-      el.classList.remove("ruizhi-settings-update-row");
-      delete el.dataset.ruizhiUpdateActive;
-      delete el.dataset.ruizhiUpdateStatus;
-      el.style.removeProperty("--ruizhi-update-progress");
-    });
-  }
   function dispose(){
     if(disposed)return;
     disposed=true;
@@ -1665,14 +1697,9 @@ function preloadIntegrationCode() {
       const fn=cleanup.pop();
       try{fn()}catch{}
     }
-    cleanupNodes();
   }
   globalThis[integrationKey]={dispose};
   let updateState={status:"idle",currentVersion:appVersion,version:null,progress:0,message:""};
-  let row=null;
-  let progressEl=null;
-  let statusEl=null;
-  let renderQueued=false;
 
   const api={
     update:{
@@ -1685,6 +1712,7 @@ function preloadIntegrationCode() {
       setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
     }
   };
+  try{globalThis.ruizhiDesktop=api}catch{}
   try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
 
   function onReady(fn){
@@ -1698,154 +1726,23 @@ function preloadIntegrationCode() {
     if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
     window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
     try{
-      const fs=require("node:fs");
-      const path=require("node:path");
-      const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
-      const scriptPath=path.join(resourcesRoot,...pageEnhanceConfig.rendererResourcePath);
-      const source=fs.readFileSync(scriptPath,"utf8");
-      const script=document.createElement("script");
-      script.textContent="window.__RUIZHI_PAGE_ENHANCE_CONFIG__="+${jsonLiteral(JSON.stringify(pageEnhanceBootstrapConfig()))}+";\\n"+source;
-      (document.documentElement||document.head||document.body).appendChild(script);
-      script.remove();
+      const installer=globalThis.__RUIZHI_INSTALL_PAGE_ENHANCE__;
+      if(typeof installer!=="function")throw new Error("页面增强 installer 不可用");
+      installer({window,document,ruizhiDesktop:api,config:pageEnhanceConfig});
     }catch(error){
       console.error("ruizhi page enhance inject failed",error);
     }
   }
   onReady(injectRuizhiPageEnhance);
-  function injectStyle(){
-    if(document.getElementById("ruizhi-desktop-integration-style"))return;
-    const style=document.createElement("style");
-    style.id="ruizhi-desktop-integration-style";
-    style.textContent=[
-      ".ruizhi-settings-update-row{position:relative!important;overflow:hidden!important;}",
-      ".ruizhi-settings-update-row>.ruizhi-update-progress-bg{position:absolute;inset:1px auto 1px 1px;width:var(--ruizhi-update-progress,0%);border-radius:inherit;background:rgba(127,127,127,.12);pointer-events:none;z-index:0;transition:width .24s ease,opacity .2s ease;opacity:0;}",
-      ".ruizhi-settings-update-row[data-ruizhi-update-active='true']>.ruizhi-update-progress-bg{opacity:1;}",
-      ".ruizhi-settings-update-row>:not(.ruizhi-update-progress-bg):not(.ruizhi-update-status){position:relative;z-index:1;}",
-      ".ruizhi-update-status{position:relative;z-index:2;margin-left:auto;padding:0 2px;font:inherit;font-size:12px;line-height:inherit;font-weight:500;color:inherit;opacity:.62;background:transparent;white-space:nowrap;}",
-      ".ruizhi-update-status[data-clickable='true']{cursor:pointer;opacity:.82;}",
-      ".ruizhi-settings-update-row:hover .ruizhi-update-status[data-clickable='true']{opacity:1;text-decoration:underline;text-underline-offset:2px;}"
-    ].join("\\n");
-    document.head.appendChild(style);
-  }
-  function visible(el){
-    if(!(el instanceof HTMLElement))return false;
-    const rect=el.getBoundingClientRect();
-    const style=getComputedStyle(el);
-    return rect.width>=48&&rect.height>=24&&style.visibility!=="hidden"&&style.display!=="none";
-  }
-  function labelOf(el){
-    return [
-      el.getAttribute("aria-label"),
-      el.getAttribute("title"),
-      el.getAttribute("data-testid"),
-      el.textContent
-    ].filter(Boolean).join(" ");
-  }
-  function findSettingsRow(){
-    const nodes=Array.from(document.querySelectorAll("button,a,[role='button']"));
-    const matches=nodes.filter(el=>visible(el)&&/(设置|Settings|Preferences|setting)/i.test(labelOf(el)));
-    matches.sort((a,b)=>{
-      const ar=a.getBoundingClientRect();
-      const br=b.getBoundingClientRect();
-      return br.bottom-ar.bottom||ar.left-br.left;
-    });
-    return matches[0]||null;
-  }
-  function ensureRow(){
-    const target=findSettingsRow();
-    if(!target){
-      row=null;
-      progressEl=null;
-      statusEl=null;
-      cleanupNodes();
-      return false;
-    }
-    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
-      if(el!==target)el.classList.remove("ruizhi-settings-update-row");
-    });
-    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>{
-      if(!target.contains(el))el.remove();
-    });
-    if(row!==target){
-      row?.classList.remove("ruizhi-settings-update-row");
-      row=target;
-      row.classList.add("ruizhi-settings-update-row");
-      progressEl=null;
-      statusEl=null;
-    }
-    const progressNodes=Array.from(row.querySelectorAll(".ruizhi-update-progress-bg"));
-    if(!progressEl||!row.contains(progressEl))progressEl=progressNodes[0]||null;
-    for(const el of progressNodes){
-      if(el!==progressEl)el.remove();
-    }
-    if(!progressEl||!row.contains(progressEl)){
-      progressEl=document.createElement("span");
-      progressEl.className="ruizhi-update-progress-bg";
-      row.prepend(progressEl);
-    }
-    const statusNodes=Array.from(row.querySelectorAll(".ruizhi-update-status"));
-    if(!statusEl||!row.contains(statusEl))statusEl=statusNodes[0]||null;
-    for(const el of statusNodes){
-      if(el!==statusEl)el.remove();
-    }
-    if(!statusEl||!row.contains(statusEl)){
-      statusEl=document.createElement("span");
-      statusEl.className="ruizhi-update-status";
-      statusEl.addEventListener("click",event=>{
-        if(updateState.status!=="ready")return;
-        event.preventDefault();
-        event.stopPropagation();
-        ipcRenderer.invoke("ruizhi:update:install-now").catch(error=>console.error("ruizhi install-now failed",error));
-      });
-      row.appendChild(statusEl);
-    }
-    return true;
-  }
-  function statusText(){
-    const status=updateState.status;
-    if(status==="checking")return "检查更新";
-    if(status==="downloading")return Math.max(0,Math.min(100,Number(updateState.progress)||0))+"%";
-    if(status==="ready")return "重启并更新";
-    if(status==="installing")return "正在安装";
-    if(status==="error")return "更新失败";
-    return "v"+(updateState.currentVersion||appVersion);
-  }
-  function renderUpdateRow(){
-    if(disposed)return;
-    injectStyle();
-    if(!ensureRow())return;
-    const status=updateState.status;
-    const active=status==="checking"||status==="downloading"||status==="ready"||status==="installing";
-    const progress=status==="ready"||status==="installing"?100:status==="downloading"?Number(updateState.progress)||0:0;
-    row.dataset.ruizhiUpdateActive=active?"true":"false";
-    row.dataset.ruizhiUpdateStatus=status||"idle";
-    row.style.setProperty("--ruizhi-update-progress",Math.max(0,Math.min(100,progress))+"%");
-    statusEl.textContent=statusText();
-    statusEl.title=status==="ready"?"点击后退出锐智并安装新版本":"当前版本";
-    statusEl.dataset.clickable=status==="ready"?"true":"false";
-  }
-  function queueRender(){
-    if(disposed||renderQueued)return;
-    renderQueued=true;
-    requestAnimationFrame(()=>{renderQueued=false;if(!disposed)renderUpdateRow();});
-  }
 
   function onUpdateStateChanged(_event,next){
     if(disposed)return;
     updateState={...updateState,...next};
-    queueRender();
   }
   ipcRenderer.on("ruizhi:update:state-changed",onUpdateStateChanged);
   addCleanup(()=>ipcRenderer.removeListener("ruizhi:update:state-changed",onUpdateStateChanged));
   onReady(()=>{
-    injectStyle();
-    ipcRenderer.invoke("ruizhi:update:get-state").then(next=>{updateState={...updateState,...next};queueRender();}).catch(()=>queueRender());
-    const observer=new MutationObserver(queueRender);
-    observer.observe(document.documentElement,{childList:true,subtree:true});
-    addCleanup(()=>observer.disconnect());
-    queueRender();
-    const timer=setInterval(queueRender,2000);
-    addCleanup(()=>clearInterval(timer));
+    ipcRenderer.invoke("ruizhi:update:get-state").then(next=>{updateState={...updateState,...next};}).catch(()=>{});
   });
 }catch(error){console.error("ruizhi preload integration failed",error)}})();
 `;
@@ -1858,10 +1755,10 @@ function patchPreloadIntegration() {
       source,
       "\n//# sourceMappingURL=preload.js.map",
       `${preloadIntegrationCode()}\n//# sourceMappingURL=preload.js.map`,
-      "注入锐智 macOS 更新状态 UI"
+      "注入锐智 macOS preload bridge"
     )
   );
-  log("已补丁 preload 锐智更新 UI");
+  log("已补丁 preload 锐智 bridge");
 }
 
 function nodeModuleTargetDir(targetNodeModules, packageName) {
@@ -1942,6 +1839,7 @@ async function repackAppAsar() {
   patchAppSunsetGate();
   patchModelAvailabilityAllowlist();
   patchOfficialUpdateLogic();
+  patchApplicationMenu();
   patchHelpDocumentationLinks();
   copyUpdaterRuntimeDependencies();
   patchBootstrap();

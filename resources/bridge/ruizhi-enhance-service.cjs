@@ -14,6 +14,7 @@ const DEFAULT_FEATURES = {
   projectMove: true,
   timeline: true,
   threadScrollRestore: true,
+  threadSort: true,
   modelWhitelistUnlock: false,
   zedRemoteOpen: false,
   upstreamWorktreeCreate: false,
@@ -93,6 +94,7 @@ function normalizeConfig(config) {
   const pageEnhance = isRecord(config?.pageEnhance) ? config.pageEnhance : {};
   return {
     enabled: pageEnhance.enabled !== false,
+    appVersion: typeof pageEnhance.appVersion === "string" ? pageEnhance.appVersion.trim() : "",
     features: {
       ...DEFAULT_FEATURES,
       ...(isRecord(pageEnhance.features) ? pageEnhance.features : {})
@@ -109,6 +111,7 @@ function readSettings(settingsPath, config) {
   }
   return {
     enabled: stored.enabled ?? config.enabled,
+    appVersion: typeof stored.appVersion === "string" && stored.appVersion.trim() ? stored.appVersion.trim() : config.appVersion,
     features: {
       ...config.features,
       ...(isRecord(stored.features) ? stored.features : {})
@@ -291,7 +294,6 @@ class StorageAdapter {
   moveThreadWorkspace(session, targetCwd) {
     const target = String(targetCwd || "").trim();
     if (!session.session_id) return failed("", "缺少会话 ID");
-    if (!target) return failed(session.session_id, "目标项目路径为空");
     if (!this.hasCodexThreads() || !this.hasColumns("threads", ["cwd", "rollout_path"])) {
       return failed(session.session_id, "不支持当前本地存储结构");
     }
@@ -302,7 +304,7 @@ class StorageAdapter {
     return {
       status: "moved",
       session_id: session.session_id,
-      message: "已移动对话",
+      message: target ? "已移动对话" : "已移动到普通对话",
       previous_cwd: String(thread.cwd || ""),
       target_cwd: target,
       rollout_updated: rolloutResult.updated,

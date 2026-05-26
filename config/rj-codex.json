@@ -114,6 +114,7 @@
       "projectMove": true,
       "timeline": true,
       "threadScrollRestore": true,
+      "threadSort": true,
       "modelWhitelistUnlock": false,
       "zedRemoteOpen": false,
       "upstreamWorktreeCreate": false,

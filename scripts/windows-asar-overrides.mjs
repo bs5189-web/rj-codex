@@ -87,6 +87,10 @@ function jsonLiteral(value) {
   });
 }
 
+function pageEnhanceRendererInstallerSource() {
+  return fs.readFileSync(pageEnhanceRendererSourcePath, "utf8");
+}
+
 function tomlValue(value) {
   if (typeof value === "string") {
     return jsonLiteral(value);
@@ -175,6 +179,7 @@ function pageEnhanceFeatures(config) {
     projectMove: true,
     timeline: true,
     threadScrollRestore: true,
+    threadSort: true,
     modelWhitelistUnlock: false,
     zedRemoteOpen: false,
     upstreamWorktreeCreate: false,
@@ -187,6 +192,7 @@ function pageEnhanceBootstrapConfig(config) {
   return {
     enabled: pageEnhanceEnabled(config),
     features: pageEnhanceFeatures(config),
+    appVersion: config.version,
     rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
     serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
   };
@@ -1833,25 +1839,21 @@ function preloadPageEnhanceIntegrationSnippet(config) {
   const enhanceConfig = pageEnhanceBootstrapConfig(config);
   return `
   /* ruizhi-page-enhance-preload:start */
+${pageEnhanceRendererInstallerSource()}
   const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
   api.enhance={
     call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
     getSettings:()=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/get",{}),
     setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
   };
+  try{globalThis.ruizhiDesktop=api}catch{}
   function injectRuizhiPageEnhance(){
     if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
     window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
     try{
-      const fs=require("node:fs");
-      const path=require("node:path");
-      const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
-      const scriptPath=path.join(resourcesRoot,...pageEnhanceConfig.rendererResourcePath);
-      const source=fs.readFileSync(scriptPath,"utf8");
-      const script=document.createElement("script");
-      script.textContent="window.__RUIZHI_PAGE_ENHANCE_CONFIG__="+${jsonLiteral(JSON.stringify(enhanceConfig))}+";\\n"+source;
-      (document.documentElement||document.head||document.body).appendChild(script);
-      script.remove();
+      const installer=globalThis.__RUIZHI_INSTALL_PAGE_ENHANCE__;
+      if(typeof installer!=="function")throw new Error("页面增强 installer 不可用");
+      installer({window,document,ruizhiDesktop:api,config:pageEnhanceConfig});
     }catch(error){
       console.error("ruizhi page enhance inject failed",error);
     }

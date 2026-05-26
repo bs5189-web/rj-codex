@@ -1,4 +1,20 @@
-(() => {
+(function ruizhiPageEnhanceModule(globalScope) {
+  function installRuizhiPageEnhance(env = {}) {
+  const window = env.window || globalScope.window;
+  const document = env.document || window?.document || globalScope.document;
+  if (!window || !document) return null;
+  if (env.ruizhiDesktop && !window.ruizhiDesktop) {
+    try {
+      window.ruizhiDesktop = env.ruizhiDesktop;
+    } catch {
+    }
+  }
+  if (env.config) {
+    try {
+      window.__RUIZHI_PAGE_ENHANCE_CONFIG__ = env.config;
+    } catch {
+    }
+  }
   const runtimeKey = "__RUIZHI_PAGE_ENHANCE_RUNTIME__";
   const previous = window[runtimeKey];
   if (previous && typeof previous.dispose === "function") previous.dispose();
@@ -8,7 +24,9 @@
     forcePluginInstall: "RUIZHI_FORCE_PLUGIN_INSTALL_V1",
     sessionActions: "RUIZHI_SESSION_ACTIONS_V1",
     timeline: "RUIZHI_CONVERSATION_TIMELINE_V1",
-    threadScroll: "RUIZHI_THREAD_SCROLL_RESTORE_V1"
+    threadScroll: "RUIZHI_THREAD_SCROLL_RESTORE_V1",
+    threadSort: "RUIZHI_THREAD_SORT_FIX_V1",
+    settingsVersion: "RUIZHI_SETTINGS_VERSION_FIX_V1"
   };
   window.__RUIZHI_PAGE_ENHANCE_MARKERS__ = markers;
 
@@ -21,6 +39,7 @@
     projectMove: true,
     timeline: true,
     threadScrollRestore: true,
+    threadSort: true,
     modelWhitelistUnlock: false,
     zedRemoteOpen: false,
     upstreamWorktreeCreate: false,
@@ -34,7 +53,11 @@
     scanTimer: null,
     observer: null,
     forcePluginTimer: null,
-    scrollSaveTimer: null
+    scrollSaveTimer: null,
+    scrollBoundElements: new WeakSet(),
+    scrollRestoreKey: "",
+    sortRequestKey: "",
+    sortRequestTime: 0
   };
 
   window[runtimeKey] = { dispose, scan };
@@ -43,7 +66,8 @@
     const features = value && typeof value === "object" && value.features && typeof value.features === "object" ? value.features : {};
     return {
       enabled: value?.enabled !== false,
-      features: { ...defaultFeatures, ...features }
+      features: { ...defaultFeatures, ...features },
+      appVersion: typeof value?.appVersion === "string" ? value.appVersion.trim() : ""
     };
   }
 
@@ -146,6 +170,7 @@
         <label>项目移动<input type="checkbox" data-feature="projectMove"></label>
         <label>Timeline<input type="checkbox" data-feature="timeline"></label>
         <label>滚动恢复<input type="checkbox" data-feature="threadScrollRestore"></label>
+        <label>排序修正<input type="checkbox" data-feature="threadSort"></label>
       </div>
     `;
     root.querySelector("[data-trigger]").addEventListener("click", () => {
@@ -289,22 +314,81 @@
     }
   }
 
+  function closestSessionRow(node) {
+    if (!(node instanceof HTMLElement)) return null;
+    const row = node.closest([
+      "[data-app-action-sidebar-thread-id]",
+      "[data-app-action-sidebar-thread-row]",
+      "[data-app-action-sidebar-thread-title]",
+      "[data-thread-id]",
+      "[data-session-id]",
+      "[data-testid*='thread']",
+      "[data-testid*='conversation']",
+      "[data-testid*='chat-history']",
+      "a[href*='/c/']",
+      "a[href*='thread']",
+      "a[href*='conversation']",
+      "li",
+      "[role='listitem']"
+    ].join(","));
+    if (!(row instanceof HTMLElement) || row.closest(".ruizhi-session-actions")) return null;
+    const rect = row.getBoundingClientRect();
+    if (rect.width < 32 || rect.height < 18) return null;
+    if (row.matches("main,body,html,[role='main']")) return null;
+    return stableSessionIdFromElement(row) ? row : null;
+  }
+
+  function stableSessionIdFromElement(row) {
+    const direct = row.getAttribute("data-app-action-sidebar-thread-id")
+      || row.getAttribute("data-app-action-sidebar-thread-row")
+      || row.getAttribute("data-thread-id")
+      || row.getAttribute("data-session-id")
+      || row.dataset.threadId
+      || row.dataset.sessionId
+      || "";
+    if (direct) return direct.replace(/^local:/, "");
+    const linked = row.matches("a[href]") ? row : row.querySelector("a[href*='/c/'],a[href*='thread'],a[href*='conversation']");
+    const href = linked?.getAttribute("href") || "";
+    const match = href.match(/\/(?:c|thread|threads|conversation|conversations|chat)\/([^/?#]+)/i) || href.match(/(?:thread|conversation)[=/]([^&#?/]+)/i);
+    if (match?.[1]) return decodeURIComponent(match[1]).replace(/^local:/, "");
+    const nested = row.querySelector("[data-app-action-sidebar-thread-id],[data-app-action-sidebar-thread-row],[data-thread-id],[data-session-id]");
+    if (nested instanceof HTMLElement) return stableSessionIdFromElement(nested);
+    const testId = row.getAttribute("data-testid") || "";
+    const idMatch = testId.match(/(?:thread|conversation|session)[-_:/]([A-Za-z0-9._:-]{8,})/i);
+    return idMatch?.[1] || "";
+  }
+
   function sessionRows() {
-    return Array.from(document.querySelectorAll("[data-app-action-sidebar-thread-id],a[href*='/c/'],a[href*='thread']"))
-      .filter((row) => row instanceof HTMLElement && !row.closest(".ruizhi-session-actions"));
+    const selector = [
+      "[data-app-action-sidebar-thread-id]",
+      "[data-app-action-sidebar-thread-row]",
+      "[data-app-action-sidebar-thread-title]",
+      "[data-thread-id]",
+      "[data-session-id]",
+      "[data-testid*='thread']",
+      "[data-testid*='conversation']",
+      "[data-testid*='chat-history']",
+      "a[href*='/c/']",
+      "a[href*='thread']",
+      "a[href*='conversation']"
+    ].join(",");
+    const rows = [];
+    for (const node of document.querySelectorAll(selector)) {
+      const row = closestSessionRow(node);
+      if (row && !rows.includes(row)) rows.push(row);
+    }
+    return rows;
   }
 
   function sessionRefFromRow(row) {
-    const id = row.getAttribute("data-app-action-sidebar-thread-id")
-      || row.dataset.threadId
-      || (row.getAttribute("href") || "").split("/").filter(Boolean).pop()
-      || "";
-    const title = (row.querySelector("[data-thread-title]")?.textContent || row.textContent || "Untitled session")
-      .replace(/删除|导出|移动/g, "")
+    const id = stableSessionIdFromElement(row);
+    const titleNode = row.querySelector("[data-app-action-sidebar-thread-title],[data-thread-title],[data-testid*='title'],[title]");
+    const title = (row.getAttribute("data-app-action-sidebar-thread-title") || titleNode?.getAttribute("title") || titleNode?.textContent || row.getAttribute("aria-label") || row.title || row.textContent || "Untitled session")
+      .replace(/删除|导出|移动|排序修正/g, "")
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 160);
-    return { session_id: id.replace(/^local:/, ""), title };
+    return { session_id: id, title };
   }
 
   function buttonSvg(pathData) {
@@ -326,6 +410,51 @@
       if (feature("sessionDelete")) group.appendChild(actionButton("删除", buttonSvg("M3 6h18 M8 6V4h8v2 M19 6l-1 14H6L5 6"), () => deleteSession(ref), true));
       row.appendChild(group);
     });
+  }
+
+  function commonSessionListParent(rows) {
+    const counts = new Map();
+    for (const row of rows) {
+      for (let parent = row.parentElement, depth = 0; parent && depth < 4; parent = parent.parentElement, depth += 1) {
+        counts.set(parent, (counts.get(parent) || 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .filter(([, count]) => count >= Math.min(rows.length, 2))
+      .sort((left, right) => right[1] - left[1])[0]?.[0] || null;
+  }
+
+  function installThreadSorting() {
+    if (!feature("threadSort")) return;
+    const rows = sessionRows();
+    if (rows.length < 2) return;
+    const sessions = rows.map(sessionRefFromRow).filter((ref) => ref.session_id);
+    if (sessions.length < 2) return;
+    const requestKey = sessions.map((session) => session.session_id).join("|");
+    const now = Date.now();
+    if (state.sortRequestKey === requestKey && now - state.sortRequestTime < 5000) return;
+    state.sortRequestKey = requestKey;
+    state.sortRequestTime = now;
+    bridgeCall("/thread-sort-keys", { sessions }).then((result) => {
+      if (state.disposed || result?.status !== "ok" || !Array.isArray(result.sort_keys)) return;
+      const sortKeys = new Map(result.sort_keys.map((item) => [String(item.session_id || ""), Number(item.updated_at_ms || item.updated_at || item.archived_at || 0)]));
+      rows.forEach((row) => {
+        const key = sortKeys.get(sessionRefFromRow(row).session_id);
+        if (Number.isFinite(key) && key > 0) row.setAttribute("data-ruizhi-sort-key", String(key));
+      });
+      const sortableRows = rows.filter((row) => Number(row.getAttribute("data-ruizhi-sort-key")) > 0);
+      const container = commonSessionListParent(sortableRows);
+      if (!container || sortableRows.length < 2) return;
+      const ordered = sortableRows.slice().sort((left, right) => Number(right.getAttribute("data-ruizhi-sort-key")) - Number(left.getAttribute("data-ruizhi-sort-key")));
+      let changed = false;
+      for (let index = 0; index < ordered.length; index += 1) {
+        if (sortableRows[index] !== ordered[index]) changed = true;
+      }
+      if (!changed) return;
+      ordered.forEach((row) => {
+        if (row.parentElement === container) container.appendChild(row);
+      });
+    }).catch((error) => bridgeCall("/diagnostics/log", { event: "thread_sort_failed", message: String(error?.message || error) }));
   }
 
   function actionButton(label, content, handler, html = false) {
@@ -370,13 +499,31 @@
 
   function projectTargets() {
     const targets = [];
-    document.querySelectorAll("[data-app-action-sidebar-project-id],[data-app-action-sidebar-project-list-id]").forEach((node) => {
-      const label = (node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
-      const pathText = node.getAttribute("data-workspace-root") || node.getAttribute("data-cwd") || node.title || label;
+    document.querySelectorAll("[data-app-action-sidebar-project-row],[data-app-action-sidebar-project-id],[data-app-action-sidebar-project-label],[data-app-action-sidebar-project-list-id],[data-app-action-sidebar-select-project],[data-testid*='project'],[data-testid*='workspace'],[data-workspace-root],[data-cwd],a[href*='project'],button[aria-label*='项目'],button[aria-label*='Project']").forEach((node) => {
+      const row = node.closest("[data-app-action-sidebar-project-row]") || node;
+      const label = (row.getAttribute("data-app-action-sidebar-project-label") || row.textContent || "").replace(/\s+/g, " ").trim().slice(0, 80);
+      const pathText = row.getAttribute("data-workspace-root")
+        || row.getAttribute("data-cwd")
+        || row.getAttribute("data-path")
+        || projectPathFromId(row.getAttribute("data-app-action-sidebar-project-id") || row.getAttribute("data-app-action-sidebar-project-list-id") || "")
+        || row.getAttribute("aria-label")?.match(/(\/[^，,]+)/)?.[1]
+        || row.title
+        || "";
       if (label && pathText) targets.push({ label, path: pathText });
     });
     targets.push({ label: "普通对话", path: "" });
     return targets.filter((item, index, all) => item.label && all.findIndex((other) => other.label === item.label && other.path === item.path) === index);
+  }
+
+  function projectPathFromId(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const normalized = text.replace(/^local:/, "").replace(/^file:\/\//, "");
+    try {
+      return decodeURIComponent(normalized);
+    } catch {
+      return normalized;
+    }
   }
 
   function openProjectMove(ref) {
@@ -410,12 +557,43 @@
 
   function timelineQuestions() {
     const root = timelineRoot();
-    const candidates = Array.from(root.querySelectorAll("[data-message-author-role='user'],[data-testid*='user'],article,div"));
+    const candidates = Array.from(root.querySelectorAll("[data-turn-key],[data-content-search-turn-key],[data-message-author-role='user'],[data-testid*='user'],[data-testid*='conversation-turn'],[data-testid*='message'],article,[role='article']"));
     return candidates.filter((node) => {
-      const text = (node.textContent || "").trim();
+      const text = timelineLabel(node);
       const rect = node.getBoundingClientRect();
-      return text.length > 0 && text.length < 1200 && rect.height > 0 && /user|用户|你/i.test(node.getAttribute("data-message-author-role") || node.getAttribute("aria-label") || "");
+      return text.length > 0 && text.length < 1200 && rect.height > 0 && messageAuthorOf(node) === "user";
     }).slice(0, 40);
+  }
+
+  function messageAuthorOf(node) {
+    const direct = node.getAttribute("data-message-author-role") || node.getAttribute("data-author") || "";
+    if (/^user$/i.test(direct)) return "user";
+    if (/^assistant$/i.test(direct)) return "assistant";
+    if (node.hasAttribute("data-turn-key") || node.hasAttribute("data-content-search-turn-key")) return "user";
+    const nested = node.querySelector?.("[data-message-author-role]");
+    if (nested instanceof HTMLElement) return messageAuthorOf(nested);
+    const text = [
+      node.getAttribute("data-testid"),
+      node.getAttribute("aria-label"),
+      node.getAttribute("class")
+    ].filter(Boolean).join(" ");
+    if (/(user|用户|you|prompt|human)/i.test(text)) return "user";
+    if (/(assistant|agent|model|response)/i.test(text)) return "assistant";
+    return "";
+  }
+
+  function timelineLabel(node) {
+    const preferred = node.querySelector?.("[data-message-author-role='user'],[data-testid*='user'],[data-testid*='prompt']");
+    return (preferred?.textContent || node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 220);
+  }
+
+  function elementTopInScroller(node, scroller) {
+    const rect = node.getBoundingClientRect();
+    if (!scroller || scroller === document.scrollingElement || scroller === document.documentElement || scroller === document.body) {
+      return (document.scrollingElement || document.documentElement).scrollTop + rect.top;
+    }
+    const scrollerRect = scroller.getBoundingClientRect();
+    return scroller.scrollTop + rect.top - scrollerRect.top;
   }
 
   function installTimeline() {
@@ -423,22 +601,21 @@
     if (!feature("timeline")) return;
     const questions = timelineQuestions();
     if (questions.length < 2) return;
-    const scroller = document.scrollingElement || document.documentElement;
+    const scroller = threadScrollElement();
     const container = document.createElement("div");
     container.className = "ruizhi-conversation-timeline";
     container.dataset.ruizhiTimeline = markers.timeline;
     const track = document.createElement("div");
     track.className = "ruizhi-conversation-timeline-track";
     container.appendChild(track);
-    const maxScroll = Math.max(1, scroller.scrollHeight - window.innerHeight);
+    const maxScroll = Math.max(1, scroller.scrollHeight - (scroller.clientHeight || window.innerHeight));
     questions.forEach((node) => {
-      const rect = node.getBoundingClientRect();
-      const top = Math.max(2, Math.min(98, ((scroller.scrollTop + rect.top) / maxScroll) * 100));
+      const top = Math.max(2, Math.min(98, (elementTopInScroller(node, scroller) / maxScroll) * 100));
       const marker = document.createElement("button");
       marker.type = "button";
       marker.className = "ruizhi-conversation-timeline-marker";
       marker.style.top = `${top}%`;
-      const label = (node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 40);
+      const label = timelineLabel(node).slice(0, 40);
       marker.innerHTML = `<span>${escapeHtml(label)}</span>`;
       marker.addEventListener("click", () => {
         node.scrollIntoView({ block: "center", behavior: "smooth" });
@@ -455,22 +632,91 @@
     return `ruizhi.threadScroll.${id}`;
   }
 
+  function isScrollableElement(node) {
+    if (!(node instanceof HTMLElement)) return false;
+    const rect = node.getBoundingClientRect();
+    if (rect.width < 80 || rect.height < 80) return false;
+    const style = getComputedStyle(node);
+    if (style.visibility === "hidden" || style.display === "none") return false;
+    if (!/(auto|scroll|overlay)/.test(`${style.overflowY} ${style.overflow}`)) return false;
+    return node.scrollHeight - node.clientHeight > 24;
+  }
+
+  function threadScrollElement() {
+    const explicit = document.querySelector("[data-app-action-timeline-scroll]");
+    if (isScrollableElement(explicit)) return explicit;
+    const threadRoot = document.querySelector("[data-thread-find-target='conversation']");
+    for (let node = threadRoot; node instanceof HTMLElement; node = node.parentElement) {
+      if (isScrollableElement(node)) return node;
+    }
+    const candidates = Array.from(document.querySelectorAll("[data-app-action-timeline-scroll],main,[role='main'],[data-thread-find-target='conversation'],.overflow-y-auto,.overflow-auto,[style*='overflow']"))
+      .filter(isScrollableElement)
+      .sort((left, right) => (right.clientHeight * right.clientWidth) - (left.clientHeight * left.clientWidth));
+    return candidates[0] || document.scrollingElement || document.documentElement;
+  }
+
+  function readSavedScroll(key) {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) return { top: numeric };
+    try {
+      const parsed = JSON.parse(raw);
+      const top = Number(parsed?.top);
+      return Number.isFinite(top) ? { top } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeSavedScroll(key, scroller) {
+    localStorage.setItem(key, JSON.stringify({ top: scroller.scrollTop, at: Date.now(), path: location.href }));
+  }
+
   function installThreadScrollRestore() {
     if (!feature("threadScrollRestore")) return;
     const key = scrollKey();
-    const scroller = document.scrollingElement || document.documentElement;
-    const saved = Number(localStorage.getItem(key));
-    if (Number.isFinite(saved) && saved > 0 && scroller.scrollTop < 8) {
-      setTimeout(() => scroller.scrollTo({ top: saved, behavior: "auto" }), 120);
+    const scroller = threadScrollElement();
+    const saved = readSavedScroll(key);
+    if (state.scrollRestoreKey !== key && saved && Math.abs(scroller.scrollTop) < 8) {
+      state.scrollRestoreKey = key;
+      setTimeout(() => scroller.scrollTo({ top: saved.top, behavior: "auto" }), 120);
     }
-    if (!window.__RUIZHI_THREAD_SCROLL_RESTORE_BOUND__) {
-      window.__RUIZHI_THREAD_SCROLL_RESTORE_BOUND__ = markers.threadScroll;
-      on(window, "scroll", () => {
+    const eventTarget = (scroller === document.scrollingElement || scroller === document.documentElement || scroller === document.body) ? window : scroller;
+    if (!state.scrollBoundElements.has(eventTarget)) {
+      state.scrollBoundElements.add(eventTarget);
+      on(eventTarget, "scroll", () => {
         if (!feature("threadScrollRestore")) return;
         if (state.scrollSaveTimer) clearTimeout(state.scrollSaveTimer);
-        state.scrollSaveTimer = setTimeout(() => localStorage.setItem(scrollKey(), String((document.scrollingElement || document.documentElement).scrollTop)), 120);
+        state.scrollSaveTimer = setTimeout(() => writeSavedScroll(scrollKey(), threadScrollElement()), 120);
       }, true);
-      on(window, "beforeunload", () => localStorage.setItem(scrollKey(), String((document.scrollingElement || document.documentElement).scrollTop)), true);
+      on(window, "beforeunload", () => writeSavedScroll(scrollKey(), threadScrollElement()), true);
+    }
+  }
+
+  function installSettingsVersionFix() {
+    const appVersion = state.settings.appVersion;
+    if (!appVersion) return;
+    const displayVersion = appVersion.startsWith("v") ? appVersion : `v${appVersion}`;
+    const labelPattern = /(当前版本|应用版本|App Version|Current Version|Current version)/;
+    const versionPattern = /\b(?:Codex\s*)?v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?\b/;
+    const nodes = Array.from(document.querySelectorAll("span,div,p,code"));
+    for (const node of nodes) {
+      if (!(node instanceof HTMLElement) || node.dataset.ruizhiSettingsVersionFix === markers.settingsVersion) continue;
+      const text = (node.textContent || "").trim();
+      if (!versionPattern.test(text) || text.includes(appVersion)) continue;
+      let scope = node.parentElement;
+      let matched = false;
+      for (let depth = 0; scope && depth < 6; depth += 1, scope = scope.parentElement) {
+        const scopeText = scope.textContent || "";
+        if (scopeText.length < 900 && labelPattern.test(scopeText)) {
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) continue;
+      node.textContent = text.replace(versionPattern, displayVersion);
+      node.dataset.ruizhiSettingsVersionFix = markers.settingsVersion;
     }
   }
 
@@ -494,8 +740,10 @@
       enablePluginEntry();
       unblockPluginInstallButtons();
       installSessionActions();
+      installThreadSorting();
       installThreadScrollRestore();
       installTimeline();
+      installSettingsVersionFix();
     } catch (error) {
       bridgeCall("/diagnostics/log", { event: "scan_failed", message: String(error?.message || error) });
     }
@@ -517,4 +765,20 @@
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true });
   else boot();
-})();
+  return window[runtimeKey];
+  }
+
+  const hasCommonJsModule = typeof module !== "undefined" && module.exports;
+  globalScope.__RUIZHI_INSTALL_PAGE_ENHANCE__ = installRuizhiPageEnhance;
+  if (hasCommonJsModule) {
+    module.exports = { installRuizhiPageEnhance };
+  }
+  if (!hasCommonJsModule && globalScope.window && globalScope.document && !globalScope.__RUIZHI_PAGE_ENHANCE_SKIP_AUTO__) {
+    installRuizhiPageEnhance({
+      window: globalScope.window,
+      document: globalScope.document,
+      ruizhiDesktop: globalScope.window.ruizhiDesktop,
+      config: globalScope.window.__RUIZHI_PAGE_ENHANCE_CONFIG__
+    });
+  }
+})(typeof globalThis !== "undefined" ? globalThis : this);

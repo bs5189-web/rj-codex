@@ -21,6 +21,7 @@ test("renderer page enhance carries plugin force unlock and first-scope feature 
   assert.match(source, /RUIZHI_SESSION_ACTIONS_V1/);
   assert.match(source, /RUIZHI_CONVERSATION_TIMELINE_V1/);
   assert.match(source, /RUIZHI_THREAD_SCROLL_RESTORE_V1/);
+  assert.match(source, /RUIZHI_THREAD_SORT_FIX_V1/);
 });
 
 test("plugin pending-support patch is gated by forcePluginInstall configuration", () => {

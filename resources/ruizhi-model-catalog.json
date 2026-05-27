@@ -1,7 +1,7 @@
 {
   "fetched_at": "2026-05-08T05:20:58.866Z",
   "etag": "ruizhi-curated-bridge-latest-v9",
-  "client_version": "0.129.0",
+  "client_version": "0.133.0",
   "models": [
     {
       "slug": "gpt-5.5",
@@ -577,9 +577,7 @@
       "supports_reasoning_summaries": false,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
-      "default_verbosity": "low",
-      "apply_patch_tool_type": "freeform",
-      "web_search_tool_type": "text_and_image",
+      "default_verbosity": "medium",
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -634,9 +632,7 @@
       "supports_reasoning_summaries": false,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
-      "default_verbosity": "low",
-      "apply_patch_tool_type": "freeform",
-      "web_search_tool_type": "text_and_image",
+      "default_verbosity": "medium",
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000
@@ -654,7 +650,7 @@
       "supports_search_tool": false
     },
     {
-      "slug": "deepseek-v4-flash",
+      "slug": "DeepSeek-V4-Flash",
       "display_name": "DeepSeek V4 Flash",
       "description": "DeepSeek V4 Flash；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
@@ -691,9 +687,7 @@
       "supports_reasoning_summaries": false,
       "default_reasoning_summary": "none",
       "support_verbosity": true,
-      "default_verbosity": "low",
-      "apply_patch_tool_type": "freeform",
-      "web_search_tool_type": "text_and_image",
+      "default_verbosity": "medium",
       "truncation_policy": {
         "mode": "tokens",
         "limit": 10000

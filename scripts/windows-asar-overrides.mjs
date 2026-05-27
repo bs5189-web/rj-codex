@@ -96,19 +96,6 @@ function pageEnhanceRendererInstallerSource() {
   return fs.readFileSync(pageEnhanceRendererSourcePath, "utf8");
 }
 
-function tomlValue(value) {
-  if (typeof value === "string") {
-    return jsonLiteral(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  throw new Error(`不支持的 TOML 默认值：${value}`);
-}
-
 function splitConfigPath(value) {
   return String(value).split(/[\\/]+/).filter(Boolean);
 }
@@ -453,64 +440,6 @@ export function patchBrowserNativePipePeerAuthorization(extractedAppDir, options
   log(`已禁用 Browser nativePipe peer authorization 签名门禁：${path.basename(mainFile[0])}`);
 }
 
-function managedConfigTomlLinesForBootstrap(config) {
-  const openai = config.openai ?? {};
-  const baseUrl = modelProviderBaseUrl(config);
-  const defaultConfig = config.defaultConfig ?? {};
-  const features = defaultConfig.features ?? {};
-  const lines = [
-    "# BEGIN Ruizhi Managed Defaults",
-    `model = ${jsonLiteral(openai.defaultModel ?? "gpt-5.5")}`,
-    `model_reasoning_effort = ${jsonLiteral(openai.defaultReasoningEffort ?? "medium")}`,
-    `model_provider = "ruizhi"`,
-    `openai_base_url = ${jsonLiteral(baseUrl)}`,
-    "",
-    "[model_providers.ruizhi]",
-    `name = "锐擎API"`,
-    `base_url = ${jsonLiteral(baseUrl)}`,
-    `wire_api = "responses"`,
-    `requires_openai_auth = true`,
-    `supports_websockets = false`
-  ];
-
-  if (Number.isInteger(openai.streamMaxRetries)) {
-    lines.push(`stream_max_retries = ${openai.streamMaxRetries}`);
-  }
-  if (Number.isInteger(openai.requestMaxRetries)) {
-    lines.push(`request_max_retries = ${openai.requestMaxRetries}`);
-  }
-  lines.push("");
-
-  const featureEntries = Object.entries(features);
-  if (featureEntries.length > 0) {
-    lines.push("[features]");
-    for (const [key, value] of featureEntries) {
-      lines.push(`${key} = ${tomlValue(value)}`);
-    }
-    lines.push("");
-  }
-
-  const managedMarketplaces = [
-    ...pluginMarketplaces(config),
-    { name: "openai-bundled" }
-  ];
-  for (const marketplace of managedMarketplaces) {
-    lines.push(`[marketplaces.${marketplace.name}]`);
-    lines.push(`source_type = "local"`);
-    lines.push(`source = ${marketplaceSourceToken(marketplace.name)}`);
-    lines.push("");
-  }
-
-  for (const plugin of openAIBundledPluginDefinitions) {
-    lines.push(`[plugins."${plugin.name}@openai-bundled"]`);
-    lines.push("enabled = true");
-    lines.push("");
-  }
-
-  lines.push("# END Ruizhi Managed Defaults", "");
-  return lines;
-}
-
 export function cleanDir(targetPath) {
   assertInsideProject(targetPath);
   fs.mkdirSync(targetPath, { recursive: true });
@@ -750,7 +679,7 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
       if (!bootstrap.includes("startRuizhiResponsesBridge")) {
         throw new Error(`${label} bootstrap 未注入模型协议 bridge 启动逻辑`);
       }
-      if (!bootstrap.includes("stableModelBridgePort") || !bootstrap.includes("rewriteRuntimeModelProviderBaseUrl")) {
+      if (!bootstrap.includes("stableModelBridgePort") || !bootstrap.includes("RUIZHI_MODEL_PROVIDER_BASE_URL")) {
         throw new Error(`${label} bootstrap 缺少模型 bridge 端口隔离逻辑`);
       }
       if (!bootstrap.includes("ensureLoopbackNoProxy")) {
@@ -758,12 +687,6 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
       }
       if (!bootstrap.includes(bridgeBaseUrl)) {
         throw new Error(`${label} bootstrap 未指向本地模型 provider：${bridgeBaseUrl}`);
-      }
-      if (Number.isInteger(config.openai?.streamMaxRetries) && !bootstrap.includes(`stream_max_retries = ${config.openai.streamMaxRetries}`)) {
-        throw new Error(`${label} managed config 缺少 stream_max_retries = ${config.openai.streamMaxRetries}`);
-      }
-      if (Number.isInteger(config.openai?.requestMaxRetries) && !bootstrap.includes(`request_max_retries = ${config.openai.requestMaxRetries}`)) {
-        throw new Error(`${label} managed config 缺少 request_max_retries = ${config.openai.requestMaxRetries}`);
       }
       fs.rmSync(extractDir, { recursive: true, force: true });
       return { bridge: true };
@@ -2114,8 +2037,11 @@ ${preludeEnd}
   log("已注入 Windows bootstrap 早期锐智环境初始化");
 }
 
-function bridgeBootstrapBlock() {
+function bridgeBootstrapBlock(config) {
+  const remoteCatalogUrl = config.models?.remoteCatalogUrl ?? "";
   return `/* ruizhi-model-bridge:start */
+    const modelCatalogRemoteUrl=${jsonLiteral(remoteCatalogUrl)};
+    const userModelCatalogFile="model-catalog.json";
     function stableModelBridgePort(basePort,seed){
       let hash=0;
       for(const char of String(seed||"")){
@@ -2137,6 +2063,56 @@ function bridgeBootstrapBlock() {
       process.env.no_proxy=next;
     }
     ensureLoopbackNoProxy();
+    function syncModelCache(){
+      const target=path.join(codexHome,userModelCatalogFile);
+      if(!modelCatalogEnabled||!modelCatalogRemoteUrl)return;
+      const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
+      try{
+        downloadRemoteModelCatalog(modelCatalogRemoteUrl,temp);
+        validateModelCatalogFile(temp);
+        const changed=!fs.existsSync(target)||fs.readFileSync(temp).compare(fs.readFileSync(target))!==0;
+        if(!changed){
+          fs.rmSync(temp,{force:true});
+          return;
+        }
+        backupExistingModelCatalog(target);
+        fs.renameSync(temp,target);
+      }catch(error){
+        fs.rmSync(temp,{force:true});
+        console.warn("ruizhi remote model catalog sync failed",error);
+      }
+    }
+    function downloadRemoteModelCatalog(url,target){
+      const childProcess=require("node:child_process");
+      fs.mkdirSync(path.dirname(target),{recursive:true});
+      let result;
+      if(process.platform==="win32"){
+        const command=[
+          "$ErrorActionPreference='Stop';",
+          "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;",
+          "Invoke-WebRequest -Uri $env:RUIZHI_MODEL_CATALOG_URL -OutFile $env:RUIZHI_MODEL_CATALOG_TARGET -UseBasicParsing"
+        ].join(" ");
+        result=childProcess.spawnSync("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Command",command],{
+          encoding:"utf8",
+          timeout:25000,
+          env:{...process.env,RUIZHI_MODEL_CATALOG_URL:url,RUIZHI_MODEL_CATALOG_TARGET:target}
+        });
+      }else{
+        result=childProcess.spawnSync("curl",["-fL","--connect-timeout","8","--max-time","25","-o",target,url],{encoding:"utf8",timeout:30000});
+      }
+      if(result.error)throw result.error;
+      if(result.status!==0)throw new Error(String(result.stderr||result.stdout||\`download failed with status \${result.status}\`).trim());
+    }
+    function validateModelCatalogFile(filePath){
+      const catalog=JSON.parse(fs.readFileSync(filePath,"utf8"));
+      if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models)||catalog.models.length===0)throw new Error("远程模型目录格式无效");
+      return catalog;
+    }
+    function backupExistingModelCatalog(target){
+      if(!fs.existsSync(target))return;
+      const stamp=new Date().toISOString().replace(/[:.]/g,"-");
+      fs.copyFileSync(target,\`\${target}.bak-\${stamp}\`);
+    }
     function startModelBridge(){
       if(!modelBridgeConfig.enabled)return null;
       const scriptPath=path.join(resourcesRoot,...modelBridgeConfig.scriptResourcePath);
@@ -2146,16 +2122,13 @@ function bridgeBootstrapBlock() {
         port:modelBridgeConfig.port,
         upstreamBaseUrl:openaiBaseUrl,
         authHome:codexHome,
-        catalogPath:path.join(resourcesRoot,"models",modelCatalogFile),
+        catalogPath:path.join(codexHome,userModelCatalogFile),
         routes:modelBridgeConfig.routes
       });
       return bridge?.baseUrl||modelProviderBaseUrl;
     }
+    syncModelCache();
     const runtimeModelProviderBaseUrl=startModelBridge()||modelProviderBaseUrl;
-    function rewriteRuntimeModelProviderBaseUrl(text){
-      if(runtimeModelProviderBaseUrl===modelProviderBaseUrl)return text;
-      return String(text).split(JSON.stringify(modelProviderBaseUrl)).join(JSON.stringify(runtimeModelProviderBaseUrl));
-    }
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
 /* ruizhi-model-bridge:end */
@@ -2192,85 +2165,11 @@ function pageEnhanceBootstrapBlock(config) {
 `;
 }
 
-function windowsSandboxConfigBootstrapBlock() {
-  return [
-    "/* ruizhi-windows-sandbox-config:start */",
-    "    function readWindowsSandboxModeFromConfig(text){",
-    "      let inWindowsSection=false;",
-    "      for(const rawLine of String(text??\"\").split(/\\r?\\n/)){",
-    "        const line=rawLine.trim();",
-    "        if(!line||line.startsWith(\"#\"))continue;",
-    "        const section=line.match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);",
-    "        if(section){",
-    "          inWindowsSection=section[1].trim()===\"windows\";",
-    "          continue;",
-    "        }",
-    "        if(!inWindowsSection)continue;",
-    "        const match=line.match(/^sandbox\\s*=\\s*[\"']?([^\"'\\s#]+)[\"']?\\s*(?:#.*)?$/);",
-    "        if(match&&(match[1]===\"elevated\"||match[1]===\"unelevated\"))return match[1];",
-    "      }",
-    "      return null;",
-    "    }",
-    "    function hasWindowsSandboxSetup(root){",
-    "      return process.platform===\"win32\"&&fs.existsSync(path.join(root,\".sandbox\",\"setup_marker.json\"))&&fs.existsSync(path.join(root,\".sandbox-secrets\",\"sandbox_users.json\"));",
-    "    }",
-    "    function ensureWindowsSandboxMode(text,mode){",
-    "      if(process.platform!==\"win32\"||!mode||readWindowsSandboxModeFromConfig(text)!=null)return text;",
-    "      const nextLines=withFinalNewline(text).split(/\\r?\\n/);",
-    "      let windowsSectionIndex=-1;",
-    "      for(let index=0;index<nextLines.length;index+=1){",
-    "        const section=nextLines[index].trim().match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);",
-    "        if(section&&section[1].trim()===\"windows\"){",
-    "          windowsSectionIndex=index;",
-    "          break;",
-    "        }",
-    "      }",
-    "      if(windowsSectionIndex>=0){",
-    "        nextLines.splice(windowsSectionIndex+1,0,\"sandbox = \"+JSON.stringify(mode));",
-    "        return withFinalNewline(nextLines.join(\"\\n\").trimEnd());",
-    "      }",
-    "      return withFinalNewline([text.trimEnd(),\"\",\"[windows]\",\"sandbox = \"+JSON.stringify(mode)].filter(Boolean).join(\"\\n\"));",
-    "    }",
-    "    function readConfigIfExists(root){",
-    "      const target=path.join(root,\"config.toml\");",
-    "      return fs.existsSync(target)?fs.readFileSync(target,\"utf8\"):\"\";",
-    "    }",
-    "    function inferWindowsSandboxMode(primaryText){",
-    "      const fallbackCodexHome=path.join(home,\".codex\");",
-    "      return readWindowsSandboxModeFromConfig(primaryText)||readWindowsSandboxModeFromConfig(readConfigIfExists(fallbackCodexHome))||\"elevated\";",
-    "    }",
-    "    function syncWindowsSandboxConfig(root,preferredMode){",
-    "      if(!hasWindowsSandboxSetup(root))return;",
-    "      const target=path.join(root,\"config.toml\");",
-    "      const existing=readConfigIfExists(root);",
-    "      const mode=readWindowsSandboxModeFromConfig(existing)||preferredMode||\"elevated\";",
-    "      const next=ensureWindowsSandboxMode(existing,mode);",
-    "      if(next!==existing){",
-    "        fs.mkdirSync(path.dirname(target),{recursive:true});",
-    "        fs.writeFileSync(target,next,\"utf8\");",
-    "      }",
-    "    }",
-    "    function syncFallbackWindowsSandboxConfig(preferredMode){",
-    "      if(process.platform!==\"win32\")return;",
-    "      const roots=[codexHome,path.join(home,\".codex\")];",
-    "      const seen=new Set();",
-    "      for(const root of roots){",
-    "        const resolved=path.resolve(root);",
-    "        if(seen.has(resolved))continue;",
-    "        seen.add(resolved);",
-    "        syncWindowsSandboxConfig(root,preferredMode);",
-    "      }",
-    "    }",
-    "/* ruizhi-windows-sandbox-config:end */"
-  ].join("\n") + "\n";
-}
-
 function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}) {
   const log = options.log ?? (() => {});
   const openaiBaseUrl = config.openai?.baseUrl ?? "https://uniapi.ruijie.com.cn/v1";
   const providerBaseUrl = modelProviderBaseUrl(config);
   const bridgeConfig = modelBridgeBootstrapConfig(config);
-  const configTemplateLines = managedConfigTomlLinesForBootstrap(config);
   const modelCatalogEnabledValue = modelCatalogEnabled(config);
   let source = fs.readFileSync(bootstrapPath, "utf8");
   let next = source;
@@ -2311,55 +2210,42 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   const oldEnvAnchor = "process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;\n    process.env.RUIZHI_IMAGEGEN_EXE=";
   const imageEnvAnchor = "    process.env.RUIZHI_IMAGEGEN_EXE=";
   if (next.includes(oldEnvAnchor)) {
-    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock()}${pageEnhanceBootstrapBlock(config)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
+    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
   } else if (next.includes(imageEnvAnchor)) {
-    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock()}${pageEnhanceBootstrapBlock(config)}${imageEnvAnchor}`);
+    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config)}${imageEnvAnchor}`);
   } else {
     throw new Error("Windows bootstrap RUIZHI_IMAGEGEN_EXE 补丁点不存在");
   }
 
-  const configTemplatePattern = /const configTemplateLines=\[[\s\S]*?\];\n    const marketplaceSources=/;
-  if (!configTemplatePattern.test(next)) {
-    throw new Error("Windows bootstrap configTemplateLines 补丁点不存在");
-  }
-  next = next.replace(
-    configTemplatePattern,
-    `const configTemplateLines=${jsonLiteral(configTemplateLines)};\n    const marketplaceSources=`
-  );
-
   const sandboxConfigMarkerPattern = /\/\* ruizhi-windows-sandbox-config:start \*\/[\s\S]*?\/\* ruizhi-windows-sandbox-config:end \*\/\r?\n?/g;
   next = next.replace(sandboxConfigMarkerPattern, "");
-  const configPathAnchor = "    const configPath=path.join(codexHome,\"config.toml\");";
-  if (!next.includes(configPathAnchor)) {
-    throw new Error("Windows bootstrap configPath 补丁点不存在");
-  }
-  next = next.replace(configPathAnchor, `${windowsSandboxConfigBootstrapBlock()}${configPathAnchor}`);
+  const managedConfigPattern = /    const managedBegin=[\s\S]*?    function \w+\(existing\)\{[\s\S]*?\n    \}\n\n/;
+  next = next.replace(managedConfigPattern, "");
 
-  const oldConfigWrite = [
+  const oldConfigWritePatterns = [
+    /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existingCodexConfig=fs\.existsSync\(configPath\);[\s\S]*?syncFallback\w+\([^\n]*\);\n/,
+    /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existing=fs\.existsSync\(configPath\)[\s\S]*?if\(next!==existing\)fs\.writeFileSync\(configPath,next,"utf8"\);\n/
+  ];
+  const readOnlyConfigCheck = [
     "    const configPath=path.join(codexHome,\"config.toml\");",
-    "    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,\"utf8\"):\"\";",
-    "    const next=mergeManagedConfig(existing);",
-    "    if(next!==existing)fs.writeFileSync(configPath,next,\"utf8\");"
+    "    const existingCodexConfig=fs.existsSync(configPath);",
+    "    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?\"1\":\"0\";"
   ].join("\n");
-  const newConfigWrite = [
-    "    const configPath=path.join(codexHome,\"config.toml\");",
-    "    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,\"utf8\"):\"\";",
-    "    let next=mergeManagedConfig(existing);",
-    "    next=rewriteRuntimeModelProviderBaseUrl(next);",
-    "    const sandboxMode=hasWindowsSandboxSetup(codexHome)?inferWindowsSandboxMode(next):readWindowsSandboxModeFromConfig(next);",
-    "    if(hasWindowsSandboxSetup(codexHome))next=ensureWindowsSandboxMode(next,sandboxMode);",
-    "    if(next!==existing)fs.writeFileSync(configPath,next,\"utf8\");",
-    "    syncFallbackWindowsSandboxConfig(readWindowsSandboxModeFromConfig(next));"
-  ].join("\n");
-  if (next.includes(oldConfigWrite)) {
-    next = next.replace(oldConfigWrite, newConfigWrite);
-  } else if (!next.includes("syncFallbackWindowsSandboxConfig(readWindowsSandboxModeFromConfig(next));")) {
-    throw new Error("Windows bootstrap config.toml 写入补丁点不存在");
+  let replacedConfigWrite = false;
+  for (const pattern of oldConfigWritePatterns) {
+    if (pattern.test(next)) {
+      next = next.replace(pattern, `${readOnlyConfigCheck}\n`);
+      replacedConfigWrite = true;
+      break;
+    }
+  }
+  if (!replacedConfigWrite && !next.includes(readOnlyConfigCheck)) {
+    throw new Error("Windows bootstrap config.toml 只读检查补丁点不存在");
   }
 
   if (next !== source) {
     fs.writeFileSync(bootstrapPath, next, "utf8");
-    log("已刷新 Windows bootstrap 模型 provider、bridge 与沙盒配置自愈逻辑");
+    log("已刷新 Windows bootstrap 模型 provider、bridge 与 config.toml 只读逻辑");
   }
 }
 

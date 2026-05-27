@@ -6,6 +6,10 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import fsExtra from "fs-extra";
 import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
+import {
+  codexClientVersionFromExe,
+  writeRuntimeModelCatalog
+} from "./windows-asar-overrides.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("asar");
@@ -91,19 +95,6 @@ function execOutput(command, args, options = {}) {
 
 function jsonLiteral(value) {
   return JSON.stringify(value);
-}
-
-function tomlValue(value) {
-  if (typeof value === "string") {
-    return jsonLiteral(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  throw new Error(`不支持的 TOML 默认值：${value}`);
 }
 
 function splitConfigPath(value) {
@@ -244,6 +235,10 @@ function modelCatalogPath() {
   return resolved;
 }
 
+function modelCatalogRemoteUrl() {
+  return config.models?.remoteCatalogUrl ?? "";
+}
+
 function modelCatalogEnabled() {
   return config.models?.enabled !== false;
 }
@@ -366,6 +361,19 @@ function findOneFile(dir, pattern, label) {
   const matches = fs.readdirSync(dir)
     .filter((name) => pattern.test(name))
     .map((name) => path.join(dir, name));
+
+  if (matches.length !== 1) {
+    throw new Error(`${label} 匹配数量异常：${matches.length}`);
+  }
+
+  return matches[0];
+}
+
+function findOneFileByContent(dir, filePattern, contentPattern, label) {
+  const matches = fs.readdirSync(dir)
+    .filter((name) => filePattern.test(name))
+    .map((name) => path.join(dir, name))
+    .filter((filePath) => contentPattern.test(fs.readFileSync(filePath, "utf8")));
 
   if (matches.length !== 1) {
     throw new Error(`${label} 匹配数量异常：${matches.length}`);
@@ -531,72 +539,6 @@ function writePatchedFileIfChanged(filePath, transform) {
   }
   fs.writeFileSync(filePath, patched);
   return true;
-}
-
-function defaultConfigTomlLines(marketplaceSourceValues = {}) {
-  const openai = config.openai;
-  const defaultConfig = config.defaultConfig ?? {};
-  const features = defaultConfig.features ?? {};
-
-  const lines = [
-    `model = ${jsonLiteral(openai.defaultModel)}`,
-    `model_reasoning_effort = ${jsonLiteral(openai.defaultReasoningEffort)}`,
-    `model_provider = "ruizhi"`,
-    `openai_base_url = ${jsonLiteral(openai.baseUrl)}`,
-    ""
-  ];
-
-  lines.push("[model_providers.ruizhi]");
-  lines.push(`name = "锐擎API"`);
-  lines.push(`base_url = ${jsonLiteral(openai.baseUrl)}`);
-  lines.push(`wire_api = "responses"`);
-  lines.push(`requires_openai_auth = true`);
-  lines.push(`supports_websockets = false`);
-  if (Number.isInteger(openai.streamMaxRetries)) {
-    lines.push(`stream_max_retries = ${openai.streamMaxRetries}`);
-  }
-  if (Number.isInteger(openai.requestMaxRetries)) {
-    lines.push(`request_max_retries = ${openai.requestMaxRetries}`);
-  }
-  lines.push("");
-
-  const featureEntries = Object.entries(features);
-  if (featureEntries.length > 0) {
-    lines.push("[features]");
-    for (const [key, value] of featureEntries) {
-      lines.push(`${key} = ${tomlValue(value)}`);
-    }
-    lines.push("");
-  }
-
-  const managedMarketplaces = [
-    ...pluginMarketplaces(),
-    { name: "openai-bundled" }
-  ];
-
-  for (const marketplace of managedMarketplaces) {
-    lines.push(`[marketplaces.${marketplace.name}]`);
-    lines.push(`source_type = "local"`);
-    lines.push(`source = ${marketplaceSourceValues[marketplace.name] ?? marketplaceSourceToken(marketplace.name)}`);
-    lines.push("");
-  }
-
-  for (const plugin of openAIBundledPluginDefinitions) {
-    lines.push(`[plugins."${plugin.name}@openai-bundled"]`);
-    lines.push("enabled = true");
-    lines.push("");
-  }
-
-  return lines;
-}
-
-function managedConfigTomlLines(marketplaceSourceValues = {}) {
-  return [
-    "# BEGIN Ruizhi Managed Defaults",
-    ...defaultConfigTomlLines(marketplaceSourceValues),
-    "# END Ruizhi Managed Defaults",
-    ""
-  ];
 }
 
 function appResourcesDir() {
@@ -1256,13 +1198,22 @@ function patchModelAvailabilityAllowlist() {
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const modelSettingsFile = findOptionalFile(assetsDir, /^use-model-settings-.*\.js$/, "model settings bundle");
-  if (!modelSettingsFile) {
-    return;
-  }
-  writePatchedFileIfChanged(modelSettingsFile, (source) =>
-    replaceExactIfPresent(source, "let l=s.useHiddenModels&&a!==`amazonBedrock`,u;", "let l=!1,u;", "禁用官方模型 available_models 白名单过滤")
+  const modelSettingsFile = findOneFileByContent(
+    assetsDir,
+    /^(use-model-settings|model-queries)-.*\.js$/,
+    /useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`/,
+    "model settings bundle"
   );
+
+  writePatchedFile(modelSettingsFile, (source) =>
+    replaceRegex(
+      source,
+      /let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\.useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`,([A-Za-z_$][\w$]*);/,
+      "let $1=!1,$2;",
+      "禁用官方模型 available_models 白名单过滤"
+    )
+  );
+
   log(`已禁用模型白名单过滤：${path.basename(modelSettingsFile)}`);
 }
 
@@ -1316,7 +1267,6 @@ function patchApplicationMenu() {
 
 function bootstrapInitCode() {
   const posixLocale = config.locale.replace("-", "_");
-  const configLines = managedConfigTomlLines().map((line) => jsonLiteral(line)).join(",");
   const imageGenHelper = imageGenHelperName();
   const marketplaceSpecs = pluginMarketplaces().map((marketplace) => ({
     name: marketplace.name,
@@ -1337,7 +1287,6 @@ function bootstrapInitCode() {
   const execPolicyConfig = config.execPolicy ?? {};
   const managedRulesFileName = execPolicyConfig.managedRulesFileName ?? "ruizhi-managed.rules";
   const allowPrefixRules = builtInAllowPrefixRules();
-  const oldGenerated = `model = ${jsonLiteral(config.openai.defaultModel)}\nmodel_provider = "openai"\nmodel_reasoning_effort = ${jsonLiteral(config.openai.defaultReasoningEffort)}\nopenai_base_url = ${jsonLiteral(config.openai.baseUrl)}\n\n[features]\nplugins = true\napps = true\nbrowser_use = true\n`;
 
   return `
 function ruizhiInit(){
@@ -1361,8 +1310,10 @@ function ruizhiInit(){
       routes: modelBridgeRoutes()
     })};
     const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabled())};
+    const modelCatalogRemoteUrl=${jsonLiteral(modelCatalogRemoteUrl())};
     const imageGenHelper=${jsonLiteral(imageGenHelper)};
     const modelCatalogFile="ruizhi-model-catalog.json";
+    const userModelCatalogFile="model-catalog.json";
     const imageGenSkillPath=["skills",".system","imagegen","SKILL.md"];
     const managedRulesFileName=${jsonLiteral(managedRulesFileName)};
     const allowPrefixRules=${jsonLiteral(allowPrefixRules)};
@@ -1410,17 +1361,16 @@ function ruizhiInit(){
         port:modelBridgeConfig.port,
         upstreamBaseUrl:openaiBaseUrl,
         authHome:codexHome,
-        catalogPath:path.join(resourcesRoot,"models",modelCatalogFile),
+        catalogPath:path.join(codexHome,userModelCatalogFile),
         routes:modelBridgeConfig.routes
       });
       return bridge.baseUrl;
     }
+    fs.mkdirSync(codexHome,{recursive:true});
+    fs.mkdirSync(userData,{recursive:true});
+    syncModelCache();
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
-    function rewriteRuntimeModelProviderBaseUrl(text){
-      if(runtimeModelProviderBaseUrl===modelProviderBaseUrl)return text;
-      return String(text).split(JSON.stringify(modelProviderBaseUrl)).join(JSON.stringify(runtimeModelProviderBaseUrl));
-    }
     process.env[ruizhiHomeEnvName]=codexHome;
     process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
@@ -1431,8 +1381,6 @@ function ruizhiInit(){
     process.env.LANGUAGE=posixLocale;
     process.env.LC_ALL=${jsonLiteral(`${posixLocale}.UTF-8`)};
     try{n.app.commandLine.appendSwitch("lang",locale)}catch{}
-    fs.mkdirSync(codexHome,{recursive:true});
-    fs.mkdirSync(userData,{recursive:true});
 
     function copyIfChanged(source,target){
       if(!fs.existsSync(source))return false;
@@ -1449,28 +1397,58 @@ function ruizhiInit(){
       return changed;
     }
     function syncModelCache(){
-      const source=path.join(resourcesRoot,"models",modelCatalogFile);
-      const target=path.join(codexHome,"models_cache.json");
-      if(!modelCatalogEnabled||!fs.existsSync(source)){
-        fs.rmSync(target,{force:true});
+      const target=path.join(codexHome,userModelCatalogFile);
+      if(!modelCatalogEnabled||!modelCatalogRemoteUrl){
         return;
       }
-      let sourceJson=null;
-      let targetJson=null;
-      let shouldCopy=true;
+      const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
       try{
-        sourceJson=JSON.parse(fs.readFileSync(source,"utf8"));
-        targetJson=fs.existsSync(target)?JSON.parse(fs.readFileSync(target,"utf8")):null;
-        shouldCopy=!targetJson||sourceJson.client_version!==targetJson.client_version||sourceJson.etag!==targetJson.etag||!Array.isArray(targetJson.models)||targetJson.models.length!==sourceJson.models.length;
-      }catch{
-        shouldCopy=true;
+        downloadRemoteModelCatalog(modelCatalogRemoteUrl,temp);
+        validateModelCatalogFile(temp);
+        const changed=!fs.existsSync(target)||fs.readFileSync(temp).compare(fs.readFileSync(target))!==0;
+        if(!changed){
+          fs.rmSync(temp,{force:true});
+          return;
+        }
+        backupExistingModelCatalog(target);
+        fs.renameSync(temp,target);
+      }catch(error){
+        fs.rmSync(temp,{force:true});
+        console.warn("ruizhi remote model catalog sync failed",error);
       }
-      if(shouldCopy||sourceJson){
-        fs.mkdirSync(path.dirname(target),{recursive:true});
-        if(!sourceJson)sourceJson=JSON.parse(fs.readFileSync(source,"utf8"));
-        sourceJson.fetched_at=new Date().toISOString();
-        fs.writeFileSync(target,JSON.stringify(sourceJson,null,2)+"\\n","utf8");
+    }
+    function downloadRemoteModelCatalog(url,target){
+      const childProcess=require("node:child_process");
+      fs.mkdirSync(path.dirname(target),{recursive:true});
+      let result;
+      if(process.platform==="win32"){
+        const command=[
+          "$ErrorActionPreference='Stop';",
+          "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;",
+          "Invoke-WebRequest -Uri $env:RUIZHI_MODEL_CATALOG_URL -OutFile $env:RUIZHI_MODEL_CATALOG_TARGET -UseBasicParsing"
+        ].join(" ");
+        result=childProcess.spawnSync("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Command",command],{
+          encoding:"utf8",
+          timeout:25000,
+          env:{...process.env,RUIZHI_MODEL_CATALOG_URL:url,RUIZHI_MODEL_CATALOG_TARGET:target}
+        });
+      }else{
+        result=childProcess.spawnSync("curl",["-fL","--connect-timeout","8","--max-time","25","-o",target,url],{encoding:"utf8",timeout:30000});
       }
+      if(result.error)throw result.error;
+      if(result.status!==0)throw new Error(String(result.stderr||result.stdout||\`download failed with status \${result.status}\`).trim());
+    }
+    function validateModelCatalogFile(filePath){
+      const catalog=JSON.parse(fs.readFileSync(filePath,"utf8"));
+      if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models)||catalog.models.length===0){
+        throw new Error("远程模型目录格式无效");
+      }
+      return catalog;
+    }
+    function backupExistingModelCatalog(target){
+      if(!fs.existsSync(target))return;
+      const stamp=new Date().toISOString().replace(/[:.]/g,"-");
+      fs.copyFileSync(target,\`\${target}.bak-\${stamp}\`);
     }
     function syncImageGenSkill(){
       copyIfChanged(path.join(resourcesRoot,...imageGenSkillPath),path.join(codexHome,...imageGenSkillPath));
@@ -1492,7 +1470,6 @@ function ruizhiInit(){
     function syncLegacyCodexGlobalSkills(){
       copyDirectoryEntriesIfMissing(path.join(home,".codex","skills"),path.join(home,".agents","skills"));
     }
-    syncModelCache();
     syncImageGenSkill();
     syncLegacyCodexGlobalSkills();
 
@@ -1674,86 +1651,12 @@ function ruizhiInit(){
       }
     }
 
-    const managedBegin="# BEGIN Ruizhi Managed Defaults";
-    const managedEnd="# END Ruizhi Managed Defaults";
-    const configTemplateLines=[${configLines}];
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    let managedBlock=configTemplateLines.join("\\n");
-    for(const [token,source] of Object.entries(marketplaceSources)){
-      managedBlock=managedBlock.split(token).join(JSON.stringify(source));
-    }
-    if(!managedBlock.endsWith("\\n"))managedBlock+="\\n";
-
-    function withFinalNewline(text){
-      return text.endsWith("\\n")?text:text+"\\n";
-    }
-    function stripLegacyManagedPrefix(text){
-      const normalized=text.charCodeAt(0)===0xfeff?text.slice(1):text;
-      if(!normalized.startsWith("# Managed by Ruizhi Desktop."))return text;
-      const matches=Array.from(normalized.matchAll(/\\n\\[[^\\]]+\\]/g));
-      for(const match of matches){
-        if(match[0].trim()!=="[features]"){
-          return normalized.slice(match.index+1).trimStart();
-        }
-      }
-      return "";
-    }
-    function managedConfigSectionNames(){
-      const names=["features","model_providers.ruizhi"];
-      for(const spec of marketplaceSpecs){
-        names.push("marketplaces."+spec.name);
-      }
-      for(const plugin of hardcodedOpenAIBundledPlugins){
-        names.push("plugins.\\""+plugin.name+"@openai-bundled\\"");
-      }
-      return new Set(names);
-    }
-    function stripManagedConfigConflicts(text){
-      const managedSectionNames=managedConfigSectionNames();
-      const output=[];
-      let sawSection=false;
-      let inManagedSection=false;
-      for(const rawLine of String(text??"").split(/\\r?\\n/)){
-        const section=rawLine.trim().match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
-        if(section){
-          sawSection=true;
-          inManagedSection=managedSectionNames.has(section[1].trim());
-          if(inManagedSection)continue;
-          output.push(rawLine);
-          continue;
-        }
-        if(inManagedSection)continue;
-        if(!sawSection&&/^\\s*(model|model_provider|model_reasoning_effort|openai_base_url)\\s*=/.test(rawLine))continue;
-        output.push(rawLine);
-      }
-      return output.join("\\n").trim();
-    }
-    function mergeManagedConfig(existing){
-      if(!existing.trim())return managedBlock;
-      const beginIndex=existing.indexOf(managedBegin);
-      const endIndex=existing.indexOf(managedEnd);
-      if(beginIndex>=0&&endIndex>=beginIndex){
-        const before=existing.slice(0,beginIndex).trimEnd();
-        const after=existing.slice(endIndex+managedEnd.length).trimStart();
-        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\\n\\n"));
-      }
-      const oldGenerated=${jsonLiteral(oldGenerated)};
-      if(existing.trim()===oldGenerated.trim()||existing.replace(/^\\uFEFF/,"").startsWith("# Managed by Ruizhi Desktop.")){
-        const rest=stripLegacyManagedPrefix(existing);
-        return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\\n\\n"));
-      }
-      const rest=stripManagedConfigConflicts(existing);
-      return withFinalNewline([managedBlock.trimEnd(), rest.trimStart()].filter(Boolean).join("\\n\\n"));
-    }
-
     const configPath=path.join(codexHome,"config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
-    const existing=existingCodexConfig?fs.readFileSync(configPath,"utf8"):"";
-    const next=rewriteRuntimeModelProviderBaseUrl(mergeManagedConfig(existing));
-    if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
   }catch(e){
     console.error("ruizhi bootstrap init failed",e);
   }
@@ -2237,9 +2140,13 @@ function copyRuntimeOverrides() {
 
   const modelTargetDir = path.join(resourcesDir, "models");
   if (modelCatalogEnabled()) {
-    fs.mkdirSync(modelTargetDir, { recursive: true });
-    fs.copyFileSync(modelCatalogPath(), path.join(modelTargetDir, "ruizhi-model-catalog.json"));
-    log("已内置运行态模型缓存目录");
+    const codexClientVersion = codexClientVersionFromExe(path.join(resourcesDir, "codex"));
+    writeRuntimeModelCatalog(
+      modelCatalogPath(),
+      path.join(modelTargetDir, "ruizhi-model-catalog.json"),
+      codexClientVersion,
+      { log }
+    );
   } else {
     fs.rmSync(modelTargetDir, { recursive: true, force: true });
     log("已关闭运行态自定义模型目录");

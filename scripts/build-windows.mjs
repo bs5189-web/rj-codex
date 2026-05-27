@@ -412,19 +412,6 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function tomlValue(value) {
-  if (typeof value === "string") {
-    return jsonLiteral(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return String(value);
-  }
-  throw new Error(`不支持的 TOML 默认值：${value}`);
-}
-
 function splitConfigPath(value) {
   return String(value).split(/[\\/]+/).filter(Boolean);
 }
@@ -435,73 +422,6 @@ function pluginMarketplaces() {
 
 function marketplaceSourceToken(name) {
   return `__RUIZHI_MARKETPLACE_SOURCE_${name.replace(/[^A-Za-z0-9]+/g, "_").toUpperCase()}__`;
-}
-
-function defaultConfigTomlLines(marketplaceSourceValues = {}) {
-  const openai = config.openai;
-  const baseUrl = modelProviderBaseUrl();
-  const defaultConfig = config.defaultConfig ?? {};
-  const features = defaultConfig.features ?? {};
-
-  const lines = [
-    `model = ${jsonLiteral(openai.defaultModel)}`,
-    `model_reasoning_effort = ${jsonLiteral(openai.defaultReasoningEffort)}`,
-    `model_provider = "ruizhi"`,
-    `openai_base_url = ${jsonLiteral(baseUrl)}`,
-    ""
-  ];
-
-  lines.push("[model_providers.ruizhi]");
-  lines.push(`name = "锐擎API"`);
-  lines.push(`base_url = ${jsonLiteral(baseUrl)}`);
-  lines.push(`wire_api = "responses"`);
-  lines.push(`requires_openai_auth = true`);
-  lines.push(`supports_websockets = false`);
-  if (Number.isInteger(openai.streamMaxRetries)) {
-    lines.push(`stream_max_retries = ${openai.streamMaxRetries}`);
-  }
-  if (Number.isInteger(openai.requestMaxRetries)) {
-    lines.push(`request_max_retries = ${openai.requestMaxRetries}`);
-  }
-  lines.push("");
-
-  const featureEntries = Object.entries(features);
-  if (featureEntries.length > 0) {
-    lines.push("[features]");
-    for (const [key, value] of featureEntries) {
-      lines.push(`${key} = ${tomlValue(value)}`);
-    }
-    lines.push("");
-  }
-
-  const managedMarketplaces = [
-    ...pluginMarketplaces(),
-    { name: "openai-bundled" }
-  ];
-
-  for (const marketplace of managedMarketplaces) {
-    lines.push(`[marketplaces.${marketplace.name}]`);
-    lines.push(`source_type = "local"`);
-    lines.push(`source = ${marketplaceSourceValues[marketplace.name] ?? marketplaceSourceToken(marketplace.name)}`);
-    lines.push("");
-  }
-
-  for (const plugin of openAIBundledPluginDefinitions) {
-    lines.push(`[plugins."${plugin.name}@openai-bundled"]`);
-    lines.push("enabled = true");
-    lines.push("");
-  }
-
-  return lines;
-}
-
-function managedConfigTomlLines(marketplaceSourceValues = {}) {
-  return [
-    "# BEGIN Ruizhi Managed Defaults",
-    ...defaultConfigTomlLines(marketplaceSourceValues),
-    "# END Ruizhi Managed Defaults",
-    ""
-  ];
 }
 
 function patchPluginAccountGate() {
@@ -984,7 +904,6 @@ function jsonLiteral(value) {
 
 function bootstrapInitCode() {
   const posixLocale = config.locale.replace("-", "_");
-  const configLines = managedConfigTomlLines().map((line) => jsonLiteral(line)).join(",");
   const imageGenHelper = imageGenHelperExeName();
   const marketplaceSpecs = pluginMarketplaces().map((marketplace) => ({
     name: marketplace.name,
@@ -1005,7 +924,6 @@ function bootstrapInitCode() {
   const execPolicyConfig = config.execPolicy ?? {};
   const managedRulesFileName = execPolicyConfig.managedRulesFileName ?? "ruizhi-managed.rules";
   const allowPrefixRules = builtInAllowPrefixRules();
-  const oldGenerated = `model = ${jsonLiteral(config.openai.defaultModel)}\nmodel_provider = "openai"\nmodel_reasoning_effort = ${jsonLiteral(config.openai.defaultReasoningEffort)}\nopenai_base_url = ${jsonLiteral(config.openai.baseUrl)}\n\n[features]\nplugins = true\napps = true\nbrowser_use = true\n`;
 
   return `
 function ruizhiInit(){
@@ -1086,10 +1004,6 @@ function ruizhiInit(){
     }
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
-    function rewriteRuntimeModelProviderBaseUrl(text){
-      if(runtimeModelProviderBaseUrl===modelProviderBaseUrl)return text;
-      return String(text).split(JSON.stringify(modelProviderBaseUrl)).join(JSON.stringify(runtimeModelProviderBaseUrl));
-    }
     process.env[ruizhiHomeEnvName]=codexHome;
     process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
@@ -1354,164 +1268,13 @@ function ruizhiInit(){
       }
     }
 
-    const managedBegin="# BEGIN Ruizhi Managed Defaults";
-    const managedEnd="# END Ruizhi Managed Defaults";
-    const configTemplateLines=[${configLines}];
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    let managedBlock=configTemplateLines.join("\\n");
-    for(const [token,source] of Object.entries(marketplaceSources)){
-      managedBlock=managedBlock.split(token).join(JSON.stringify(source));
-    }
-    if(!managedBlock.endsWith("\\n"))managedBlock+="\\n";
-
-    function withFinalNewline(text){
-      return text.endsWith("\\n")?text:text+"\\n";
-    }
-    function stripLegacyManagedPrefix(text){
-      const normalized=text.charCodeAt(0)===0xfeff?text.slice(1):text;
-      if(!normalized.startsWith("# Managed by Ruizhi Desktop."))return text;
-      const matches=Array.from(normalized.matchAll(/\\n\\[[^\\]]+\\]/g));
-      for(const match of matches){
-        if(match[0].trim()!=="[features]"){
-          return normalized.slice(match.index+1).trimStart();
-        }
-      }
-      return "";
-    }
-    function managedConfigSectionNames(){
-      const names=["features","model_providers.ruizhi"];
-      for(const spec of marketplaceSpecs){
-        names.push("marketplaces."+spec.name);
-      }
-      for(const plugin of hardcodedOpenAIBundledPlugins){
-        names.push("plugins.\\""+plugin.name+"@openai-bundled\\"");
-      }
-      return new Set(names);
-    }
-    function stripManagedConfigConflicts(text){
-      const managedSectionNames=managedConfigSectionNames();
-      const output=[];
-      let sawSection=false;
-      let inManagedSection=false;
-      for(const rawLine of String(text??"").split(/\\r?\\n/)){
-        const section=rawLine.trim().match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
-        if(section){
-          sawSection=true;
-          inManagedSection=managedSectionNames.has(section[1].trim());
-          if(inManagedSection)continue;
-          output.push(rawLine);
-          continue;
-        }
-        if(inManagedSection)continue;
-        if(!sawSection&&/^\\s*(model|model_provider|model_reasoning_effort|openai_base_url)\\s*=/.test(rawLine))continue;
-        output.push(rawLine);
-      }
-      return output.join("\\n").trim();
-    }
-    function mergeManagedConfig(existing){
-      if(!existing.trim())return managedBlock;
-      const beginIndex=existing.indexOf(managedBegin);
-      const endIndex=existing.indexOf(managedEnd);
-      if(beginIndex>=0&&endIndex>=beginIndex){
-        const before=existing.slice(0,beginIndex).trimEnd();
-        const after=existing.slice(endIndex+managedEnd.length).trimStart();
-        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\\n\\n"));
-      }
-      if(beginIndex>=0&&endIndex<beginIndex){
-        const before=existing.slice(0,beginIndex).trimEnd();
-        const body=existing.slice(beginIndex);
-        const tailMatch=body.match(/\\n\\[(?:windows|plugins\\.|projects\\.|mcp_servers\\.|profiles\\.)[^\\n]*\\]/);
-        const after=tailMatch?body.slice(tailMatch.index+1).trimStart():"";
-        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\\n\\n"));
-      }
-      const oldGenerated=${jsonLiteral(oldGenerated)};
-      if(existing.trim()===oldGenerated.trim()||existing.replace(/^\\uFEFF/,"").startsWith("# Managed by Ruizhi Desktop.")){
-        const rest=stripLegacyManagedPrefix(existing);
-        return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\\n\\n"));
-      }
-      const rest=stripManagedConfigConflicts(existing);
-      return withFinalNewline([managedBlock.trimEnd(), rest.trimStart()].filter(Boolean).join("\\n\\n"));
-    }
-
-    function readWindowsSandboxModeFromConfig(text){
-      let inWindowsSection=false;
-      for(const rawLine of String(text??"").split(/\\r?\\n/)){
-        const line=rawLine.trim();
-        if(!line||line.startsWith("#"))continue;
-        const section=line.match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
-        if(section){
-          inWindowsSection=section[1].trim()==="windows";
-          continue;
-        }
-        if(!inWindowsSection)continue;
-        const match=line.match(/^sandbox\\s*=\\s*["']?([^"'\\s#]+)["']?\\s*(?:#.*)?$/);
-        if(match&&(match[1]==="elevated"||match[1]==="unelevated"))return match[1];
-      }
-      return null;
-    }
-    function hasWindowsSandboxSetup(root){
-      return process.platform==="win32"&&fs.existsSync(path.join(root,".sandbox","setup_marker.json"))&&fs.existsSync(path.join(root,".sandbox-secrets","sandbox_users.json"));
-    }
-    function ensureWindowsSandboxMode(text,mode){
-      if(process.platform!=="win32"||!mode||readWindowsSandboxModeFromConfig(text)!=null)return text;
-      const nextLines=withFinalNewline(text).split(/\\r?\\n/);
-      let windowsSectionIndex=-1;
-      for(let index=0;index<nextLines.length;index+=1){
-        const section=nextLines[index].trim().match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
-        if(section&&section[1].trim()==="windows"){
-          windowsSectionIndex=index;
-          break;
-        }
-      }
-      if(windowsSectionIndex>=0){
-        nextLines.splice(windowsSectionIndex+1,0,"sandbox = "+JSON.stringify(mode));
-        return withFinalNewline(nextLines.join("\\n").trimEnd());
-      }
-      return withFinalNewline([text.trimEnd(),"","[windows]","sandbox = "+JSON.stringify(mode)].filter(Boolean).join("\\n"));
-    }
-    function readConfigIfExists(root){
-      const target=path.join(root,"config.toml");
-      return fs.existsSync(target)?fs.readFileSync(target,"utf8"):"";
-    }
-    function inferWindowsSandboxMode(primaryText){
-      const fallbackCodexHome=path.join(home,".codex");
-      return readWindowsSandboxModeFromConfig(primaryText)||readWindowsSandboxModeFromConfig(readConfigIfExists(fallbackCodexHome))||"elevated";
-    }
-    function syncWindowsSandboxConfig(root,preferredMode){
-      if(!hasWindowsSandboxSetup(root))return;
-      const target=path.join(root,"config.toml");
-      const existing=readConfigIfExists(root);
-      const mode=readWindowsSandboxModeFromConfig(existing)||preferredMode||"elevated";
-      const next=ensureWindowsSandboxMode(existing,mode);
-      if(next!==existing){
-        fs.mkdirSync(path.dirname(target),{recursive:true});
-        fs.writeFileSync(target,next,"utf8");
-      }
-    }
-    function syncFallbackWindowsSandboxConfig(preferredMode){
-      if(process.platform!=="win32")return;
-      const roots=[codexHome,path.join(home,".codex")];
-      const seen=new Set();
-      for(const root of roots){
-        const resolved=path.resolve(root);
-        if(seen.has(resolved))continue;
-        seen.add(resolved);
-        syncWindowsSandboxConfig(root,preferredMode);
-      }
-    }
 
     const configPath=path.join(codexHome,"config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
-    const existing=existingCodexConfig?fs.readFileSync(configPath,"utf8"):"";
-    let next=mergeManagedConfig(existing);
-    next=rewriteRuntimeModelProviderBaseUrl(next);
-    const sandboxMode=hasWindowsSandboxSetup(codexHome)?inferWindowsSandboxMode(next):readWindowsSandboxModeFromConfig(next);
-    if(hasWindowsSandboxSetup(codexHome))next=ensureWindowsSandboxMode(next,sandboxMode);
-    if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
-    syncFallbackWindowsSandboxConfig(readWindowsSandboxModeFromConfig(next));
   }catch(e){
     console.error("ruizhi bootstrap init failed",e);
   }

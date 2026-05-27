@@ -131,7 +131,7 @@ test("first launch skips the APIKey prompt when Codex config already exists", ()
     const source = read(scriptPath);
     assert.match(source, /function hasExistingCodexConfig\(/, `${scriptPath} should detect existing ~/.codex configuration`);
     assert.match(source, /config\.toml/, `${scriptPath} should treat config.toml as an existing Codex configuration marker`);
-    assert.match(source, /RUIZHI_EXISTING_CODEX_CONFIG/, `${scriptPath} should preserve whether config.toml existed before Ruizhi writes defaults`);
+    assert.match(source, /RUIZHI_EXISTING_CODEX_CONFIG/, `${scriptPath} should preserve whether config.toml exists without mutating it`);
     assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from an API key or Codex config`);
     assert.match(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} should skip the APIKey prompt when Codex config exists`);
   }
@@ -149,6 +149,22 @@ test("first launch skips the APIKey prompt when Codex config already exists", ()
   const loginRoute = read("overrides/windows-app/asar/webview/assets/login-route-CUyUF9yR.js");
   assert.match(loginRoute, /window\.ruizhiDesktop\?\.auth\?\.getCached\?\.\(\)\?\.configured!==!0/);
   assert.doesNotMatch(loginRoute, /\[H,U\]=\(0,G\.useState\)\(!0\)/);
+});
+
+test("bootstrap treats config.toml as user-owned and never writes Ruizhi defaults", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+    "overrides/windows-app/asar/.vite/build/bootstrap.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.doesNotMatch(source, /# BEGIN Ruizhi Managed Defaults/, `${scriptPath} should not embed a managed config.toml block`);
+    assert.doesNotMatch(source, /mergeManagedConfig|stripManagedConfigConflicts|managedConfigSectionNames/, `${scriptPath} should not merge or rewrite config.toml`);
+    assert.doesNotMatch(source, /configTemplateLines/, `${scriptPath} should not template config.toml defaults`);
+    assert.doesNotMatch(source, /fs\.writeFileSync\(configPath/, `${scriptPath} should not write the user's config.toml`);
+    assert.doesNotMatch(source, /fs\.writeFileSync\(target,\s*next,\s*"utf8"\)/, `${scriptPath} should not patch sandbox settings into config.toml`);
+  }
 });
 
 test("page enhance preload loads the renderer module without CSP-blocked eval or inline script injection", () => {
@@ -323,38 +339,34 @@ test("packaging uses current OpenAI bundled plugin ids for Browser automation", 
   }
 });
 
-test("packaging enables bundled Browser plugins in managed defaults", () => {
+test("packaging bundles current OpenAI plugin metadata without writing config defaults", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
     "scripts/windows-asar-overrides.mjs",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /for \(const plugin of openAIBundledPluginDefinitions\)/, `${scriptPath} should enable all bundled OpenAI plugins by default`);
-    assert.match(source, /\[plugins\."\$\{plugin\.name\}@openai-bundled"\]/, `${scriptPath} should write plugin enablement blocks`);
-    assert.match(source, /enabled = true/, `${scriptPath} should mark bundled plugins enabled`);
+    assert.match(source, /openAIBundledPluginDefinitions/, `${scriptPath} should keep the bundled OpenAI plugin catalog`);
+    assert.doesNotMatch(source, /\[plugins\."\$\{plugin\.name\}@openai-bundled"\]/, `${scriptPath} should not write plugin enablement blocks to config.toml`);
   }
 
   const bootstrapSource = read("overrides/windows-app/asar/.vite/build/bootstrap.js");
-  assert.ok(bootstrapSource.includes('[plugins.\\"browser@openai-bundled\\"]'), "bootstrap should enable the native Browser plugin id");
-  assert.ok(bootstrapSource.includes('[plugins.\\"chrome@openai-bundled\\"]'), "bootstrap should enable the native Chrome plugin id");
-  assert.ok(bootstrapSource.includes('[plugins.\\"latex@openai-bundled\\"]'), "bootstrap should enable the native LaTeX plugin id");
+  assert.ok(bootstrapSource.includes('"name":"browser"'), "bootstrap should carry the native Browser plugin id");
+  assert.ok(bootstrapSource.includes('"name":"chrome"'), "bootstrap should carry the native Chrome plugin id");
+  assert.ok(bootstrapSource.includes('"name":"latex"'), "bootstrap should carry the native LaTeX plugin id");
 });
 
-test("bootstrap injects managed Browser defaults into existing unmanaged Codex config", () => {
+test("bootstrap leaves existing unmanaged Codex config untouched", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
     "overrides/windows-app/asar/.vite/build/bootstrap.js",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /stripManagedConfigConflicts/, `${scriptPath} should remove stale managed sections before injecting defaults`);
-    assert.match(source, /managedSectionNames/, `${scriptPath} should know which managed TOML sections can conflict`);
-    assert.match(source, /names\.push\("marketplaces\."\+spec\.name\)/, `${scriptPath} should replace stale managed marketplace config`);
-    assert.match(source, /plugin\.name\+"@openai-bundled/, `${scriptPath} should replace stale bundled plugin config`);
-    assert.match(source, /const rest=stripManagedConfigConflicts\(existing\)/, `${scriptPath} should strip stale managed defaults from unmanaged configs`);
-    assert.match(source, /return withFinalNewline\(\[managedBlock\.trimEnd\(\), rest\.trimStart\(\)\]\.filter\(Boolean\)\.join\("(?:\\\\n\\\\n|\\n\\n)"\)\)/, `${scriptPath} should prepend managed defaults to unmanaged configs`);
-    assert.doesNotMatch(source, /kept unmanaged config\.toml unchanged/, `${scriptPath} should not leave existing config.toml without managed Browser defaults`);
+    assert.doesNotMatch(source, /stripManagedConfigConflicts/, `${scriptPath} should not strip user config.toml sections`);
+    assert.doesNotMatch(source, /managedSectionNames/, `${scriptPath} should not maintain managed TOML sections`);
+    assert.doesNotMatch(source, /managedBlock/, `${scriptPath} should not prepend managed defaults to config.toml`);
+    assert.doesNotMatch(source, /rewriteRuntimeModelProviderBaseUrl/, `${scriptPath} should not rewrite model provider base URLs in config.toml`);
   }
 });
 

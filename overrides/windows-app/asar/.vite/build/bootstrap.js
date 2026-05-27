@@ -94,10 +94,6 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
       return bridge?.baseUrl||modelProviderBaseUrl;
     }
     const runtimeModelProviderBaseUrl=startModelBridge()||modelProviderBaseUrl;
-    function rewriteRuntimeModelProviderBaseUrl(text){
-      if(runtimeModelProviderBaseUrl===modelProviderBaseUrl)return text;
-      return String(text).split(JSON.stringify(modelProviderBaseUrl)).join(JSON.stringify(runtimeModelProviderBaseUrl));
-    }
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
 /* ruizhi-model-bridge:end */
@@ -378,165 +374,12 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
       }
     }
 
-    const managedBegin="# BEGIN Ruizhi Managed Defaults";
-    const managedEnd="# END Ruizhi Managed Defaults";
-    const configTemplateLines=["# BEGIN Ruizhi Managed Defaults","model = \"gpt-5.5\"","model_reasoning_effort = \"medium\"","model_provider = \"ruizhi\"","openai_base_url = \"http://127.0.0.1:17888/v1\"","","[model_providers.ruizhi]","name = \"锐擎API\"","base_url = \"http://127.0.0.1:17888/v1\"","wire_api = \"responses\"","requires_openai_auth = true","supports_websockets = false","stream_max_retries = 0","request_max_retries = 0","","[features]","default_mode_request_user_input = true","plugins = true","apps = true","browser_use = true","","[marketplaces.ruijie-skills]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__","","[marketplaces.openai-bundled]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","","[plugins.\"browser@openai-bundled\"]","enabled = true","","[plugins.\"chrome@openai-bundled\"]","enabled = true","","[plugins.\"latex@openai-bundled\"]","enabled = true","","# END Ruizhi Managed Defaults",""];
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    let managedBlock=configTemplateLines.join("\n");
-    for(const [token,source] of Object.entries(marketplaceSources)){
-      managedBlock=managedBlock.split(token).join(JSON.stringify(source));
-    }
-    if(!managedBlock.endsWith("\n"))managedBlock+="\n";
-
-    function withFinalNewline(text){
-      return text.endsWith("\n")?text:text+"\n";
-    }
-    function stripLegacyManagedPrefix(text){
-      const normalized=text.charCodeAt(0)===0xfeff?text.slice(1):text;
-      if(!normalized.startsWith("# Managed by Ruizhi Desktop."))return text;
-      const matches=Array.from(normalized.matchAll(/\n\[[^\]]+\]/g));
-      for(const match of matches){
-        if(match[0].trim()!=="[features]"){
-          return normalized.slice(match.index+1).trimStart();
-        }
-      }
-      return "";
-    }
-    function managedConfigSectionNames(){
-      const names=["features","model_providers.ruizhi"];
-      for(const spec of marketplaceSpecs){
-        names.push("marketplaces."+spec.name);
-      }
-      for(const plugin of hardcodedOpenAIBundledPlugins){
-        names.push("plugins.\""+plugin.name+"@openai-bundled\"");
-      }
-      return new Set(names);
-    }
-    function stripManagedConfigConflicts(text){
-      const managedSectionNames=managedConfigSectionNames();
-      const output=[];
-      let sawSection=false;
-      let inManagedSection=false;
-      for(const rawLine of String(text??"").split(/\r?\n/)){
-        const section=rawLine.trim().match(/^\[([^\]]+)\]\s*(?:#.*)?$/);
-        if(section){
-          sawSection=true;
-          inManagedSection=managedSectionNames.has(section[1].trim());
-          if(inManagedSection)continue;
-          output.push(rawLine);
-          continue;
-        }
-        if(inManagedSection)continue;
-        if(!sawSection&&/^\s*(model|model_provider|model_reasoning_effort|openai_base_url)\s*=/.test(rawLine))continue;
-        output.push(rawLine);
-      }
-      return output.join("\n").trim();
-    }
-    function mergeManagedConfig(existing){
-      if(!existing.trim())return managedBlock;
-      const beginIndex=existing.indexOf(managedBegin);
-      const endIndex=existing.indexOf(managedEnd);
-      if(beginIndex>=0&&endIndex>=beginIndex){
-        const before=existing.slice(0,beginIndex).trimEnd();
-        const after=existing.slice(endIndex+managedEnd.length).trimStart();
-        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\n\n"));
-      }
-      if(beginIndex>=0&&endIndex<beginIndex){
-        const before=existing.slice(0,beginIndex).trimEnd();
-        const body=existing.slice(beginIndex);
-        const tailMatch=body.match(/\n\[(?:windows|plugins\.|projects\.|mcp_servers\.|profiles\.)[^\n]*\]/);
-        const after=tailMatch?body.slice(tailMatch.index+1).trimStart():"";
-        return withFinalNewline([before,managedBlock.trimEnd(),after].filter(Boolean).join("\n\n"));
-      }
-      const oldGenerated="model = \"gpt-5.5\"\nmodel_provider = \"openai\"\nmodel_reasoning_effort = \"medium\"\nopenai_base_url = \"https://uniapi.ruijie.com.cn/v1\"\n\n[features]\nplugins = true\napps = true\nbrowser_use = true\n";
-      if(existing.trim()===oldGenerated.trim()||existing.replace(/^\uFEFF/,"").startsWith("# Managed by Ruizhi Desktop.")){
-        const rest=stripLegacyManagedPrefix(existing);
-        return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\n\n"));
-      }
-      const rest=stripManagedConfigConflicts(existing);
-      return withFinalNewline([managedBlock.trimEnd(), rest.trimStart()].filter(Boolean).join("\n\n"));
-    }
-
-/* ruizhi-windows-sandbox-config:start */
-    function readWindowsSandboxModeFromConfig(text){
-      let inWindowsSection=false;
-      for(const rawLine of String(text??"").split(/\r?\n/)){
-        const line=rawLine.trim();
-        if(!line||line.startsWith("#"))continue;
-        const section=line.match(/^\[([^\]]+)\]\s*(?:#.*)?$/);
-        if(section){
-          inWindowsSection=section[1].trim()==="windows";
-          continue;
-        }
-        if(!inWindowsSection)continue;
-        const match=line.match(/^sandbox\s*=\s*["']?([^"'\s#]+)["']?\s*(?:#.*)?$/);
-        if(match&&(match[1]==="elevated"||match[1]==="unelevated"))return match[1];
-      }
-      return null;
-    }
-    function hasWindowsSandboxSetup(root){
-      return process.platform==="win32"&&fs.existsSync(path.join(root,".sandbox","setup_marker.json"))&&fs.existsSync(path.join(root,".sandbox-secrets","sandbox_users.json"));
-    }
-    function ensureWindowsSandboxMode(text,mode){
-      if(process.platform!=="win32"||!mode||readWindowsSandboxModeFromConfig(text)!=null)return text;
-      const nextLines=withFinalNewline(text).split(/\r?\n/);
-      let windowsSectionIndex=-1;
-      for(let index=0;index<nextLines.length;index+=1){
-        const section=nextLines[index].trim().match(/^\[([^\]]+)\]\s*(?:#.*)?$/);
-        if(section&&section[1].trim()==="windows"){
-          windowsSectionIndex=index;
-          break;
-        }
-      }
-      if(windowsSectionIndex>=0){
-        nextLines.splice(windowsSectionIndex+1,0,"sandbox = "+JSON.stringify(mode));
-        return withFinalNewline(nextLines.join("\n").trimEnd());
-      }
-      return withFinalNewline([text.trimEnd(),"","[windows]","sandbox = "+JSON.stringify(mode)].filter(Boolean).join("\n"));
-    }
-    function readConfigIfExists(root){
-      const target=path.join(root,"config.toml");
-      return fs.existsSync(target)?fs.readFileSync(target,"utf8"):"";
-    }
-    function inferWindowsSandboxMode(primaryText){
-      const fallbackCodexHome=path.join(home,".codex");
-      return readWindowsSandboxModeFromConfig(primaryText)||readWindowsSandboxModeFromConfig(readConfigIfExists(fallbackCodexHome))||"elevated";
-    }
-    function syncWindowsSandboxConfig(root,preferredMode){
-      if(!hasWindowsSandboxSetup(root))return;
-      const target=path.join(root,"config.toml");
-      const existing=readConfigIfExists(root);
-      const mode=readWindowsSandboxModeFromConfig(existing)||preferredMode||"elevated";
-      const next=ensureWindowsSandboxMode(existing,mode);
-      if(next!==existing){
-        fs.mkdirSync(path.dirname(target),{recursive:true});
-        fs.writeFileSync(target,next,"utf8");
-      }
-    }
-    function syncFallbackWindowsSandboxConfig(preferredMode){
-      if(process.platform!=="win32")return;
-      const roots=[codexHome,path.join(home,".codex")];
-      const seen=new Set();
-      for(const root of roots){
-        const resolved=path.resolve(root);
-        if(seen.has(resolved))continue;
-        seen.add(resolved);
-        syncWindowsSandboxConfig(root,preferredMode);
-      }
-    }
-/* ruizhi-windows-sandbox-config:end */
     const configPath=path.join(codexHome,"config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
-    const existing=existingCodexConfig?fs.readFileSync(configPath,"utf8"):"";
-    let next=mergeManagedConfig(existing);
-    next=rewriteRuntimeModelProviderBaseUrl(next);
-    const sandboxMode=hasWindowsSandboxSetup(codexHome)?inferWindowsSandboxMode(next):readWindowsSandboxModeFromConfig(next);
-    if(hasWindowsSandboxSetup(codexHome))next=ensureWindowsSandboxMode(next,sandboxMode);
-    if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
-    syncFallbackWindowsSandboxConfig(readWindowsSandboxModeFromConfig(next));
   }catch(e){
     console.error("ruizhi bootstrap init failed",e);
   }

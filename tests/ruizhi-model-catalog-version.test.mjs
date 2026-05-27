@@ -17,6 +17,46 @@ test("model catalog source version is pinned to the current Codex runtime series
   assert.equal(catalog.client_version, "0.133.0");
 });
 
+test("DeepSeek V4 chat models only advertise UniAPI-compatible options", () => {
+  const catalog = JSON.parse(readProjectFile("resources/ruizhi-model-catalog.json"));
+  const config = JSON.parse(readProjectFile("config/rj-codex.json"));
+  const slugs = ["deepseek-v4-pro", "deepseek-v4-flash-maxthink", "DeepSeek-V4-Flash"];
+
+  for (const slug of slugs) {
+    const model = catalog.models.find((entry) => entry.slug === slug);
+    assert.ok(model, `${slug} should exist in the model catalog`);
+    assert.equal(model.default_verbosity, "medium", `${slug} should use the only supported verbosity`);
+    assert.equal(model.apply_patch_tool_type, undefined, `${slug} must not advertise custom apply_patch tools`);
+    assert.equal(model.web_search_tool_type, undefined, `${slug} must not advertise custom web_search tools`);
+    assert.equal(config.modelBridge.routes[slug]?.protocol, "chat", `${slug} should route through chat bridge`);
+  }
+});
+
+test("desktop bootstrap refreshes the model catalog from GitLab into Codex home", () => {
+  const config = JSON.parse(readProjectFile("config/rj-codex.json"));
+
+  assert.equal(
+    config.models.remoteCatalogUrl,
+    "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-codex/-/raw/main/model-catalog.json?inline=false"
+  );
+
+  for (const scriptPath of ["scripts/build-windows.mjs", "scripts/build-macos.mjs"]) {
+    const source = readProjectFile(scriptPath);
+
+    assert.match(source, /const modelCatalogRemoteUrl=\$\{jsonLiteral\(modelCatalogRemoteUrl\(\)\)\};/);
+    assert.match(source, /const userModelCatalogFile="model-catalog\.json";/);
+    assert.match(source, /downloadRemoteModelCatalog\(modelCatalogRemoteUrl,temp\);/);
+    assert.match(source, /backupExistingModelCatalog\(target\);/);
+    assert.match(source, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
+    assert.doesNotMatch(source, /catalogPath:path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
+  }
+
+  const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
+  assert.match(asarPatchSource, /const userModelCatalogFile="model-catalog\.json";/);
+  assert.match(asarPatchSource, /backupExistingModelCatalog\(target\);/);
+  assert.match(asarPatchSource, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
+});
+
 test("macOS build rewrites runtime model catalog with bundled Codex version", () => {
   const source = readProjectFile("scripts/build-macos.mjs");
 

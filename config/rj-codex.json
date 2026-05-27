@@ -52,7 +52,8 @@
   },
   "models": {
     "enabled": true,
-    "catalogPath": "resources/ruizhi-model-catalog.json"
+    "catalogPath": "resources/ruizhi-model-catalog.json",
+    "remoteCatalogUrl": "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-codex/-/raw/main/model-catalog.json?inline=false"
   },
   "modelBridge": {
     "enabled": true,
@@ -98,6 +99,10 @@
         "reasoningEffort": true
       },
       "deepseek-v4-flash": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "DeepSeek-V4-Flash": {
         "protocol": "chat",
         "reasoningEffort": true
       }

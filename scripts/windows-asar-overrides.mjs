@@ -2037,8 +2037,11 @@ ${preludeEnd}
   log("已注入 Windows bootstrap 早期锐智环境初始化");
 }
 
-function bridgeBootstrapBlock() {
+function bridgeBootstrapBlock(config) {
+  const remoteCatalogUrl = config.models?.remoteCatalogUrl ?? "";
   return `/* ruizhi-model-bridge:start */
+    const modelCatalogRemoteUrl=${jsonLiteral(remoteCatalogUrl)};
+    const userModelCatalogFile="model-catalog.json";
     function stableModelBridgePort(basePort,seed){
       let hash=0;
       for(const char of String(seed||"")){
@@ -2060,6 +2063,56 @@ function bridgeBootstrapBlock() {
       process.env.no_proxy=next;
     }
     ensureLoopbackNoProxy();
+    function syncModelCache(){
+      const target=path.join(codexHome,userModelCatalogFile);
+      if(!modelCatalogEnabled||!modelCatalogRemoteUrl)return;
+      const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
+      try{
+        downloadRemoteModelCatalog(modelCatalogRemoteUrl,temp);
+        validateModelCatalogFile(temp);
+        const changed=!fs.existsSync(target)||fs.readFileSync(temp).compare(fs.readFileSync(target))!==0;
+        if(!changed){
+          fs.rmSync(temp,{force:true});
+          return;
+        }
+        backupExistingModelCatalog(target);
+        fs.renameSync(temp,target);
+      }catch(error){
+        fs.rmSync(temp,{force:true});
+        console.warn("ruizhi remote model catalog sync failed",error);
+      }
+    }
+    function downloadRemoteModelCatalog(url,target){
+      const childProcess=require("node:child_process");
+      fs.mkdirSync(path.dirname(target),{recursive:true});
+      let result;
+      if(process.platform==="win32"){
+        const command=[
+          "$ErrorActionPreference='Stop';",
+          "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;",
+          "Invoke-WebRequest -Uri $env:RUIZHI_MODEL_CATALOG_URL -OutFile $env:RUIZHI_MODEL_CATALOG_TARGET -UseBasicParsing"
+        ].join(" ");
+        result=childProcess.spawnSync("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Command",command],{
+          encoding:"utf8",
+          timeout:25000,
+          env:{...process.env,RUIZHI_MODEL_CATALOG_URL:url,RUIZHI_MODEL_CATALOG_TARGET:target}
+        });
+      }else{
+        result=childProcess.spawnSync("curl",["-fL","--connect-timeout","8","--max-time","25","-o",target,url],{encoding:"utf8",timeout:30000});
+      }
+      if(result.error)throw result.error;
+      if(result.status!==0)throw new Error(String(result.stderr||result.stdout||\`download failed with status \${result.status}\`).trim());
+    }
+    function validateModelCatalogFile(filePath){
+      const catalog=JSON.parse(fs.readFileSync(filePath,"utf8"));
+      if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models)||catalog.models.length===0)throw new Error("远程模型目录格式无效");
+      return catalog;
+    }
+    function backupExistingModelCatalog(target){
+      if(!fs.existsSync(target))return;
+      const stamp=new Date().toISOString().replace(/[:.]/g,"-");
+      fs.copyFileSync(target,\`\${target}.bak-\${stamp}\`);
+    }
     function startModelBridge(){
       if(!modelBridgeConfig.enabled)return null;
       const scriptPath=path.join(resourcesRoot,...modelBridgeConfig.scriptResourcePath);
@@ -2069,11 +2122,12 @@ function bridgeBootstrapBlock() {
         port:modelBridgeConfig.port,
         upstreamBaseUrl:openaiBaseUrl,
         authHome:codexHome,
-        catalogPath:path.join(resourcesRoot,"models",modelCatalogFile),
+        catalogPath:path.join(codexHome,userModelCatalogFile),
         routes:modelBridgeConfig.routes
       });
       return bridge?.baseUrl||modelProviderBaseUrl;
     }
+    syncModelCache();
     const runtimeModelProviderBaseUrl=startModelBridge()||modelProviderBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
@@ -2156,9 +2210,9 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   const oldEnvAnchor = "process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;\n    process.env.RUIZHI_IMAGEGEN_EXE=";
   const imageEnvAnchor = "    process.env.RUIZHI_IMAGEGEN_EXE=";
   if (next.includes(oldEnvAnchor)) {
-    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock()}${pageEnhanceBootstrapBlock(config)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
+    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
   } else if (next.includes(imageEnvAnchor)) {
-    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock()}${pageEnhanceBootstrapBlock(config)}${imageEnvAnchor}`);
+    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config)}${imageEnvAnchor}`);
   } else {
     throw new Error("Windows bootstrap RUIZHI_IMAGEGEN_EXE 补丁点不存在");
   }

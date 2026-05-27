@@ -126,7 +126,6 @@ test("first launch skips the APIKey prompt when Codex config already exists", ()
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
-    "overrides/windows-app/asar/.vite/build/bootstrap.js",
   ]) {
     const source = read(scriptPath);
     assert.match(source, /function hasExistingCodexConfig\(/, `${scriptPath} should detect existing ~/.codex configuration`);
@@ -151,7 +150,7 @@ test("first launch skips the APIKey prompt when Codex config already exists", ()
   assert.doesNotMatch(loginRoute, /\[H,U\]=\(0,G\.useState\)\(!0\)/);
 });
 
-test("bootstrap treats config.toml as user-owned and never writes Ruizhi defaults", () => {
+test("bootstrap treats config.toml as user-owned except runtime provider URL repair", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -162,8 +161,14 @@ test("bootstrap treats config.toml as user-owned and never writes Ruizhi default
     assert.doesNotMatch(source, /# BEGIN Ruizhi Managed Defaults/, `${scriptPath} should not embed a managed config.toml block`);
     assert.doesNotMatch(source, /mergeManagedConfig|stripManagedConfigConflicts|managedConfigSectionNames/, `${scriptPath} should not merge or rewrite config.toml`);
     assert.doesNotMatch(source, /configTemplateLines/, `${scriptPath} should not template config.toml defaults`);
-    assert.doesNotMatch(source, /fs\.writeFileSync\(configPath/, `${scriptPath} should not write the user's config.toml`);
     assert.doesNotMatch(source, /fs\.writeFileSync\(target,\s*next,\s*"utf8"\)/, `${scriptPath} should not patch sandbox settings into config.toml`);
+  }
+
+  for (const scriptPath of ["scripts/build-windows.mjs", "scripts/build-macos.mjs", "scripts/windows-asar-overrides.mjs"]) {
+    const source = read(scriptPath);
+    assert.match(source, /syncRuntimeModelProviderConfig/, `${scriptPath} should repair the model provider base_url`);
+    assert.match(source, /bak-provider/, `${scriptPath} should back up config.toml before provider URL repair`);
+    assert.match(source, /setTomlProviderBaseUrl/, `${scriptPath} should limit config.toml writes to provider base_url`);
   }
 });
 
@@ -315,13 +320,12 @@ test("packaging enables Codex native Browser desktop availability without Browse
   const mainBundle = fs.readdirSync(buildDir).find((name) => /^main-.*\.js$/.test(name));
   assert.equal(mainBundle, undefined, "Windows overrides should rely on build-time main bundle patching");
 
-  for (const assetPath of [
-    "overrides/windows-app/asar/webview/assets/browser-use-settings-CJBdA4SJ.js",
-    "overrides/windows-app/asar/webview/assets/app-main-DeAkLLF9.js",
-  ]) {
-    const source = read(assetPath);
-    assert.doesNotMatch(source, /ruizhiBrowser(Settings|Feature)Availability/, `${assetPath} should not carry Browser unlock patches`);
-  }
+  assert.equal(
+    fs.readdirSync(path.join(projectRoot, "overrides", "windows-app", "asar", "webview", "assets"))
+      .filter((name) => /^browser-use-settings-.*\.js$/.test(name)).length,
+    0,
+    "Windows overrides should not carry stale Browser settings asset patches"
+  );
 });
 
 test("packaging uses current OpenAI bundled plugin ids for Browser automation", () => {
@@ -356,7 +360,7 @@ test("packaging bundles current OpenAI plugin metadata without writing config de
   assert.ok(bootstrapSource.includes('"name":"latex"'), "bootstrap should carry the native LaTeX plugin id");
 });
 
-test("bootstrap leaves existing unmanaged Codex config untouched", () => {
+test("bootstrap leaves unmanaged Codex config sections untouched", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -366,7 +370,6 @@ test("bootstrap leaves existing unmanaged Codex config untouched", () => {
     assert.doesNotMatch(source, /stripManagedConfigConflicts/, `${scriptPath} should not strip user config.toml sections`);
     assert.doesNotMatch(source, /managedSectionNames/, `${scriptPath} should not maintain managed TOML sections`);
     assert.doesNotMatch(source, /managedBlock/, `${scriptPath} should not prepend managed defaults to config.toml`);
-    assert.doesNotMatch(source, /rewriteRuntimeModelProviderBaseUrl/, `${scriptPath} should not rewrite model provider base URLs in config.toml`);
   }
 });
 

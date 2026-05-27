@@ -2041,7 +2041,7 @@ function bridgeBootstrapBlock(config) {
   const remoteCatalogUrl = config.models?.remoteCatalogUrl ?? "";
   return `/* ruizhi-model-bridge:start */
     const modelCatalogRemoteUrl=${jsonLiteral(remoteCatalogUrl)};
-    const userModelCatalogFile="model-catalog.json";
+    const userModelCatalogFile="models_cache.json";
     function stableModelBridgePort(basePort,seed){
       let hash=0;
       for(const char of String(seed||"")){
@@ -2066,21 +2066,24 @@ function bridgeBootstrapBlock(config) {
     function syncModelCache(){
       const target=path.join(codexHome,userModelCatalogFile);
       if(!modelCatalogEnabled||!modelCatalogRemoteUrl)return;
-      const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
-      try{
-        downloadRemoteModelCatalog(modelCatalogRemoteUrl,temp);
-        validateModelCatalogFile(temp);
-        const changed=!fs.existsSync(target)||fs.readFileSync(temp).compare(fs.readFileSync(target))!==0;
-        if(!changed){
+      setTimeout(()=>{
+        const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
+        try{
+          downloadRemoteModelCatalog(modelCatalogRemoteUrl,temp);
+          validateModelCatalogFile(temp);
+          normalizeModelCatalogFile(temp);
+          const changed=!fs.existsSync(target)||fs.readFileSync(temp).compare(fs.readFileSync(target))!==0;
+          if(!changed){
+            fs.rmSync(temp,{force:true});
+            return;
+          }
+          backupExistingModelCatalog(target);
+          fs.renameSync(temp,target);
+        }catch(error){
           fs.rmSync(temp,{force:true});
-          return;
+          console.warn("ruizhi remote model catalog sync failed",error);
         }
-        backupExistingModelCatalog(target);
-        fs.renameSync(temp,target);
-      }catch(error){
-        fs.rmSync(temp,{force:true});
-        console.warn("ruizhi remote model catalog sync failed",error);
-      }
+      },1000);
     }
     function downloadRemoteModelCatalog(url,target){
       const childProcess=require("node:child_process");
@@ -2108,6 +2111,12 @@ function bridgeBootstrapBlock(config) {
       if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models)||catalog.models.length===0)throw new Error("远程模型目录格式无效");
       return catalog;
     }
+    function normalizeModelCatalogFile(filePath){
+      const catalog=validateModelCatalogFile(filePath);
+      catalog.fetched_at=new Date().toISOString();
+      fs.writeFileSync(filePath,JSON.stringify(catalog,null,2)+"\\n","utf8");
+      return catalog;
+    }
     function backupExistingModelCatalog(target){
       if(!fs.existsSync(target))return;
       const stamp=new Date().toISOString().replace(/[:.]/g,"-");
@@ -2128,9 +2137,50 @@ function bridgeBootstrapBlock(config) {
       return bridge?.baseUrl||modelProviderBaseUrl;
     }
     syncModelCache();
-    const runtimeModelProviderBaseUrl=startModelBridge()||modelProviderBaseUrl;
+    const runtimeBridgeBaseUrl=startModelBridge();
+    syncRuntimeModelProviderConfig(runtimeBridgeBaseUrl);
+    const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
+    function syncRuntimeModelProviderConfig(baseUrl){
+      if(!baseUrl)return;
+      const configPath=path.join(codexHome,"config.toml");
+      const providerIds=["ruijie-uniapi","ruijie-newapi"];
+      let source="";
+      try{
+        source=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+      }catch(error){
+        console.warn("ruizhi model provider config read failed",error);
+        return;
+      }
+      let next=source;
+      for(const providerId of providerIds)next=setTomlProviderBaseUrl(next,providerId,baseUrl);
+      if(next===source)return;
+      try{
+        fs.mkdirSync(path.dirname(configPath),{recursive:true});
+        if(source){
+          const stamp=new Date().toISOString().replace(/[:.]/g,"-");
+          fs.copyFileSync(configPath,\`\${configPath}.bak-provider-\${stamp}\`);
+        }
+        fs.writeFileSync(configPath,next,"utf8");
+      }catch(error){
+        console.warn("ruizhi model provider config sync failed",error);
+      }
+    }
+    function setTomlProviderBaseUrl(source,providerId,baseUrl){
+      const header=\`[model_providers.\${providerId}]\`;
+      const escapedUrl=String(baseUrl).replace(/\\\\/g,"\\\\\\\\").replace(/"/g,'\\\\"');
+      const start=source.indexOf(header);
+      if(start<0)return source.trimEnd()+\`\\n\\n\${header}\\nname = "锐擎API"\\nbase_url = "\${escapedUrl}"\\n\`;
+      const rest=source.slice(start+header.length);
+      const relativeEnd=rest.search(/\\n\\[[^\\n]+\\]/);
+      const end=relativeEnd<0?source.length:start+header.length+relativeEnd;
+      const section=source.slice(start,end);
+      const nextSection=/\\nbase_url\\s*=\\s*"[^"]*"/.test(section)
+        ? section.replace(/\\nbase_url\\s*=\\s*"[^"]*"/,\`\\nbase_url = "\${escapedUrl}"\`)
+        : section.trimEnd()+\`\\nbase_url = "\${escapedUrl}"\\n\`;
+      return source.slice(0,start)+nextSection+source.slice(end);
+    }
 /* ruizhi-model-bridge:end */
 `;
 }

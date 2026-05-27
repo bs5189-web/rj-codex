@@ -13,7 +13,7 @@
 - 默认语言设置为简体中文（`zh-CN`），并用内置 `zh-CN` 翻译回填前端 `defaultMessage`，避免首屏先显示英文再切中文。
 - 默认配置开启 `default_mode_request_user_input`、`plugins`、`apps`、`browser_use`。
 - 默认不重新编译 `resources\codex.exe`。只有必须修改 Rust 内嵌逻辑时才设置 `RUIZHI_BUILD_CODEX=1` 重编，否则优先走 Electron 启动注入、运行态资源同步和用户级缓存。
-- 启动时从 GitLab raw 地址刷新模型目录到 `~/.codex/model-catalog.json`，覆盖前备份已有文件，模型下拉框和本地 Responses bridge 都读取这份用户目录副本。目录只保留锐擎 API 里实测可用、适合 Codex 文本/代码协作的主流新模型：GPT 与 Qwen 走 `/v1/responses` 直通；Claude Opus/Sonnet、GLM 5.1、Kimi K2.6、MiniMax M2.7、DeepSeek V4 走本地 bridge 转换到 `/v1/chat/completions`。`qwen3.5`、`glm-5`、`kimi-k2.5`、`MiniMax-M2.5`、DeepSeek v3、embedding、realtime、rerank 和生图后端不放进 picker。
+- 启动时从 GitLab raw 地址刷新模型目录到 `~/.codex/models_cache.json`，覆盖前备份已有文件，模型下拉框和本地 Responses bridge 都读取这份 Codex 模型缓存。目录只保留锐擎 API 里实测可用、适合 Codex 文本/代码协作的主流新模型：GPT 与 Qwen 走 `/v1/responses` 直通；Claude Opus/Sonnet、GLM 5.1、Kimi K2.6、MiniMax M2.7、DeepSeek V4 走本地 bridge 转换到 `/v1/chat/completions`。`qwen3.5`、`glm-5`、`kimi-k2.5`、`MiniMax-M2.5`、DeepSeek v3、embedding、realtime、rerank 和生图后端不放进 picker。
 - GPT 模型在目录里显式标注 `input_modalities = ["text", "image"]`，避免前端误判“不支持图片输入”；非 GPT 模型暂按文本模型处理，后续要开放图片再逐个实测。
 - 启动时写入 `RUIZHI_HOME\rules\ruizhi-managed.rules`，为内置锐捷 skill 的固定脚本命令预置 `prefix_rule(..., decision="allow")`，覆盖内置 marketplace 路径、本机 `.agents\skills` 路径和内置生图 helper 直接执行路径，避免用户没开完全访问权限时反复弹授权；只放行具体脚本 / helper 子命令，不全局放开 `node` / `bash` / PowerShell。
 - 内置 `ruizhi-imagegen.exe` 生图 helper，并在运行态覆盖 system `imagegen` skill：默认走锐擎 UniAPI 的 `gpt-image-2`，从 `RUIZHI_HOME` / `CODEX_HOME` 的 `auth.json` 读取 APIKey，不要求用户安装 Python SDK 或手动设置 `OPENAI_API_KEY`。生成成功后要求直接用 Markdown 图片语法把本地图片渲染进会话，而不是只甩一个文件路径；用户只说“生成一张图片”这类缺主题请求时，优先通过 `request_user_input` 继续收集主题，避免普通 final 回复把任务显示成已结束。
@@ -120,7 +120,7 @@ open /Applications/锐智.app
 ```powershell
 %USERPROFILE%\.ruizhi\config.toml
 %USERPROFILE%\.ruizhi\auth.json
-%USERPROFILE%\.codex\model-catalog.json
+%USERPROFILE%\.codex\models_cache.json
 %USERPROFILE%\.ruizhi\.tmp\marketplaces\ruijie-skills
 ```
 

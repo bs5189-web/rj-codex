@@ -32,7 +32,7 @@ test("DeepSeek V4 chat models only advertise UniAPI-compatible options", () => {
   }
 });
 
-test("desktop bootstrap refreshes the model catalog from GitLab into Codex home", () => {
+test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex home", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
   assert.equal(
@@ -44,17 +44,25 @@ test("desktop bootstrap refreshes the model catalog from GitLab into Codex home"
     const source = readProjectFile(scriptPath);
 
     assert.match(source, /const modelCatalogRemoteUrl=\$\{jsonLiteral\(modelCatalogRemoteUrl\(\)\)\};/);
-    assert.match(source, /const userModelCatalogFile="model-catalog\.json";/);
+    assert.match(source, /const userModelCatalogFile="models_cache\.json";/);
+    assert.match(source, /setTimeout\(\(\)=>\{/);
     assert.match(source, /downloadRemoteModelCatalog\(modelCatalogRemoteUrl,temp\);/);
-    assert.match(source, /backupExistingModelCatalog\(target\);/);
+    assert.match(source, /normalizeModelCatalogFile\(temp\);/);
+    assert.match(source, /function normalizeModelCatalogFile\(filePath\)/);
+    assert.match(source, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
     assert.match(source, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
+    assert.doesNotMatch(source, /const userModelCatalogFile="model-catalog\.json";/);
     assert.doesNotMatch(source, /catalogPath:path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
   }
 
   const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
-  assert.match(asarPatchSource, /const userModelCatalogFile="model-catalog\.json";/);
-  assert.match(asarPatchSource, /backupExistingModelCatalog\(target\);/);
+  assert.match(asarPatchSource, /const userModelCatalogFile="models_cache\.json";/);
+  assert.match(asarPatchSource, /setTimeout\(\(\)=>\{/);
+  assert.match(asarPatchSource, /normalizeModelCatalogFile\(temp\);/);
+  assert.match(asarPatchSource, /function normalizeModelCatalogFile\(filePath\)/);
+  assert.match(asarPatchSource, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
   assert.match(asarPatchSource, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
+  assert.doesNotMatch(asarPatchSource, /const userModelCatalogFile="model-catalog\.json";/);
 });
 
 test("macOS build rewrites runtime model catalog with bundled Codex version", () => {

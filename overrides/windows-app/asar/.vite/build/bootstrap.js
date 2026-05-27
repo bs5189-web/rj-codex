@@ -7,7 +7,7 @@
   const productName="锐智";
   const ruizhiHomeEnvName="RUIZHI_HOME";
   const ruizhiDefaultHomeDirName=".codex";
-  const electronUserDataDirName="Codex";
+  const electronUserDataDirName="锐智";
   const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
   const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
@@ -18,14 +18,13 @@
   fs.mkdirSync(userData,{recursive:true});
 }catch(e){console.error("ruizhi early env init failed",e)}})();
 /* ruizhi-early-env:end */
-const e=require(`./app-session-BxEcL5Yg.js`),t=require(`./workspace-root-drop-handler-CSnqqPxa.js`);let n=require(`electron`),r=require(`node:path`);require(`node:crypto`);let i=require(`node:child_process`);var a=`desktop.intelLaunchWarning.message`,o=`{appName} is running the Intel build on an Apple Silicon Mac`,s=`desktop.intelLaunchWarning.detail`,c=`This build works through Rosetta, but the Apple Silicon build launches faster and performs better. Quit now to install the Apple Silicon build, or continue with the Intel build`,l=`desktop.intelLaunchWarning.quit`,u=`Quit`,d=`desktop.intelLaunchWarning.continue`,f=`Continue Anyway`;function p(e,t=h){return!e.isPackaged||e.platform!==`darwin`||e.arch!==`x64`?!1:t()}async function m({appName:e,environment:r,readProcessTranslated:i=h,loadNativeIntl:m=g,showMessageBox:_=e=>n.dialog.showMessageBox(e)}){if(!p(r,i))return!0;try{let t=await m();return(await _({type:`warning`,buttons:[t.formatMessage({messageId:l,defaultMessage:u}),t.formatMessage({messageId:d,defaultMessage:f})],defaultId:0,cancelId:0,noLink:!0,message:t.formatMessage({messageId:a,defaultMessage:o,values:{appName:e}}),detail:t.formatMessage({messageId:s,defaultMessage:c})})).response===1}catch(e){return t.Wr().warning(`Failed to show Intel-on-Apple-Silicon launch warning`,{safe:{errorName:e instanceof Error?e.name:null}}),!0}}function h(){try{return(0,i.execFileSync)(`sysctl`,[`-in`,`sysctl.proc_translated`],{encoding:`utf8`,env:t.Ur(process.env),stdio:[`ignore`,`pipe`,`ignore`]}).trim()===`1`}catch{return!1}}async function g(){try{return t.M()}catch{try{return await t.A.load(``)}catch{return t.A.createDefault()}}}function _({appDataPath:t,buildFlavor:n,env:i}){let a=i.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(a)return(0,r.resolve)(a);let o=(0,r.join)(t,e.G(n)),s=i.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&s!=null?(0,r.join)(o,`agent`,s):o}
-function ruizhiInit(){
+const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-handler-Ds_5iOm2.js`);let n=require(`electron`),r=require(`node:path`);require(`node:crypto`);let i=require(`node:child_process`);var a=`desktop.intelLaunchWarning.message`,o=`{appName} is running the Intel build on an Apple Silicon Mac`,s=`desktop.intelLaunchWarning.detail`,c=`This build works through Rosetta, but the Apple Silicon build launches faster and performs better. Quit now to install the Apple Silicon build, or continue with the Intel build`,l=`desktop.intelLaunchWarning.quit`,u=`Quit`,d=`desktop.intelLaunchWarning.continue`,f=`Continue Anyway`;function p(e,t=h){return!e.isPackaged||e.platform!==`darwin`||e.arch!==`x64`?!1:t()}async function m({appName:e,environment:r,readProcessTranslated:i=h,loadNativeIntl:m=g,showMessageBox:_=e=>n.dialog.showMessageBox(e)}){if(!p(r,i))return!0;try{let t=await m();return(await _({type:`warning`,buttons:[t.formatMessage({messageId:l,defaultMessage:u}),t.formatMessage({messageId:d,defaultMessage:f})],defaultId:0,cancelId:0,noLink:!0,message:t.formatMessage({messageId:a,defaultMessage:o,values:{appName:e}}),detail:t.formatMessage({messageId:s,defaultMessage:c})})).response===1}catch(e){return t.Jr().warning(`Failed to show Intel-on-Apple-Silicon launch warning`,{safe:{errorName:e instanceof Error?e.name:null}}),!0}}function h(){try{return(0,i.execFileSync)(`sysctl`,[`-in`,`sysctl.proc_translated`],{encoding:`utf8`,env:t.qr(process.env),stdio:[`ignore`,`pipe`,`ignore`]}).trim()===`1`}catch{return!1}}async function g(){try{return t.P()}catch{try{return await t.M.load(``)}catch{return t.M.createDefault()}}}function _({appDataPath:t,buildFlavor:n,env:i}){let a=i.CODEX_ELECTRON_USER_DATA_PATH?.trim();if(a)return(0,r.resolve)(a);let o=(0,r.join)(t,e.G(n)),s=i.CODEX_ELECTRON_AGENT_RUN_ID?.trim()||null;return n===`agent`&&s!=null?(0,r.join)(o,`agent`,s):o}var v={"install-update":`Install Update`,"check-for-updates":`Check for Updates`,quit:`Quit`};async function y(e){let{sparkleManager:r}=t.C(),i=r.getIsUpdateReady()?[`install-update`,`quit`]:r.hasUpdater()?[`check-for-updates`,`quit`]:[`quit`];switch(i[(await n.dialog.showMessageBox({type:`error`,buttons:i.map(e=>v[e]),defaultId:0,cancelId:i.length-1,message:`${n.app.getName()} failed to start.`,detail:e instanceof Error?e.message:`The main desktop app failed during startup.`,noLink:!0})).response]??`quit`){case`install-update`:await r.installUpdatesIfAvailable();return;case`check-for-updates`:await r.checkForUpdates();return;case`quit`:n.app.quit();return}}function ruizhiInit(){
   try{
     const fs=require("node:fs");
     const os=require("node:os");
     const path=require("node:path");
     const productName="锐智";
-    const electronUserDataDirName="Codex";
+    const electronUserDataDirName="锐智";
     const locale="zh-CN";
     const posixLocale="zh_CN";
     const ruizhiHomeEnvName="RUIZHI_HOME";
@@ -103,7 +102,7 @@ function ruizhiInit(){
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
 /* ruizhi-model-bridge:end */
 /* ruizhi-page-enhance:start */
-    const pageEnhanceConfig={"enabled":true,"features":{"menu":true,"pluginEntryUnlock":true,"forcePluginInstall":true,"sessionDelete":true,"markdownExport":true,"projectMove":true,"timeline":true,"threadScrollRestore":true,"modelWhitelistUnlock":false,"zedRemoteOpen":false,"upstreamWorktreeCreate":false,"serviceTierControls":false},"rendererResourcePath":["renderer","ruizhi-page-enhance.js"],"serviceResourcePath":["bridge","ruizhi-enhance-service.cjs"]};
+    const pageEnhanceConfig={"enabled":true,"features":{"menu":true,"pluginEntryUnlock":true,"forcePluginInstall":true,"sessionDelete":true,"markdownExport":true,"projectMove":true,"timeline":true,"threadScrollRestore":true,"threadSort":true,"modelWhitelistUnlock":false,"zedRemoteOpen":false,"upstreamWorktreeCreate":false,"serviceTierControls":false},"appVersion":"0.1.24","rendererResourcePath":["renderer","ruizhi-page-enhance.js"],"serviceResourcePath":["bridge","ruizhi-enhance-service.cjs"]};
     function registerRuizhiEnhanceIpc(){
       if(global.__RUIZHI_ENHANCE_IPC_REGISTERED__)return;
       global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
@@ -209,7 +208,7 @@ function ruizhiInit(){
     syncLegacyCodexGlobalSkills();
 
     const marketplaceSpecs=[{"name":"ruijie-skills","resourcePath":["plugins","ruijie-skills"],"installPath":[".tmp","marketplaces","ruijie-skills"],"versionManifestPath":[".codex-plugin","plugin.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__"},{"name":"openai-bundled","resourcePath":["plugins","openai-bundled"],"installPath":[".tmp","bundled-marketplaces","openai-bundled"],"versionManifestPath":[".agents","plugins","marketplace.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","alwaysCopy":true,"hardcodedPlugins":true}];
-    const hardcodedOpenAIBundledPlugins=[{"name":"browser-use","path":"./plugins/browser-use","category":"浏览器"},{"name":"chrome","path":"./plugins/chrome","category":"实验性"},{"name":"latex-tectonic","path":"./plugins/latex-tectonic","category":"研究"}];
+    const hardcodedOpenAIBundledPlugins=[{"name":"browser","path":"./plugins/browser","category":"Engineering"},{"name":"chrome","path":"./plugins/chrome","category":"Productivity"},{"name":"latex","path":"./plugins/latex","category":"Research"}];
     function assertInside(base,target){
       const relative=path.relative(path.resolve(base),path.resolve(target));
       if(!relative||relative.startsWith("..")||path.isAbsolute(relative)){
@@ -381,7 +380,7 @@ function ruizhiInit(){
 
     const managedBegin="# BEGIN Ruizhi Managed Defaults";
     const managedEnd="# END Ruizhi Managed Defaults";
-    const configTemplateLines=["# BEGIN Ruizhi Managed Defaults","model = \"gpt-5.5\"","model_reasoning_effort = \"medium\"","model_provider = \"ruizhi\"","openai_base_url = \"http://127.0.0.1:17888/v1\"","","[model_providers.ruizhi]","name = \"锐擎API\"","base_url = \"http://127.0.0.1:17888/v1\"","wire_api = \"responses\"","requires_openai_auth = true","supports_websockets = false","stream_max_retries = 0","request_max_retries = 0","","[features]","default_mode_request_user_input = true","plugins = true","apps = true","browser_use = true","","[marketplaces.ruijie-skills]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__","","[marketplaces.openai-bundled]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","","# END Ruizhi Managed Defaults",""];
+    const configTemplateLines=["# BEGIN Ruizhi Managed Defaults","model = \"gpt-5.5\"","model_reasoning_effort = \"medium\"","model_provider = \"ruizhi\"","openai_base_url = \"http://127.0.0.1:17888/v1\"","","[model_providers.ruizhi]","name = \"锐擎API\"","base_url = \"http://127.0.0.1:17888/v1\"","wire_api = \"responses\"","requires_openai_auth = true","supports_websockets = false","stream_max_retries = 0","request_max_retries = 0","","[features]","default_mode_request_user_input = true","plugins = true","apps = true","browser_use = true","","[marketplaces.ruijie-skills]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__","","[marketplaces.openai-bundled]","source_type = \"local\"","source = __RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","","[plugins.\"browser@openai-bundled\"]","enabled = true","","[plugins.\"chrome@openai-bundled\"]","enabled = true","","[plugins.\"latex@openai-bundled\"]","enabled = true","","# END Ruizhi Managed Defaults",""];
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
@@ -405,6 +404,36 @@ function ruizhiInit(){
       }
       return "";
     }
+    function managedConfigSectionNames(){
+      const names=["features","model_providers.ruizhi"];
+      for(const spec of marketplaceSpecs){
+        names.push("marketplaces."+spec.name);
+      }
+      for(const plugin of hardcodedOpenAIBundledPlugins){
+        names.push("plugins.\""+plugin.name+"@openai-bundled\"");
+      }
+      return new Set(names);
+    }
+    function stripManagedConfigConflicts(text){
+      const managedSectionNames=managedConfigSectionNames();
+      const output=[];
+      let sawSection=false;
+      let inManagedSection=false;
+      for(const rawLine of String(text??"").split(/\r?\n/)){
+        const section=rawLine.trim().match(/^\[([^\]]+)\]\s*(?:#.*)?$/);
+        if(section){
+          sawSection=true;
+          inManagedSection=managedSectionNames.has(section[1].trim());
+          if(inManagedSection)continue;
+          output.push(rawLine);
+          continue;
+        }
+        if(inManagedSection)continue;
+        if(!sawSection&&/^\s*(model|model_provider|model_reasoning_effort|openai_base_url)\s*=/.test(rawLine))continue;
+        output.push(rawLine);
+      }
+      return output.join("\n").trim();
+    }
     function mergeManagedConfig(existing){
       if(!existing.trim())return managedBlock;
       const beginIndex=existing.indexOf(managedBegin);
@@ -426,11 +455,8 @@ function ruizhiInit(){
         const rest=stripLegacyManagedPrefix(existing);
         return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\n\n"));
       }
-      if(!/^\s*\[/m.test(existing)){
-        return withFinalNewline([existing.trimEnd(),managedBlock.trimEnd()].filter(Boolean).join("\n\n"));
-      }
-      console.warn("ruizhi bootstrap kept unmanaged config.toml unchanged");
-      return existing;
+      const rest=stripManagedConfigConflicts(existing);
+      return withFinalNewline([managedBlock.trimEnd(), rest.trimStart()].filter(Boolean).join("\n\n"));
     }
 
 /* ruizhi-windows-sandbox-config:start */
@@ -502,7 +528,9 @@ function ruizhiInit(){
     }
 /* ruizhi-windows-sandbox-config:end */
     const configPath=path.join(codexHome,"config.toml");
-    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+    const existingCodexConfig=fs.existsSync(configPath);
+    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
+    const existing=existingCodexConfig?fs.readFileSync(configPath,"utf8"):"";
     let next=mergeManagedConfig(existing);
     next=rewriteRuntimeModelProviderBaseUrl(next);
     const sandboxMode=hasWindowsSandboxSetup(codexHome)?inferWindowsSandboxMode(next):readWindowsSandboxModeFromConfig(next);
@@ -513,8 +541,6 @@ function ruizhiInit(){
     console.error("ruizhi bootstrap init failed",e);
   }
 }
-ruizhiInit();
-
 function ruizhiStartBackgroundUpdateCheck(){
   const updateConfig={"enabled":true,"feedUrl":"http://minio.rjagi.cn:9000/ai-ruizhi/updates/windows/","currentVersion":"0.1.24"};
   const authConfig={"productName":"锐智","ruizhiHomeEnvName":"RUIZHI_HOME","ruizhiDefaultHomeDirName":".codex","baseUrl":"https://uniapi.ruijie.com.cn/v1","testModel":"qwen3.6-flash","testTimeoutMs":15000};
@@ -628,6 +654,17 @@ function ruizhiStartBackgroundUpdateCheck(){
   function authPath(){
     return path.join(authHome(),"auth.json");
   }
+  function hasExistingCodexConfig(){
+    const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
+    if(marker==="1")return true;
+    if(marker==="0")return false;
+    const filePath=path.join(authHome(),"config.toml");
+    try{
+      return fs.existsSync(filePath)&&fs.statSync(filePath).isFile();
+    }catch{
+      return false;
+    }
+  }
   function maskApiKey(key){
     const value=String(key||"").trim();
     if(!value)return "";
@@ -637,15 +674,16 @@ function ruizhiStartBackgroundUpdateCheck(){
   function readApiKeyStatus(){
     const filePath=authPath();
     let key="";
+    const existingConfig=hasExistingCodexConfig();
     try{
       if(fs.existsSync(filePath)){
         const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
         key=String(auth.OPENAI_API_KEY||"").trim();
       }
     }catch(error){
-      return {configured:false,masked:"",error:String(error?.message||error),version:n.app.getVersion()};
+      return {configured:existingConfig,masked:"",configuredBy:existingConfig?"codex-config":"none",error:String(error?.message||error),version:n.app.getVersion()};
     }
-    return {configured:key.length>0,masked:maskApiKey(key),version:n.app.getVersion()};
+    return {configured:key.length>0||existingConfig,masked:maskApiKey(key),configuredBy:key.length>0?"api-key":existingConfig?"codex-config":"none",version:n.app.getVersion()};
   }
   function writeApiKey(key){
     const filePath=authPath();
@@ -796,6 +834,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       setImmediate(()=>autoUpdater.quitAndInstall(true,true));
       return {ok:true};
     });
+    n.ipcMain.on("ruizhi:auth:get-sync",event=>{event.returnValue=readApiKeyStatus();});
     n.ipcMain.handle("ruizhi:auth:get",()=>readApiKeyStatus());
     n.ipcMain.handle("ruizhi:auth:set-and-test",async(_event,key)=>{
       try{
@@ -884,5 +923,5 @@ function ruizhiStartBackgroundUpdateCheck(){
     console.error("ruizhi update bootstrap failed",error);
   }
 }
-var v={quit:`Quit`};async function y(e){await n.dialog.showMessageBox({type:`error`,buttons:[v.quit],defaultId:0,cancelId:0,message:`${n.app.getName()} failed to start.`,detail:e instanceof Error?e.message:`The main desktop app failed during startup.`,noLink:!0});n.app.quit();return}var b=process.platform===`darwin`,x=t.T.resolve();t.h(),t.n(b),n.app.setName("Codex"),n.app.setPath(`userData`,_({appDataPath:n.app.getPath(`appData`),buildFlavor:x,env:process.env})),process.platform===`win32`&&n.app.setAppUserModelId(`cn.ruizhi.desktop`);var S=t.y({isMacOS:b,isPackaged:n.app.isPackaged});if(!(!S||n.app.requestSingleInstanceLock()))t.Wr().info(`Exiting second desktop instance`,{safe:{packaged:n.app.isPackaged,platform:process.platform}}),n.app.exit(0);else{let e=t.x(x);S&&n.app.on(`second-instance`,(t,n)=>{e.queueSecondInstanceArgs(n)}),n.app.whenReady().then(async()=>{let{desktopSentry:r,sparkleManager:i}=e;if(!await m({appName:n.app.getName(),environment:{arch:process.arch,isPackaged:n.app.isPackaged,platform:process.platform}})){n.app.quit();return}ruizhiStartBackgroundUpdateCheck();try{let{runMainAppStartup:e}=await Promise.resolve().then(()=>require(`./main-Bnxe1qAn.js`));await e()}catch(e){for(let e of n.BrowserWindow.getAllWindows())e.isDestroyed()||e.destroy();t.Wr().error(`Desktop bootstrap failed to start the main app`,{safe:{phase:`bootstrap-import-main`}}),r.captureException(e,{tags:{phase:`bootstrap-import-main`}}),await y(e)}})}
+var b=process.platform===`darwin`,x=t.D.resolve();t._(),t.n(b),n.app.setName("锐智"),n.app.setPath(`userData`,_({appDataPath:n.app.getPath(`appData`),buildFlavor:x,env:process.env})),n.app.setAppUserModelId("cn.ruizhi.desktop");ruizhiInit();var S=t.x({isMacOS:b,isPackaged:n.app.isPackaged});if(!(!S||n.app.requestSingleInstanceLock()))t.Jr().info(`Exiting second desktop instance`,{safe:{packaged:n.app.isPackaged,platform:process.platform}}),n.app.exit(0);else{let e=t.C(x);S&&n.app.on(`second-instance`,(t,n)=>{e.queueSecondInstanceArgs(n)}),n.app.whenReady().then(async()=>{let{desktopSentry:r,sparkleManager:i}=e;if(!await m({appName:n.app.getName(),environment:{arch:process.arch,isPackaged:n.app.isPackaged,platform:process.platform}})){n.app.quit();return}await i.initialize();ruizhiStartBackgroundUpdateCheck();try{let{runMainAppStartup:e}=await Promise.resolve().then(()=>require(`./main-sqI8jfJr.js`));await e()}catch(e){for(let e of n.BrowserWindow.getAllWindows())e.isDestroyed()||e.destroy();t.Jr().error(`Desktop bootstrap failed to start the main app`,{safe:{phase:`bootstrap-import-main`}}),r.captureException(e,{tags:{phase:`bootstrap-import-main`}}),await y(e)}})}
 //# sourceMappingURL=bootstrap.js.map

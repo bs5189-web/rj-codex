@@ -9,11 +9,12 @@ const DEFAULT_FEATURES = {
   menu: true,
   pluginEntryUnlock: true,
   forcePluginInstall: true,
-  sessionDelete: true,
+  sessionDelete: false,
   markdownExport: true,
-  projectMove: true,
+  projectMove: false,
   timeline: true,
   threadScrollRestore: true,
+  threadSort: true,
   modelWhitelistUnlock: false,
   zedRemoteOpen: false,
   upstreamWorktreeCreate: false,
@@ -39,7 +40,9 @@ function createRuizhiEnhanceService(options = {}) {
       ...(isRecord(patch) ? patch : {}),
       features: {
         ...current.features,
-        ...(isRecord(patch?.features) ? patch.features : {})
+        ...(isRecord(patch?.features) ? patch.features : {}),
+        sessionDelete: false,
+        projectMove: false
       }
     };
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
@@ -60,15 +63,15 @@ function createRuizhiEnhanceService(options = {}) {
           appendDiagnostic(logPath, payload);
           return { status: "ok", message: "日志已记录" };
         case "/delete":
-          return withStorage(dbPath, backupDir, (storage) => storage.deleteThread(sessionFromPayload(payload)));
+          return { status: "disabled", message: "会话删除增强已停用" };
         case "/undo":
-          return withStorage(dbPath, backupDir, (storage) => storage.undo(String(payload?.undo_token || "")));
+          return { status: "disabled", message: "会话删除撤销增强已停用" };
         case "/export-markdown":
           return withStorage(dbPath, backupDir, (storage) => storage.exportMarkdown(sessionFromPayload(payload)));
         case "/archived-thread":
           return withStorage(dbPath, backupDir, (storage) => storage.findArchivedThread(String(payload?.title || "")));
         case "/move-thread-workspace":
-          return withStorage(dbPath, backupDir, (storage) => storage.moveThreadWorkspace(sessionFromPayload(payload), String(payload?.target_cwd || "")));
+          return { status: "disabled", message: "会话迁移增强已停用" };
         case "/thread-sort-key":
           return withStorage(dbPath, backupDir, (storage) => storage.threadSortKey(sessionFromPayload(payload)));
         case "/thread-sort-keys":
@@ -93,9 +96,12 @@ function normalizeConfig(config) {
   const pageEnhance = isRecord(config?.pageEnhance) ? config.pageEnhance : {};
   return {
     enabled: pageEnhance.enabled !== false,
+    appVersion: typeof pageEnhance.appVersion === "string" ? pageEnhance.appVersion.trim() : "",
     features: {
       ...DEFAULT_FEATURES,
-      ...(isRecord(pageEnhance.features) ? pageEnhance.features : {})
+      ...(isRecord(pageEnhance.features) ? pageEnhance.features : {}),
+      sessionDelete: false,
+      projectMove: false
     }
   };
 }
@@ -109,9 +115,12 @@ function readSettings(settingsPath, config) {
   }
   return {
     enabled: stored.enabled ?? config.enabled,
+    appVersion: typeof stored.appVersion === "string" && stored.appVersion.trim() ? stored.appVersion.trim() : config.appVersion,
     features: {
       ...config.features,
-      ...(isRecord(stored.features) ? stored.features : {})
+      ...(isRecord(stored.features) ? stored.features : {}),
+      sessionDelete: false,
+      projectMove: false
     }
   };
 }
@@ -157,6 +166,9 @@ class StorageAdapter {
     if (!this.hasCodexThreads()) return failed(session.session_id, "不支持当前本地存储结构");
     const thread = this.getThread(session.session_id);
     if (!thread) return failed(session.session_id, "未找到对应会话");
+    if (this.hasColumns("threads", ["archived", "archived_at"])) {
+      return this.archiveThread(session, thread);
+    }
 
     const tables = {
       threads: [thread],
@@ -216,6 +228,35 @@ class StorageAdapter {
     };
   }
 
+  archiveThread(session, thread) {
+    const token = this.writeBackup(session.session_id, { threads: [thread] });
+    const backupPath = this.backupPath(token);
+    const archivedAt = Date.now();
+    const tx = this.transaction();
+    try {
+      this.run("UPDATE threads SET archived = 1, archived_at = ? WHERE id = ?", [archivedAt, session.session_id]);
+      tx.commit();
+    } catch (error) {
+      tx.rollback();
+      return {
+        status: "failed",
+        session_id: session.session_id,
+        message: errorMessage(error),
+        undo_token: token,
+        backup_path: backupPath
+      };
+    }
+
+    return {
+      status: "archived",
+      session_id: session.session_id,
+      message: "已移到已删除对话",
+      undo_token: token,
+      backup_path: backupPath,
+      archived_at: archivedAt
+    };
+  }
+
   undo(token) {
     if (!token) return failed("", "缺少撤销 token");
     const backup = this.readBackup(token);
@@ -227,6 +268,7 @@ class StorageAdapter {
         if (table.startsWith("__") || !Array.isArray(rows)) continue;
         for (const row of rows) {
           if (table === "agent_job_items" && this.updateAgentJobItem(row)) continue;
+          if (table === "threads" && this.updateExistingRow(table, row)) continue;
           this.insertRow(table, row);
         }
       }
@@ -291,7 +333,6 @@ class StorageAdapter {
   moveThreadWorkspace(session, targetCwd) {
     const target = String(targetCwd || "").trim();
     if (!session.session_id) return failed("", "缺少会话 ID");
-    if (!target) return failed(session.session_id, "目标项目路径为空");
     if (!this.hasCodexThreads() || !this.hasColumns("threads", ["cwd", "rollout_path"])) {
       return failed(session.session_id, "不支持当前本地存储结构");
     }
@@ -302,7 +343,7 @@ class StorageAdapter {
     return {
       status: "moved",
       session_id: session.session_id,
-      message: "已移动对话",
+      message: target ? "已移动对话" : "已移动到普通对话",
       previous_cwd: String(thread.cwd || ""),
       target_cwd: target,
       rollout_updated: rolloutResult.updated,
@@ -419,6 +460,7 @@ class StorageAdapter {
         if (!key) continue;
         const where = key.columns.map((column) => `${quoteIdent(column)} = ?`).join(" AND ");
         if (this.get(`SELECT 1 AS ok FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`, key.values)) {
+          if (table === "threads" || table === "agent_job_items") continue;
           throw new Error(`restore conflict: ${table} row already exists`);
         }
       }
@@ -430,6 +472,23 @@ class StorageAdapter {
     const existing = this.get("SELECT * FROM agent_job_items WHERE id = ?", [row.id]);
     if (!existing) return false;
     this.run("UPDATE agent_job_items SET assigned_thread_id = ? WHERE id = ?", [row.assigned_thread_id ?? null, row.id]);
+    return true;
+  }
+
+  updateExistingRow(table, row) {
+    if (!isRecord(row) || !this.hasTable(table)) return false;
+    const key = restoreKey(table, row);
+    if (!key) return false;
+    const where = key.columns.map((column) => `${quoteIdent(column)} = ?`).join(" AND ");
+    const existing = this.get(`SELECT * FROM ${quoteIdent(table)} WHERE ${where} LIMIT 1`, key.values);
+    if (!existing) return false;
+    const columns = Object.keys(row);
+    if (columns.length === 0) return false;
+    const assignments = columns.map((column) => `${quoteIdent(column)} = ?`).join(", ");
+    this.run(
+      `UPDATE ${quoteIdent(table)} SET ${assignments} WHERE ${where}`,
+      [...columns.map((column) => row[column]), ...key.values]
+    );
     return true;
   }
 

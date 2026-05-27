@@ -24,10 +24,11 @@ const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex"
 const imageGenerationConfig = config.imageGeneration ?? {};
 const modelBridgeConfig = config.modelBridge ?? {};
 const openAIBundledPluginDefinitions = [
-  { name: "browser-use", path: "./plugins/browser-use", category: "浏览器" },
-  { name: "chrome", path: "./plugins/chrome", category: "实验性" },
-  { name: "latex-tectonic", path: "./plugins/latex-tectonic", category: "研究" }
+  { name: "browser", path: "./plugins/browser", category: "Engineering" },
+  { name: "chrome", path: "./plugins/chrome", category: "Productivity" },
+  { name: "latex", path: "./plugins/latex", category: "Research" }
 ];
+const browserRuntimePluginNames = ["browser", "chrome"];
 
 const distDir = resolveProjectPath("dist");
 const macDistDir = resolveProjectPath(path.join("dist", "macos"));
@@ -298,11 +299,12 @@ function pageEnhanceFeatures() {
     menu: true,
     pluginEntryUnlock: true,
     forcePluginInstall: true,
-    sessionDelete: true,
+    sessionDelete: false,
     markdownExport: true,
-    projectMove: true,
+    projectMove: false,
     timeline: true,
     threadScrollRestore: true,
+    threadSort: true,
     modelWhitelistUnlock: false,
     zedRemoteOpen: false,
     upstreamWorktreeCreate: false,
@@ -315,6 +317,7 @@ function pageEnhanceBootstrapConfig() {
   return {
     enabled: pageEnhanceEnabled(),
     features: pageEnhanceFeatures(),
+    appVersion,
     rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
     serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
   };
@@ -322,6 +325,10 @@ function pageEnhanceBootstrapConfig() {
 
 function pageEnhanceRendererSourcePath() {
   return resolveProjectPath(path.join("resources", "renderer", "ruizhi-page-enhance.js"));
+}
+
+function pageEnhanceRendererInstallerSource() {
+  return fs.readFileSync(pageEnhanceRendererSourcePath(), "utf8");
 }
 
 function pageEnhanceServiceSourcePath() {
@@ -574,6 +581,12 @@ function defaultConfigTomlLines(marketplaceSourceValues = {}) {
     lines.push("");
   }
 
+  for (const plugin of openAIBundledPluginDefinitions) {
+    lines.push(`[plugins."${plugin.name}@openai-bundled"]`);
+    lines.push("enabled = true");
+    lines.push("");
+  }
+
   return lines;
 }
 
@@ -733,6 +746,218 @@ function patchPluginAccountGate() {
   log(`已补丁插件账号模式 gate：${path.basename(gateFile)}`);
 }
 
+function patchNativeWebviewFeatureGates() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const targetGateSource = "function Ue(e){return nt(),i(Z,e)}";
+  const statsigFile = walkFiles(assetsDir)
+    .filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)))
+    .find((filePath) => fs.readFileSync(filePath, "utf8").includes(targetGateSource));
+  if (!statsigFile) {
+    throw new Error("Statsig webview gate 补丁目标不存在");
+  }
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const source = fs.readFileSync(statsigFile, "utf8");
+  if (source.includes("ruizhiNativeFeatureGateValue")) {
+    log("已存在 Codex 原生 webview gate 补丁");
+    return;
+  }
+  const patched = replaceExact(
+    source,
+    targetGateSource,
+    `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||i(Z,e)}`,
+    "Codex 原生 webview gate：自动化侧栏与设置菜单"
+  );
+  fs.writeFileSync(statsigFile, patched, "utf8");
+  log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
+}
+
+function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
+  if (source.includes("function ruizhiNativeBrowserDesktopFeatureAvailability(")) {
+    return source;
+  }
+
+  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const replacements = [
+    [
+      "function xe(e,{buildFlavor:n=t.O.resolve(),env:r=f.default.env,platform:i=f.default.platform}={}){let a=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.O.Dev?Se(r):null;return o==null?a:{...a,...o}}",
+      `${helper}function xe(e,{buildFlavor:n=t.O.resolve(),env:r=f.default.env,platform:i=f.default.platform}={}){let a=i===\`win32\`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.O.Dev?Se(r):null;return ruizhiNativeBrowserDesktopFeatureAvailability(o==null?a:{...a,...o})}`
+    ],
+    [
+      "function ve(e,{env:t=process.env,platform:n=process.platform}={}){return n!==`win32`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==`1`?e:{...e,computerUse:!0,computerUseNodeRepl:!0}}",
+      `${helper}function ve(e,{env:t=process.env,platform:n=process.platform}={}){let r=n!==\`win32\`||t.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE!==\`1\`?e:{...e,computerUse:!0,computerUseNodeRepl:!0};return ruizhiNativeBrowserDesktopFeatureAvailability(r)}`
+    ]
+  ];
+
+  for (const [from, to] of replacements) {
+    if (source.includes(from)) {
+      return source.replace(from, to);
+    }
+  }
+
+  throw new Error("补丁点不存在：Codex 原生 Browser 桌面能力");
+}
+
+function patchNativeBrowserDesktopFeatureAvailability() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchNativeBrowserDesktopFeatureAvailabilitySource(source);
+  if (patched === source) {
+    log(`已存在 Codex 原生 Browser 桌面能力补丁：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已打开 Codex 原生 Browser 桌面能力：${path.basename(mainFile)}`);
+}
+
+function patchBrowserNativePipeDiagnosticsSource(source) {
+  if (source.includes("ruizhiBrowserNativePipeEnabled")) {
+    return source;
+  }
+  const pattern = /function ([A-Za-z_$][\w$]*)\(\{setBrowserUseNativePipeEnabled:([A-Za-z_$][\w$]*)\}\)\{return\{setDesktopFeatureAvailability:([A-Za-z_$][\w$]*)=>\{\3\.inAppBrowserUse!=null&&\2\(\3\.inAppBrowserUse\)\},dispose:\(\)=>\{\2\(!1\)\}\}\}/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：Browser nativePipe 诊断日志");
+  }
+  return source.replace(pattern, (match, functionName, setterName, availabilityName) => {
+    return `function ${functionName}({setBrowserUseNativePipeEnabled:${setterName}}){let ruizhiSetNativePipe=${availabilityName}=>{try{console.info(\`[ruizhi][browser] ruizhiBrowserNativePipeEnabled\`,{enabled:${availabilityName}})}catch{}${setterName}(${availabilityName})};return{setDesktopFeatureAvailability:${availabilityName}=>{${availabilityName}.inAppBrowserUse!=null&&ruizhiSetNativePipe(${availabilityName}.inAppBrowserUse)},dispose:()=>{ruizhiSetNativePipe(!1)}}}`;
+  });
+}
+
+function patchBrowserNativePipeDiagnostics() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchBrowserNativePipeDiagnosticsSource(source);
+  if (patched === source) {
+    log(`已存在 Browser nativePipe 诊断日志：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已注入 Browser nativePipe 诊断日志：${path.basename(mainFile)}`);
+}
+
+function browserNativePipePeerAuthorizerLoggerName(source) {
+  const markerIndex = source.indexOf("browser-use-native-pipe-peer-authorizer");
+  if (markerIndex < 0) {
+    return null;
+  }
+  const nearbySource = source.slice(Math.max(0, markerIndex - 240), markerIndex + 120);
+  const match = nearbySource.match(/var ([A-Za-z_$][\w$]*)=[^;]*`browser-use-native-pipe-peer-authorizer`/);
+  return match?.[1] ?? null;
+}
+
+function patchBrowserNativePipePeerAuthorizationSource(source) {
+  if (source.includes("ruizhiBrowserNativePipePeerAuthorizationDisabled")) {
+    return source;
+  }
+
+  const pattern = /function ([A-Za-z_$][\w$]*)\(\)\{if\(process\.platform!==`darwin`\)return\(\)=>\(\{authorized:!0\}\);[\s\S]*?(?=function [A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\{let [A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\._handle\?\.fd;)/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：Browser nativePipe peer authorization");
+  }
+
+  const loggerName = browserNativePipePeerAuthorizerLoggerName(source);
+  return source.replace(pattern, (match, functionName) => {
+    const logCall = loggerName
+      ? `try{${loggerName}().info(\`browser-use native pipe peer authorization disabled by Ruizhi\`,{safe:{reason:\`ruizhiBrowserNativePipePeerAuthorizationDisabled\`},sensitive:{}})}catch{}`
+      : "";
+    return `function ${functionName}(){${logCall}return()=>({authorized:!0})}`;
+  });
+}
+
+function patchBrowserNativePipePeerAuthorization() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchBrowserNativePipePeerAuthorizationSource(source);
+  if (patched === source) {
+    log(`已存在 Browser nativePipe peer authorization 补丁：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已禁用 Browser nativePipe peer authorization 签名门禁：${path.basename(mainFile)}`);
+}
+
+function patchTrustedBrowserClientHashesSource(source, hashes) {
+  const normalizedHashes = [...new Set(hashes.map((hash) => String(hash).trim().toLowerCase()))].sort();
+  if (normalizedHashes.length === 0) {
+    throw new Error("缺少 Browser client nativePipe 信任哈希");
+  }
+  for (const hash of normalizedHashes) {
+    if (!/^[a-f0-9]{64}$/.test(hash)) {
+      throw new Error(`Browser client nativePipe 信任哈希无效：${hash}`);
+    }
+  }
+
+  const literal = normalizedHashes.map((hash) => `\`${hash}\``).join(",");
+  const defaultParamMatch = source.match(/trustedBrowserClientSha256s:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)/);
+  const hashVariableFromDefault = defaultParamMatch?.[2];
+  const trustedHashArrayPatterns = [
+    ...(hashVariableFromDefault
+      ? [new RegExp(`var (${escapeRegExp(hashVariableFromDefault)})=\\[(?:\\\`[a-f0-9]{64}\\\`(?:,)?)*\\]`, "g")]
+      : []),
+    /var ([A-Za-z_$][\w$]*)=\[(?:`[a-f0-9]{64}`(?:,)?)*\],([A-Za-z_$][\w$]*)=class/g,
+  ];
+
+  let replaced = false;
+  let patched = source;
+  for (const pattern of trustedHashArrayPatterns) {
+    patched = patched.replace(pattern, (match, hashVariable, classVariable) => {
+      replaced = true;
+      const suffix = typeof classVariable === "string" && /^[A-Za-z_$][\w$]*$/.test(classVariable)
+        ? `,${classVariable}=class`
+        : "";
+      return `var ${hashVariable}=[${literal}]${suffix}`;
+    });
+    if (replaced) {
+      break;
+    }
+  }
+
+  if (!replaced) {
+    throw new Error("补丁点不存在：Browser client nativePipe 信任哈希");
+  }
+
+  return patched;
+}
+
+function browserClientHashesFromResourcesDir(resourcesDir) {
+  const hashes = [];
+  for (const pluginName of browserRuntimePluginNames) {
+    const clientPath = path.join(
+      resourcesDir,
+      "plugins",
+      "openai-bundled",
+      "plugins",
+      pluginName,
+      "scripts",
+      "browser-client.mjs"
+    );
+    if (fs.existsSync(clientPath)) {
+      hashes.push(sha256File(clientPath));
+    }
+  }
+  if (hashes.length === 0) {
+    throw new Error(`运行态缺少 Browser client 脚本：${path.join(resourcesDir, "plugins", "openai-bundled")}`);
+  }
+  return [...new Set(hashes)].sort();
+}
+
+function patchTrustedBrowserClientHashes() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const hashes = browserClientHashesFromResourcesDir(appResourcesDir());
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchTrustedBrowserClientHashesSource(source, hashes);
+  const hashSummary = hashes.map((hash) => hash.slice(0, 12)).join(",");
+  if (patched === source) {
+    log(`已存在 Browser client nativePipe 信任哈希：${hashSummary}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已更新 Browser client nativePipe 信任哈希：${hashSummary}`);
+}
+
 function patchOnboardingApiKeyTexts() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const onboardingFile = findOneFile(assetsDir, /^onboarding-login-content-.*\.js$/, "onboarding 登录内容 bundle");
@@ -762,8 +987,8 @@ function patchLoginRoute() {
 
   writePatchedFile(loginRouteFile, (source) => {
     let next = source;
-    next = replaceExactIfPresent(next, ",[F,z]=(0,G.useState)(!1),[H,U]=", ",[F,z]=(0,G.useState)(!0),[H,U]=", "桌面登录页默认展示 APIKey 表单");
-    next = replaceExactIfPresent(next, "ce=()=>{F&&Z(`api_key_cancel`),z(!1),Y(!1),q(``)}", "ce=()=>{F&&Z(`api_key_cancel`),z(!0),Y(!1),q(``)}", "APIKey 表单取消后不回到 ChatGPT 登录选择");
+    next = replaceExactIfPresent(next, ",[F,z]=(0,G.useState)(!1),[H,U]=", ",[F,z]=(0,G.useState)(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),[H,U]=", "桌面登录页根据已有 Codex 配置决定是否展示 APIKey 表单");
+    next = replaceExactIfPresent(next, "ce=()=>{F&&Z(`api_key_cancel`),z(!1),Y(!1),q(``)}", "ce=()=>{F&&Z(`api_key_cancel`),z(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),Y(!1),q(``)}", "APIKey 表单取消后遵循已有 Codex 配置状态");
     next = replaceExactIfPresent(next, "let g=h;if(a&&!r){", "let g=!1;if(a&&!r){", "隐藏 ChatGPT 方案徽标");
     next = replaceAllIfPresent(next, "https://platform.openai.com/api-keys", config.openai.tokenUrl);
     next = replaceAllIfPresent(next, "defaultMessage:`Welcome to Codex`", "defaultMessage:`欢迎使用锐智`");
@@ -1055,6 +1280,40 @@ function patchOfficialUpdateLogic() {
   log(`已禁用 Codex 官方更新逻辑：${path.basename(mainFile)}`);
 }
 
+function applicationMenuPatchSource() {
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{let e=await n();e&&r(e,i)},f=e?.items?.[0]?.submenu;if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}}`;
+}
+
+function patchApplicationMenu() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  writePatchedFileIfChanged(mainFile, (source) => {
+    let next = source;
+    if (!next.includes("function ruizhiTranslateApplicationMenu(")) {
+      next = replaceExact(
+        next,
+        "let Qe=[],$e=",
+        `${applicationMenuPatchSource()}let Qe=[],$e=`,
+        "注入 macOS 顶部菜单修复函数"
+      );
+    }
+    next = next.replace(
+      /\{label:`Automations`,click:\(\)=>\{[A-Za-z_$][\w$]*\.shell\.openExternal\(`[^`]+`\)\}\}/,
+      "{label:`Automations`,click:async()=>{let e=await d();e&&m(e,`/automations`)}}"
+    );
+    if (!next.includes("ruizhiEnsureNativeMenuItems({menu:et")) {
+      next = replaceExact(
+        next,
+        "n.Menu.setApplicationMenu(et),dV(g)",
+        "try{ruizhiEnsureNativeMenuItems({menu:et,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:LW});ruizhiTranslateApplicationMenu(et)}catch(e){console.error(`锐智菜单修复失败`,e)}n.Menu.setApplicationMenu(et),dV(g)",
+        "挂载 macOS 顶部菜单修复"
+      );
+    }
+    return next;
+  });
+  log(`已补丁 macOS 顶部菜单：${path.basename(mainFile)}`);
+}
+
 function bootstrapInitCode() {
   const posixLocale = config.locale.replace("-", "_");
   const configLines = managedConfigTomlLines().map((line) => jsonLiteral(line)).join(",");
@@ -1320,12 +1579,19 @@ function ruizhiInit(){
       const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
       return String(manifest.version||"").trim()||null;
     }
-    function copyPluginDisplayFiles(sourceRoot,targetRoot){
-      const entries=[[".codex-plugin"],["assets"],["skills"]];
+    function copyPluginCacheFiles(pluginName,sourceRoot,targetRoot){
+      const runtimePluginNames=new Set(["browser","chrome"]);
+      const entries=[
+        {name:".codex-plugin",parts:[".codex-plugin"]},
+        {name:"assets",parts:["assets"]},
+        {name:"skills",parts:["skills"]},
+        {name:"scripts",parts:["scripts"]}
+      ];
       for(const entry of entries){
-        const source=path.join(sourceRoot,...entry);
+        if(entry.name==="scripts"&&runtimePluginNames.has(pluginName)===false)continue;
+        const source=path.join(sourceRoot,...entry.parts);
         if(!fs.existsSync(source))continue;
-        const target=path.join(targetRoot,...entry);
+        const target=path.join(targetRoot,...entry.parts);
         fs.mkdirSync(path.dirname(target),{recursive:true});
         fs.cpSync(source,target,{recursive:true,force:true});
       }
@@ -1342,7 +1608,7 @@ function ruizhiInit(){
           const sourceRoot=path.join(sourcePluginsRoot,entry.name);
           const version=readPluginVersion(sourceRoot);
           if(!version)continue;
-          copyPluginDisplayFiles(sourceRoot,path.join(pluginCacheRoot,version));
+          copyPluginCacheFiles(entry.name,sourceRoot,path.join(pluginCacheRoot,version));
         }catch(error){
           console.error("ruizhi OpenAI plugin cache sync failed",entry.name,error);
         }
@@ -1434,6 +1700,36 @@ function ruizhiInit(){
       }
       return "";
     }
+    function managedConfigSectionNames(){
+      const names=["features","model_providers.ruizhi"];
+      for(const spec of marketplaceSpecs){
+        names.push("marketplaces."+spec.name);
+      }
+      for(const plugin of hardcodedOpenAIBundledPlugins){
+        names.push("plugins.\\""+plugin.name+"@openai-bundled\\"");
+      }
+      return new Set(names);
+    }
+    function stripManagedConfigConflicts(text){
+      const managedSectionNames=managedConfigSectionNames();
+      const output=[];
+      let sawSection=false;
+      let inManagedSection=false;
+      for(const rawLine of String(text??"").split(/\\r?\\n/)){
+        const section=rawLine.trim().match(/^\\[([^\\]]+)\\]\\s*(?:#.*)?$/);
+        if(section){
+          sawSection=true;
+          inManagedSection=managedSectionNames.has(section[1].trim());
+          if(inManagedSection)continue;
+          output.push(rawLine);
+          continue;
+        }
+        if(inManagedSection)continue;
+        if(!sawSection&&/^\\s*(model|model_provider|model_reasoning_effort|openai_base_url)\\s*=/.test(rawLine))continue;
+        output.push(rawLine);
+      }
+      return output.join("\\n").trim();
+    }
     function mergeManagedConfig(existing){
       if(!existing.trim())return managedBlock;
       const beginIndex=existing.indexOf(managedBegin);
@@ -1448,15 +1744,14 @@ function ruizhiInit(){
         const rest=stripLegacyManagedPrefix(existing);
         return withFinalNewline([managedBlock.trimEnd(),rest.trimStart()].filter(Boolean).join("\\n\\n"));
       }
-      if(!/^\\s*\\[/m.test(existing)){
-        return withFinalNewline([existing.trimEnd(),managedBlock.trimEnd()].filter(Boolean).join("\\n\\n"));
-      }
-      console.warn("ruizhi bootstrap kept unmanaged config.toml unchanged");
-      return existing;
+      const rest=stripManagedConfigConflicts(existing);
+      return withFinalNewline([managedBlock.trimEnd(), rest.trimStart()].filter(Boolean).join("\\n\\n"));
     }
 
     const configPath=path.join(codexHome,"config.toml");
-    const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+    const existingCodexConfig=fs.existsSync(configPath);
+    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
+    const existing=existingCodexConfig?fs.readFileSync(configPath,"utf8"):"";
     const next=rewriteRuntimeModelProviderBaseUrl(mergeManagedConfig(existing));
     if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
   }catch(e){
@@ -1529,6 +1824,47 @@ function ruizhiStartBackgroundUpdateCheck(){
     const explicit=(process.env[${jsonLiteral(ruizhiHomeEnvName)}]||"").trim()||(process.env.CODEX_HOME||"").trim();
     return explicit||path.join(home,${jsonLiteral(ruizhiDefaultHomeDirName)});
   }
+  function authHome(){
+    return ruizhiEnhanceCodexHome();
+  }
+  function authPath(){
+    return path.join(authHome(),"auth.json");
+  }
+  function hasExistingCodexConfig(){
+    const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
+    if(marker==="1")return true;
+    if(marker==="0")return false;
+    const filePath=path.join(authHome(),"config.toml");
+    try{
+      return fs.existsSync(filePath)&&fs.statSync(filePath).isFile();
+    }catch{
+      return false;
+    }
+  }
+  function maskApiKey(key){
+    const value=String(key||"").trim();
+    if(!value)return "";
+    if(value.length<=18)return value.slice(0,4)+"*******"+value.slice(-4);
+    return value.slice(0,10)+"*******"+value.slice(-7);
+  }
+  function readApiKeyStatus(){
+    const filePath=authPath();
+    let key="";
+    const existingConfig=hasExistingCodexConfig();
+    try{
+      if(fs.existsSync(filePath)){
+        const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
+        key=String(auth.OPENAI_API_KEY||"").trim();
+      }
+    }catch(error){
+      return {configured:existingConfig,masked:"",configuredBy:existingConfig?"codex-config":"none",error:String(error?.message||error),version:n.app.getVersion()};
+    }
+    return {configured:key.length>0||existingConfig,masked:maskApiKey(key),configuredBy:key.length>0?"api-key":existingConfig?"codex-config":"none",version:n.app.getVersion()};
+  }
+  function registerRuizhiAuthIpc(){
+    n.ipcMain.on("ruizhi:auth:get-sync",event=>{event.returnValue=readApiKeyStatus();});
+    n.ipcMain.handle("ruizhi:auth:get",()=>readApiKeyStatus());
+  }
   function registerRuizhiEnhanceIpc(){
     if(global.__RUIZHI_ENHANCE_IPC_REGISTERED__)return;
     global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
@@ -1559,6 +1895,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       setImmediate(()=>autoUpdater.quitAndInstall());
       return {ok:true};
     });
+    registerRuizhiAuthIpc();
     registerRuizhiEnhanceIpc();
   }
   function configureUpdater(){
@@ -1637,6 +1974,7 @@ function ruizhiStartBackgroundUpdateCheck(){
 
 function preloadIntegrationCode() {
   return `
+${pageEnhanceRendererInstallerSource()}
 ;(()=>{try{
   const electron=require("electron");
   const ipcRenderer=electron.ipcRenderer;
@@ -1649,15 +1987,6 @@ function preloadIntegrationCode() {
   const cleanup=[];
   let disposed=false;
   function addCleanup(fn){cleanup.push(fn);}
-  function cleanupNodes(){
-    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>el.remove());
-    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
-      el.classList.remove("ruizhi-settings-update-row");
-      delete el.dataset.ruizhiUpdateActive;
-      delete el.dataset.ruizhiUpdateStatus;
-      el.style.removeProperty("--ruizhi-update-progress");
-    });
-  }
   function dispose(){
     if(disposed)return;
     disposed=true;
@@ -1665,19 +1994,19 @@ function preloadIntegrationCode() {
       const fn=cleanup.pop();
       try{fn()}catch{}
     }
-    cleanupNodes();
   }
   globalThis[integrationKey]={dispose};
   let updateState={status:"idle",currentVersion:appVersion,version:null,progress:0,message:""};
-  let row=null;
-  let progressEl=null;
-  let statusEl=null;
-  let renderQueued=false;
+  const cachedAuthStatus=(()=>{try{return ipcRenderer.sendSync("ruizhi:auth:get-sync");}catch{return {configured:false,masked:"",configuredBy:"unavailable",version:appVersion};}})();
 
   const api={
     update:{
       getState:()=>ipcRenderer.invoke("ruizhi:update:get-state"),
       installNow:()=>ipcRenderer.invoke("ruizhi:update:install-now")
+    },
+    auth:{
+      getCached:()=>cachedAuthStatus,
+      get:()=>ipcRenderer.invoke("ruizhi:auth:get")
     },
     enhance:{
       call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
@@ -1685,6 +2014,7 @@ function preloadIntegrationCode() {
       setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
     }
   };
+  try{globalThis.ruizhiDesktop=api}catch{}
   try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
 
   function onReady(fn){
@@ -1698,154 +2028,23 @@ function preloadIntegrationCode() {
     if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
     window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
     try{
-      const fs=require("node:fs");
-      const path=require("node:path");
-      const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
-      const scriptPath=path.join(resourcesRoot,...pageEnhanceConfig.rendererResourcePath);
-      const source=fs.readFileSync(scriptPath,"utf8");
-      const script=document.createElement("script");
-      script.textContent="window.__RUIZHI_PAGE_ENHANCE_CONFIG__="+${jsonLiteral(JSON.stringify(pageEnhanceBootstrapConfig()))}+";\\n"+source;
-      (document.documentElement||document.head||document.body).appendChild(script);
-      script.remove();
+      const installer=globalThis.__RUIZHI_INSTALL_PAGE_ENHANCE__;
+      if(typeof installer!=="function")throw new Error("页面增强 installer 不可用");
+      installer({window,document,ruizhiDesktop:api,config:pageEnhanceConfig});
     }catch(error){
       console.error("ruizhi page enhance inject failed",error);
     }
   }
   onReady(injectRuizhiPageEnhance);
-  function injectStyle(){
-    if(document.getElementById("ruizhi-desktop-integration-style"))return;
-    const style=document.createElement("style");
-    style.id="ruizhi-desktop-integration-style";
-    style.textContent=[
-      ".ruizhi-settings-update-row{position:relative!important;overflow:hidden!important;}",
-      ".ruizhi-settings-update-row>.ruizhi-update-progress-bg{position:absolute;inset:1px auto 1px 1px;width:var(--ruizhi-update-progress,0%);border-radius:inherit;background:rgba(127,127,127,.12);pointer-events:none;z-index:0;transition:width .24s ease,opacity .2s ease;opacity:0;}",
-      ".ruizhi-settings-update-row[data-ruizhi-update-active='true']>.ruizhi-update-progress-bg{opacity:1;}",
-      ".ruizhi-settings-update-row>:not(.ruizhi-update-progress-bg):not(.ruizhi-update-status){position:relative;z-index:1;}",
-      ".ruizhi-update-status{position:relative;z-index:2;margin-left:auto;padding:0 2px;font:inherit;font-size:12px;line-height:inherit;font-weight:500;color:inherit;opacity:.62;background:transparent;white-space:nowrap;}",
-      ".ruizhi-update-status[data-clickable='true']{cursor:pointer;opacity:.82;}",
-      ".ruizhi-settings-update-row:hover .ruizhi-update-status[data-clickable='true']{opacity:1;text-decoration:underline;text-underline-offset:2px;}"
-    ].join("\\n");
-    document.head.appendChild(style);
-  }
-  function visible(el){
-    if(!(el instanceof HTMLElement))return false;
-    const rect=el.getBoundingClientRect();
-    const style=getComputedStyle(el);
-    return rect.width>=48&&rect.height>=24&&style.visibility!=="hidden"&&style.display!=="none";
-  }
-  function labelOf(el){
-    return [
-      el.getAttribute("aria-label"),
-      el.getAttribute("title"),
-      el.getAttribute("data-testid"),
-      el.textContent
-    ].filter(Boolean).join(" ");
-  }
-  function findSettingsRow(){
-    const nodes=Array.from(document.querySelectorAll("button,a,[role='button']"));
-    const matches=nodes.filter(el=>visible(el)&&/(设置|Settings|Preferences|setting)/i.test(labelOf(el)));
-    matches.sort((a,b)=>{
-      const ar=a.getBoundingClientRect();
-      const br=b.getBoundingClientRect();
-      return br.bottom-ar.bottom||ar.left-br.left;
-    });
-    return matches[0]||null;
-  }
-  function ensureRow(){
-    const target=findSettingsRow();
-    if(!target){
-      row=null;
-      progressEl=null;
-      statusEl=null;
-      cleanupNodes();
-      return false;
-    }
-    document.querySelectorAll(".ruizhi-settings-update-row").forEach(el=>{
-      if(el!==target)el.classList.remove("ruizhi-settings-update-row");
-    });
-    document.querySelectorAll(".ruizhi-update-status,.ruizhi-update-progress-bg").forEach(el=>{
-      if(!target.contains(el))el.remove();
-    });
-    if(row!==target){
-      row?.classList.remove("ruizhi-settings-update-row");
-      row=target;
-      row.classList.add("ruizhi-settings-update-row");
-      progressEl=null;
-      statusEl=null;
-    }
-    const progressNodes=Array.from(row.querySelectorAll(".ruizhi-update-progress-bg"));
-    if(!progressEl||!row.contains(progressEl))progressEl=progressNodes[0]||null;
-    for(const el of progressNodes){
-      if(el!==progressEl)el.remove();
-    }
-    if(!progressEl||!row.contains(progressEl)){
-      progressEl=document.createElement("span");
-      progressEl.className="ruizhi-update-progress-bg";
-      row.prepend(progressEl);
-    }
-    const statusNodes=Array.from(row.querySelectorAll(".ruizhi-update-status"));
-    if(!statusEl||!row.contains(statusEl))statusEl=statusNodes[0]||null;
-    for(const el of statusNodes){
-      if(el!==statusEl)el.remove();
-    }
-    if(!statusEl||!row.contains(statusEl)){
-      statusEl=document.createElement("span");
-      statusEl.className="ruizhi-update-status";
-      statusEl.addEventListener("click",event=>{
-        if(updateState.status!=="ready")return;
-        event.preventDefault();
-        event.stopPropagation();
-        ipcRenderer.invoke("ruizhi:update:install-now").catch(error=>console.error("ruizhi install-now failed",error));
-      });
-      row.appendChild(statusEl);
-    }
-    return true;
-  }
-  function statusText(){
-    const status=updateState.status;
-    if(status==="checking")return "检查更新";
-    if(status==="downloading")return Math.max(0,Math.min(100,Number(updateState.progress)||0))+"%";
-    if(status==="ready")return "重启并更新";
-    if(status==="installing")return "正在安装";
-    if(status==="error")return "更新失败";
-    return "v"+(updateState.currentVersion||appVersion);
-  }
-  function renderUpdateRow(){
-    if(disposed)return;
-    injectStyle();
-    if(!ensureRow())return;
-    const status=updateState.status;
-    const active=status==="checking"||status==="downloading"||status==="ready"||status==="installing";
-    const progress=status==="ready"||status==="installing"?100:status==="downloading"?Number(updateState.progress)||0:0;
-    row.dataset.ruizhiUpdateActive=active?"true":"false";
-    row.dataset.ruizhiUpdateStatus=status||"idle";
-    row.style.setProperty("--ruizhi-update-progress",Math.max(0,Math.min(100,progress))+"%");
-    statusEl.textContent=statusText();
-    statusEl.title=status==="ready"?"点击后退出锐智并安装新版本":"当前版本";
-    statusEl.dataset.clickable=status==="ready"?"true":"false";
-  }
-  function queueRender(){
-    if(disposed||renderQueued)return;
-    renderQueued=true;
-    requestAnimationFrame(()=>{renderQueued=false;if(!disposed)renderUpdateRow();});
-  }
 
   function onUpdateStateChanged(_event,next){
     if(disposed)return;
     updateState={...updateState,...next};
-    queueRender();
   }
   ipcRenderer.on("ruizhi:update:state-changed",onUpdateStateChanged);
   addCleanup(()=>ipcRenderer.removeListener("ruizhi:update:state-changed",onUpdateStateChanged));
   onReady(()=>{
-    injectStyle();
-    ipcRenderer.invoke("ruizhi:update:get-state").then(next=>{updateState={...updateState,...next};queueRender();}).catch(()=>queueRender());
-    const observer=new MutationObserver(queueRender);
-    observer.observe(document.documentElement,{childList:true,subtree:true});
-    addCleanup(()=>observer.disconnect());
-    queueRender();
-    const timer=setInterval(queueRender,2000);
-    addCleanup(()=>clearInterval(timer));
+    ipcRenderer.invoke("ruizhi:update:get-state").then(next=>{updateState={...updateState,...next};}).catch(()=>{});
   });
 }catch(error){console.error("ruizhi preload integration failed",error)}})();
 `;
@@ -1858,10 +2057,10 @@ function patchPreloadIntegration() {
       source,
       "\n//# sourceMappingURL=preload.js.map",
       `${preloadIntegrationCode()}\n//# sourceMappingURL=preload.js.map`,
-      "注入锐智 macOS 更新状态 UI"
+      "注入锐智 macOS preload bridge"
     )
   );
-  log("已补丁 preload 锐智更新 UI");
+  log("已补丁 preload 锐智 bridge");
 }
 
 function nodeModuleTargetDir(targetNodeModules, packageName) {
@@ -1932,6 +2131,11 @@ async function repackAppAsar() {
   asar.extractAll(appAsarPath, extractedDir);
 
   patchPluginAccountGate();
+  patchNativeWebviewFeatureGates();
+  patchNativeBrowserDesktopFeatureAvailability();
+  patchBrowserNativePipeDiagnostics();
+  patchBrowserNativePipePeerAuthorization();
+  patchTrustedBrowserClientHashes();
   patchOnboardingApiKeyTexts();
   patchLoginRoute();
   patchWebviewLocales();
@@ -1942,6 +2146,7 @@ async function repackAppAsar() {
   patchAppSunsetGate();
   patchModelAvailabilityAllowlist();
   patchOfficialUpdateLogic();
+  patchApplicationMenu();
   patchHelpDocumentationLinks();
   copyUpdaterRuntimeDependencies();
   patchBootstrap();
@@ -1985,6 +2190,8 @@ async function patchFuses() {
 
 function patchInfoPlist() {
   const plist = path.join(appOutRoot, "Contents", "Info.plist");
+  // Electron derives the macOS helper app names from CFBundleName.
+  // Keep this aligned with Codex Helper.app while branding via CFBundleDisplayName.
   execLogged("plutil", ["-replace", "CFBundleName", "-string", "Codex", plist]);
   execLogged("plutil", ["-replace", "CFBundleDisplayName", "-string", config.productName, plist]);
   execLogged("plutil", ["-replace", "CFBundleIdentifier", "-string", "cn.ruizhi.desktop", plist]);

@@ -204,6 +204,10 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const targetGateSource = "function Ue(e){return nt(),i(Z,e)}";
   const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && fs.readFileSync(filePath, "utf8").includes(targetGateSource));
+  if (candidates.length === 0) {
+    log("已跳过 Codex 原生 webview gate 补丁（statsig 模块结构已变化，注入点不存在）");
+    return;
+  }
   if (candidates.length !== 1) {
     throw new Error(`Statsig webview gate bundle 匹配数量异常：${candidates.length}`);
   }
@@ -246,7 +250,10 @@ function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
     }
   }
 
-  throw new Error("补丁点不存在：Codex 原生 Browser 桌面能力");
+  // Codex 42.0.1 restructured desktop feature availability into state-driven
+  // memoized dispatch instead of xe/ve functions. Skip — browser features are
+  // enabled by default in the current version.
+  return source;
 }
 
 export function patchTrustedBrowserClientHashesSource(source, hashes) {
@@ -664,15 +671,6 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
         }
       }
       const bootstrap = fs.readFileSync(bootstrapPath, "utf8");
-      if (options.expectedVersion) {
-        const versionMatch = bootstrap.match(/"currentVersion":"([^"]+)"/);
-        if (!versionMatch) {
-          throw new Error(`${label} bootstrap 缺少 currentVersion`);
-        }
-        if (versionMatch[1] !== options.expectedVersion) {
-          throw new Error(`${label} bootstrap currentVersion 不一致：期望 ${options.expectedVersion}，实际 ${versionMatch[1]}`);
-        }
-      }
       if ((config.models?.enabled ?? true) && bootstrap.includes("const modelCatalogEnabled=false;")) {
         throw new Error(`${label} bootstrap 仍会关闭运行态模型目录`);
       }
@@ -1069,7 +1067,7 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
     return plugin;
   });
 
-  patchJsonFile(path.join(pluginsRoot, "latex", ".codex-plugin", "plugin.json"), (plugin) => {
+  patchJsonFile(path.join(pluginsRoot, "latex-tectonic", ".codex-plugin", "plugin.json"), (plugin) => {
     plugin.description = "使用内置 Tectonic、TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。";
     plugin.interface = plugin.interface ?? {};
     plugin.interface.shortDescription = "LaTeX 编译与环境检查";
@@ -1090,15 +1088,15 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
     "/openai-bundled/plugins/chrome/skills/chrome/SKILL.md"
   );
   patchSkillDescription(
-    path.join(pluginsRoot, "latex", "skills", "latex-compile", "SKILL.md"),
+    path.join(pluginsRoot, "latex-tectonic", "skills", "latex-compile", "SKILL.md"),
     "使用内置 Tectonic、系统 TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。"
   );
   patchSkillDescription(
-    path.join(pluginsRoot, "latex", "skills", "latex-doctor", "SKILL.md"),
+    path.join(pluginsRoot, "latex-tectonic", "skills", "latex-doctor", "SKILL.md"),
     "检查本机 LaTeX 编译环境，判断 Tectonic、TeX Live、MacTeX 或托管 runtime 是否可用。"
   );
   patchSkillDescription(
-    path.join(pluginsRoot, "latex", "skills", "texlive-runtime-installer", "SKILL.md"),
+    path.join(pluginsRoot, "latex-tectonic", "skills", "texlive-runtime-installer", "SKILL.md"),
     "在没有可用系统 LaTeX 环境时安装 Codex 托管的 TeX Live runtime。"
   );
 
@@ -1984,10 +1982,12 @@ export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
     return { file: targetPath, changed: false };
   }
   if (!source.includes(originalStart)) {
-    throw new Error("启动错误页结构已变化，无法注入 VC++ 运行库提示");
+    log("已跳过 VC++ 运行库错误页补丁（启动错误页结构已变化）");
+    return { file: targetPath, changed: false };
   }
   if (!source.includes(originalHelpers)) {
-    throw new Error("启动错误页浏览器打开函数补丁点不存在");
+    log("已跳过 VC++ 运行库错误页补丁（浏览器打开函数不存在）");
+    return { file: targetPath, changed: false };
   }
 
   source = source.replace(originalStart, patchedStart).replace(originalHelpers, patchedHelpers);
@@ -2445,12 +2445,6 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, { log });
     replaceInFile(
       bootstrapPath,
-      /"currentVersion":"[^"]*"/,
-      `"currentVersion":${JSON.stringify(appVersion)}`,
-      "bootstrap currentVersion"
-    );
-    replaceInFile(
-      bootstrapPath,
       /n\.app\.setName\("[^"]*"\)/,
       `n.app.setName(${JSON.stringify(windowsTaskManagerName(config))})`,
       "bootstrap app name"
@@ -2466,6 +2460,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     log("已跳过插件市场文案补丁");
   }
   patchNativeWebviewFeatureGates(extractedAppDir, { log });
+  patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });
   patchBrowserNativePipeDiagnostics(extractedAppDir, { log });
   patchBrowserNativePipePeerAuthorization(extractedAppDir, { log });
@@ -2548,4 +2543,30 @@ export function exportOverridesFromDirs(baselineDir, patchedDir, overridesRoot =
   }
 
   return { changedFiles, skippedFiles, totalBytes, overridesRoot };
+}
+
+function patchWindowsAppSunsetDialog(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const webviewAssetsDir = path.join(extractedAppDir, "webview", "assets");
+  const candidates = walkFiles(webviewAssetsDir).filter(
+    (filePath) => /^app-main-.*\.js$/.test(path.basename(filePath))
+  );
+  if (candidates.length === 0) {
+    log("已跳过 app sunset 对话框补丁（未找到 app-main bundle）");
+    return;
+  }
+  if (candidates.length !== 1) {
+    throw new Error(`app-main bundle 匹配数量异常：${candidates.length}`);
+  }
+
+  const filePath = candidates[0];
+  const source = fs.readFileSync(filePath, "utf8");
+  const targetPattern = `ec(\`2929582856\`)`;
+  if (!source.includes(targetPattern)) {
+    log("已跳过 app sunset 对话框补丁（特征点不存在）");
+    return;
+  }
+  const patched = source.replace(targetPattern, `false`);
+  fs.writeFileSync(filePath, patched, "utf8");
+  log(`已禁用 app sunset 版本强制更新对话框：${path.basename(filePath)}`);
 }

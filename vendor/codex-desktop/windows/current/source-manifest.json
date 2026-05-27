@@ -1,7 +1,7 @@
 {
   "source": "OpenAI Codex Desktop",
   "packageVersion": "42.0.1",
-  "importedAt": "2026-05-26T09:39:16.104Z",
+  "importedAt": "2026-05-27T02:20:46.049Z",
   "sourceAppRoot": "C:\\Users\\ruijie\\AppData\\Local\\Codex",
   "targetAppRoot": "vendor/codex-desktop/windows/current/app",
   "files": {

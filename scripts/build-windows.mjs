@@ -2539,13 +2539,6 @@ function copyRuntimeNodePackage(packageName, targetNodeModules, seen = new Set()
   }
 }
 
-function copyUpdaterRuntimeDependencies() {
-  const targetNodeModules = path.join(extractedDir, "node_modules");
-  fs.mkdirSync(targetNodeModules, { recursive: true });
-  copyRuntimeNodePackage("electron-updater", targetNodeModules);
-  log("已内置 electron-updater 运行时依赖");
-}
-
 function patchBootstrap() {
   const bootstrapPath = path.join(extractedDir, ".vite", "build", "bootstrap.js");
 
@@ -2554,14 +2547,14 @@ function patchBootstrap() {
     next = replaceRegex(
       next,
       /var v=\{"install-update":`Install Update`,"check-for-updates":`Check for Updates`,quit:`Quit`\};async function y\(e\)\{[\s\S]*?\}\}var b=/,
-      `${bootstrapInitCode()}${bootstrapForceUpdateCode()}var v={quit:\`Quit\`};async function y(e){await n.dialog.showMessageBox({type:\`error\`,buttons:[v.quit],defaultId:0,cancelId:0,message:\`${'${n.app.getName()}'} failed to start.\`,detail:e instanceof Error?e.message:\`The main desktop app failed during startup.\`,noLink:!0});n.app.quit();return}var b=`,
+      `${bootstrapInitCode()}var v={quit:\`Quit\`};async function y(e){await n.dialog.showMessageBox({type:\`error\`,buttons:[v.quit],defaultId:0,cancelId:0,message:\`${'${n.app.getName()}'} failed to start.\`,detail:e instanceof Error?e.message:\`The main desktop app failed during startup.\`,noLink:!0});n.app.quit();return}var b=`,
       "移除 Codex 官方更新失败入口并注入锐智启动逻辑"
     );
     next = replaceExact(
       next,
       "await i.initialize();try{",
-      "ruizhiStartBackgroundUpdateCheck();try{",
-      "禁用 Codex 官方 updater 初始化，改为锐智后台无感更新"
+      "await i.initialize();try{",
+      "禁用 Codex 官方 updater 初始化"
     );
     next = replaceRegex(
       next,
@@ -2599,7 +2592,6 @@ function applyLegacyAsarPatches() {
   patchOfficialUpdateLogic();
   patchOnboardingWindowMode();
   patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
-  copyUpdaterRuntimeDependencies();
   patchBootstrap();
   patchPreloadIntegration();
 }
@@ -2621,7 +2613,6 @@ async function repackAppAsar() {
     applyWindowsAsarOverrides(extractedDir, { log });
     refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log, resourcesDir });
     patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
-    copyUpdaterRuntimeDependencies();
   }
 
   fs.rmSync(patchedAsarPath, { force: true });
@@ -2872,13 +2863,6 @@ function copyRuntimeOverrides() {
 }
 
 function writeAppUpdateConfig() {
-  const publishUrl = updatePublishUrl();
-  if (!publishUrl) {
-    return;
-  }
-  const appUpdatePath = path.join(appOutRoot, "resources", "app-update.yml");
-  fs.writeFileSync(appUpdatePath, `provider: generic\nurl: ${JSON.stringify(publishUrl)}\nupdaterCacheDirName: ruizhi-desktop-updater\nuseMultipleRangeRequest: false\n`, "utf8");
-  log(`已写入 electron-updater 配置：${appUpdatePath}`);
 }
 
 function renameElectronExe() {
@@ -3161,8 +3145,7 @@ function updateArtifactName() {
 }
 
 function updatePublishUrl() {
-  const url = process.env.RUIZHI_UPDATE_DOWNLOAD_BASE_URL ?? config.updates?.downloadBaseUrl ?? "";
-  return url ? (url.endsWith("/") ? url : `${url}/`) : "";
+  return "";
 }
 
 function builderArtifactName() {
@@ -3283,7 +3266,6 @@ function electronBuilderConfig() {
 function createInstallerExe() {
   cleanLegacyWindowsArtifacts();
   fs.mkdirSync(installerOutDir, { recursive: true });
-  preserveExistingWindowsLatestYml();
   removeLegacyArtifact(path.join(installerOutDir, updateArtifactName()));
   removeLegacyArtifact(path.join(installerOutDir, `${updateArtifactName()}.blockmap`));
   cleanDir(installerInputRoot);
@@ -3318,7 +3300,6 @@ function createInstallerExe() {
 
   fs.rmSync(path.join(installerOutDir, "builder-debug.yml"), { force: true });
   log(`NSIS 安装包已输出：${versionedInstallerPath}`);
-  writeVersionedWindowsLatestYml();
 }
 
 async function main() {
@@ -3335,7 +3316,6 @@ async function main() {
 
   buildPatchedCodexCli();
   copyRuntimeOverrides();
-  writeAppUpdateConfig();
   copyPluginMarketplaces();
   patchRuntimeResourceText();
   await repackAppAsar();

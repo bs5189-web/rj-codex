@@ -14,13 +14,6 @@ function read(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
 }
 
-function readWindowsMainBundle() {
-  const buildDir = path.join(projectRoot, "overrides", "windows-app", "asar", ".vite", "build");
-  const mainBundle = fs.readdirSync(buildDir).find((name) => /^main-.*\.js$/.test(name));
-  assert.ok(mainBundle, "Windows override main bundle should exist");
-  return fs.readFileSync(path.join(buildDir, mainBundle), "utf8");
-}
-
 test("renderer wires thread sorting and robust DOM adapters", () => {
   const source = read("resources/renderer/ruizhi-page-enhance.js");
 
@@ -238,16 +231,19 @@ test("application menu translation preserves Codex Automations", () => {
   assert.doesNotMatch(source, /Automations[^;\n]+(remove|delete|hidden|disabled)/i);
 });
 
-test("Windows override main bundle keeps native Settings and Automations actions visible", () => {
-  const source = readWindowsMainBundle();
+test("Windows packaging keeps native Settings and Automations actions visible without stale main overrides", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+  const buildDir = path.join(projectRoot, "overrides", "windows-app", "asar", ".vite", "build");
+  const mainBundle = fs.readdirSync(buildDir).find((name) => /^main-.*\.js$/.test(name));
 
   assert.match(source, /ruizhiEnsureNativeMenuItems/);
-  assert.match(source, /label:`自动化`/);
-  assert.match(source, /[mr]\(e,`\/automations`\)/);
-  assert.match(source, /label:`设置…`/);
+  assert.match(source, /label:\\?`自动化\\?`/);
+  assert.match(source, /[mr]\(e,\\?`\/automations\\?`\)/);
+  assert.match(source, /label:\\?`设置…\\?`/);
   assert.match(source, /visible=!0/);
   assert.match(source, /enabled=!0/);
   assert.doesNotMatch(source, /Plugins\s+-\s+Unlocked|插件\s+-\s+已解锁/);
+  assert.equal(mainBundle, undefined, "Windows overrides should not keep a stale hashed main bundle");
 });
 
 test("macOS application menu keeps native Settings and Automations actions visible", () => {
@@ -299,11 +295,9 @@ test("packaging enables Codex native Browser desktop availability without Browse
     assert.doesNotMatch(source, /patchBrowserSettingsAvailabilitySource/, `${scriptPath} should not patch Browser settings availability`);
   }
 
-  const mainSource = read("overrides/windows-app/asar/.vite/build/main-Bnxe1qAn.js");
-  assert.match(mainSource, /ruizhiNativeBrowserDesktopFeatureAvailability/, "Windows main override should enable native Browser desktop availability");
-  assert.match(mainSource, /browserPane:!0/, "Windows main override should allow the native Browser pane");
-  assert.match(mainSource, /inAppBrowserUse:!0/, "Windows main override should enable the native in-app Browser backend");
-  assert.match(mainSource, /inAppBrowserUseAllowed:!0/, "Windows main override should allow in-app Browser use");
+  const buildDir = path.join(projectRoot, "overrides", "windows-app", "asar", ".vite", "build");
+  const mainBundle = fs.readdirSync(buildDir).find((name) => /^main-.*\.js$/.test(name));
+  assert.equal(mainBundle, undefined, "Windows overrides should rely on build-time main bundle patching");
 
   for (const assetPath of [
     "overrides/windows-app/asar/webview/assets/browser-use-settings-CJBdA4SJ.js",

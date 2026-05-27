@@ -3535,7 +3535,6 @@ async function main() {
   await fsExtra.copy(installedAppRoot, appOutRoot);
 
   buildPatchedCodexCli();
-  buildImageGenHelper();
   copyRuntimeOverrides();
   writeAppUpdateConfig();
   copyPluginMarketplaces();

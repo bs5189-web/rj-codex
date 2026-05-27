@@ -1,7 +1,7 @@
 {
   "fetched_at": "2026-05-08T05:20:58.866Z",
   "etag": "ruizhi-curated-bridge-latest-v9",
-  "client_version": "0.129.0",
+  "client_version": "0.133.0",
   "models": [
     {
       "slug": "gpt-5.5",

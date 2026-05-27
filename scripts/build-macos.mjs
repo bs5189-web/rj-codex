@@ -6,6 +6,10 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import fsExtra from "fs-extra";
 import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
+import {
+  codexClientVersionFromExe,
+  writeRuntimeModelCatalog
+} from "./windows-asar-overrides.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("asar");
@@ -353,6 +357,19 @@ function findOneFile(dir, pattern, label) {
   const matches = fs.readdirSync(dir)
     .filter((name) => pattern.test(name))
     .map((name) => path.join(dir, name));
+
+  if (matches.length !== 1) {
+    throw new Error(`${label} 匹配数量异常：${matches.length}`);
+  }
+
+  return matches[0];
+}
+
+function findOneFileByContent(dir, filePattern, contentPattern, label) {
+  const matches = fs.readdirSync(dir)
+    .filter((name) => filePattern.test(name))
+    .map((name) => path.join(dir, name))
+    .filter((filePath) => contentPattern.test(fs.readFileSync(filePath, "utf8")));
 
   if (matches.length !== 1) {
     throw new Error(`${label} 匹配数量异常：${matches.length}`);
@@ -1177,13 +1194,22 @@ function patchModelAvailabilityAllowlist() {
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const modelSettingsFile = findOptionalFile(assetsDir, /^use-model-settings-.*\.js$/, "model settings bundle");
-  if (!modelSettingsFile) {
-    return;
-  }
-  writePatchedFileIfChanged(modelSettingsFile, (source) =>
-    replaceExactIfPresent(source, "let l=s.useHiddenModels&&a!==`amazonBedrock`,u;", "let l=!1,u;", "禁用官方模型 available_models 白名单过滤")
+  const modelSettingsFile = findOneFileByContent(
+    assetsDir,
+    /^(use-model-settings|model-queries)-.*\.js$/,
+    /useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`/,
+    "model settings bundle"
   );
+
+  writePatchedFile(modelSettingsFile, (source) =>
+    replaceRegex(
+      source,
+      /let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\.useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`,([A-Za-z_$][\w$]*);/,
+      "let $1=!1,$2;",
+      "禁用官方模型 available_models 白名单过滤"
+    )
+  );
+
   log(`已禁用模型白名单过滤：${path.basename(modelSettingsFile)}`);
 }
 
@@ -2078,9 +2104,13 @@ function copyRuntimeOverrides() {
 
   const modelTargetDir = path.join(resourcesDir, "models");
   if (modelCatalogEnabled()) {
-    fs.mkdirSync(modelTargetDir, { recursive: true });
-    fs.copyFileSync(modelCatalogPath(), path.join(modelTargetDir, "ruizhi-model-catalog.json"));
-    log("已内置运行态模型缓存目录");
+    const codexClientVersion = codexClientVersionFromExe(path.join(resourcesDir, "codex"));
+    writeRuntimeModelCatalog(
+      modelCatalogPath(),
+      path.join(modelTargetDir, "ruizhi-model-catalog.json"),
+      codexClientVersion,
+      { log }
+    );
   } else {
     fs.rmSync(modelTargetDir, { recursive: true, force: true });
     log("已关闭运行态自定义模型目录");

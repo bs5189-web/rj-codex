@@ -3409,6 +3409,35 @@ function createInstallerExe() {
   log(`NSIS 安装包已输出：${versionedInstallerPath}`);
 }
 
+function cleanDistCopyLogs(appRoot) {
+  const logsDir = path.join(appRoot, "Logs");
+  if (fs.existsSync(logsDir)) {
+    const logCount = fs.readdirSync(logsDir, { recursive: true }).length;
+    fs.rmSync(logsDir, { recursive: true, force: true });
+    log(`已清理日志目录：${logCount} 个文件`);
+  }
+}
+
+function validateDistCopyNoAbsolutePaths(appRoot, sourceRoot) {
+  const searchDirs = [".vite/build", "webview/assets"];
+  for (const subdir of searchDirs) {
+    const dir = path.join(appRoot, subdir);
+    if (!fs.existsSync(dir)) continue;
+    const files = fs.readdirSync(dir, { recursive: true }).filter((entry) => {
+      const full = path.join(dir, entry);
+      return fs.statSync(full).isFile() && /\.(js|html|json|css)$/.test(entry);
+    });
+    const sourcePathPattern = sourceRoot.replace(/\\/g, "\\\\");
+    for (const file of files) {
+      const content = fs.readFileSync(path.join(dir, file), "utf8");
+      if (content.includes(sourceRoot) || content.includes(sourcePathPattern)) {
+        throw new Error(`分发产物包含绝对路径：${path.join(subdir, file)}`);
+      }
+    }
+  }
+  log("已验证分发产物无源绝对路径");
+}
+
 async function main() {
   if (process.platform !== "win32") {
     throw new Error("build:windows 只能在 Windows 上运行。");
@@ -3420,6 +3449,9 @@ async function main() {
   cleanDir(distRoot);
   log("复制 Codex Desktop 文件");
   await fsExtra.copy(installedAppRoot, appOutRoot);
+
+  cleanDistCopyLogs(appOutRoot);
+  validateDistCopyNoAbsolutePaths(appOutRoot, installedAppRoot);
 
   buildPatchedCodexCli();
   copyRuntimeOverrides();

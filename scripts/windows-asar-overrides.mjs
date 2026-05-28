@@ -48,6 +48,11 @@ const openAIRecommendedPluginIds = [
   "spreadsheets",
   "presentations"
 ];
+const qwenDesktopPluginControlGuidance = `
+
+## Codex Desktop Plugin Control
+- When the user invokes \`[@浏览器]\` or \`plugin://browser@openai-bundled\`, use the Browser plugin's trusted runtime through the \`mcp__node_repl__js\` tool and select the \`iab\` browser. Do not use \`exec_command\`, \`node -e\`, standalone Playwright, or a system browser for this plugin.
+- Browser plugin native-pipe authorization depends on Codex turn metadata in \`nodeRepl.requestMeta\`; a separate shell process cannot provide the required \`session_id\` / \`turn_id\` and will fail as not trusted.`;
 
 export function assertInsideProject(targetPath) {
   const resolvedRoot = path.resolve(projectRoot).toLowerCase();
@@ -567,9 +572,28 @@ export function normalizeModelCatalogForClientVersion(catalog, clientVersion) {
     }
   }
 
+  applyRuizhiModelCatalogCompatibilityPatches(normalized);
   normalized.client_version = clientVersion;
   normalized.fetched_at = new Date().toISOString();
   return normalized;
+}
+
+export function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
+  if (!catalog || typeof catalog !== "object" || !Array.isArray(catalog.models)) return catalog;
+  for (const model of catalog.models) {
+    if (!model || typeof model.slug !== "string" || !/^qwen/i.test(model.slug)) continue;
+    model.base_instructions = appendDesktopPluginControlGuidance(model.base_instructions);
+    if (model.model_messages && typeof model.model_messages === "object") {
+      model.model_messages.instructions_template = appendDesktopPluginControlGuidance(model.model_messages.instructions_template);
+    }
+  }
+  return catalog;
+}
+
+function appendDesktopPluginControlGuidance(value) {
+  if (typeof value !== "string" || value.length === 0) return value;
+  if (value.includes("plugin://browser@openai-bundled") && value.includes("mcp__node_repl__js")) return value;
+  return `${value.trimEnd()}${qwenDesktopPluginControlGuidance}`;
 }
 
 export function writeRuntimeModelCatalog(sourcePath, targetPath, clientVersion, options = {}) {
@@ -2065,7 +2089,9 @@ function bridgeBootstrapBlock(config) {
     ensureLoopbackNoProxy();
     function syncModelCache(){
       const target=path.join(codexHome,userModelCatalogFile);
-      if(!modelCatalogEnabled||!modelCatalogRemoteUrl)return;
+      if(!modelCatalogEnabled)return;
+      syncBundledModelCatalogCache();
+      if(!modelCatalogRemoteUrl)return;
       setTimeout(()=>{
         const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
         try{
@@ -2082,8 +2108,42 @@ function bridgeBootstrapBlock(config) {
         }catch(error){
           fs.rmSync(temp,{force:true});
           console.warn("ruizhi remote model catalog sync failed",error);
+          syncBundledModelCatalogCache();
         }
       },1000);
+    }
+    function bundledModelCatalogPath(){
+      return path.join(resourcesRoot,"models",modelCatalogFile);
+    }
+    function syncBundledModelCatalogCache(){
+      const target=path.join(codexHome,userModelCatalogFile);
+      try{
+        return writeModelCatalogCacheFromSource(bundledModelCatalogPath(),target);
+      }catch(error){
+        console.warn("ruizhi bundled model catalog sync failed",error);
+        return false;
+      }
+    }
+    function writeModelCatalogCacheFromSource(source,target){
+      const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
+      try{
+        if(!fs.existsSync(source))throw new Error("内置模型目录不存在："+source);
+        fs.mkdirSync(path.dirname(temp),{recursive:true});
+        fs.copyFileSync(source,temp);
+        validateModelCatalogFile(temp);
+        normalizeModelCatalogFile(temp);
+        const changed=!fs.existsSync(target)||fs.readFileSync(temp).compare(fs.readFileSync(target))!==0;
+        if(!changed){
+          fs.rmSync(temp,{force:true});
+          return false;
+        }
+        backupExistingModelCatalog(target);
+        fs.renameSync(temp,target);
+        return true;
+      }catch(error){
+        fs.rmSync(temp,{force:true});
+        throw error;
+      }
     }
     function downloadRemoteModelCatalog(url,target){
       const childProcess=require("node:child_process");
@@ -2111,8 +2171,26 @@ function bridgeBootstrapBlock(config) {
       if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models)||catalog.models.length===0)throw new Error("远程模型目录格式无效");
       return catalog;
     }
+    function applyRuizhiModelCatalogCompatibilityPatches(catalog){
+      if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models))return catalog;
+      const guidance="\\n\\n## Codex Desktop Plugin Control\\n- When the user invokes \`[@浏览器]\` or \`plugin://browser@openai-bundled\`, use the Browser plugin's trusted runtime through the \`mcp__node_repl__js\` tool and select the \`iab\` browser. Do not use \`exec_command\`, \`node -e\`, standalone Playwright, or a system browser for this plugin.\\n- Browser plugin native-pipe authorization depends on Codex turn metadata in \`nodeRepl.requestMeta\`; a separate shell process cannot provide the required \`session_id\` / \`turn_id\` and will fail as not trusted.";
+      const append=value=>{
+        if(typeof value!=="string"||value.length===0)return value;
+        if(value.includes("plugin://browser@openai-bundled")&&value.includes("mcp__node_repl__js"))return value;
+        return value.trimEnd()+guidance;
+      };
+      for(const model of catalog.models){
+        if(!model||typeof model.slug!=="string"||!/^qwen/i.test(model.slug))continue;
+        model.base_instructions=append(model.base_instructions);
+        if(model.model_messages&&typeof model.model_messages==="object"){
+          model.model_messages.instructions_template=append(model.model_messages.instructions_template);
+        }
+      }
+      return catalog;
+    }
     function normalizeModelCatalogFile(filePath){
       const catalog=validateModelCatalogFile(filePath);
+      applyRuizhiModelCatalogCompatibilityPatches(catalog);
       catalog.fetched_at=new Date().toISOString();
       fs.writeFileSync(filePath,JSON.stringify(catalog,null,2)+"\\n","utf8");
       return catalog;

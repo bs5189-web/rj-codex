@@ -32,6 +32,28 @@ test("DeepSeek V4 chat models only advertise UniAPI-compatible options", () => {
   }
 });
 
+test("Qwen Responses models keep Codex desktop plugin-control guidance", () => {
+  const catalog = JSON.parse(readProjectFile("resources/ruizhi-model-catalog.json"));
+  const slugs = ["qwen3.6-plus", "qwen3.6-flash", "qwen3-coder-plus"];
+
+  for (const slug of slugs) {
+    const model = catalog.models.find((entry) => entry.slug === slug);
+    assert.ok(model, `${slug} should exist in the model catalog`);
+    const instructionSources = [
+      model.base_instructions,
+      model.model_messages?.instructions_template,
+    ].filter((value) => typeof value === "string");
+
+    assert.ok(instructionSources.length > 0, `${slug} should carry runtime instructions`);
+    for (const source of instructionSources) {
+      assert.match(source, /\[@浏览器\]/, `${slug} should recognize the Browser plugin mention`);
+      assert.match(source, /plugin:\/\/browser@openai-bundled/, `${slug} should recognize the Browser plugin URI`);
+      assert.match(source, /mcp__node_repl__js/, `${slug} should steer Browser work to the trusted Node REPL tool`);
+      assert.match(source, /exec_command/, `${slug} should explicitly avoid shelling out for Browser control`);
+    }
+  }
+});
+
 test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex home", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
@@ -46,9 +68,15 @@ test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex 
     assert.match(source, /const modelCatalogRemoteUrl=\$\{jsonLiteral\(modelCatalogRemoteUrl\(\)\)\};/);
     assert.match(source, /const userModelCatalogFile="models_cache\.json";/);
     assert.match(source, /setTimeout\(\(\)=>\{/);
+    assert.match(source, /syncBundledModelCatalogCache\(\);/);
+    assert.match(source, /function bundledModelCatalogPath\(\)/);
+    assert.match(source, /path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
+    assert.match(source, /writeModelCatalogCacheFromSource\(bundledModelCatalogPath\(\),target\)/);
     assert.match(source, /downloadRemoteModelCatalog\(modelCatalogRemoteUrl,temp\);/);
     assert.match(source, /normalizeModelCatalogFile\(temp\);/);
     assert.match(source, /function normalizeModelCatalogFile\(filePath\)/);
+    assert.match(source, /function applyRuizhiModelCatalogCompatibilityPatches\(catalog\)/);
+    assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
     assert.match(source, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
     assert.match(source, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
     assert.doesNotMatch(source, /const userModelCatalogFile="model-catalog\.json";/);
@@ -58,8 +86,14 @@ test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex 
   const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
   assert.match(asarPatchSource, /const userModelCatalogFile="models_cache\.json";/);
   assert.match(asarPatchSource, /setTimeout\(\(\)=>\{/);
+  assert.match(asarPatchSource, /syncBundledModelCatalogCache\(\);/);
+  assert.match(asarPatchSource, /function bundledModelCatalogPath\(\)/);
+  assert.match(asarPatchSource, /path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
+  assert.match(asarPatchSource, /writeModelCatalogCacheFromSource\(bundledModelCatalogPath\(\),target\)/);
   assert.match(asarPatchSource, /normalizeModelCatalogFile\(temp\);/);
   assert.match(asarPatchSource, /function normalizeModelCatalogFile\(filePath\)/);
+  assert.match(asarPatchSource, /function applyRuizhiModelCatalogCompatibilityPatches\(catalog\)/);
+  assert.match(asarPatchSource, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
   assert.match(asarPatchSource, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
   assert.match(asarPatchSource, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
   assert.doesNotMatch(asarPatchSource, /const userModelCatalogFile="model-catalog\.json";/);

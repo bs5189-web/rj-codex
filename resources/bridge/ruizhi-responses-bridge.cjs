@@ -422,6 +422,18 @@ function routeFor(model, routes) {
   return /^(gpt|qwen)/i.test(model) ? { protocol: "responses" } : { protocol: "chat" };
 }
 
+function hasFunctionTools(tools) {
+  return Array.isArray(tools) && tools.some((tool) => tool && typeof tool === "object" && tool.type === "function");
+}
+
+function routeForRequest(model, routes, body) {
+  const route = routeFor(model, routes);
+  if (route.protocol === "responses" && /^qwen/i.test(bareModel(model)) && hasFunctionTools(body && body.tools)) {
+    return { ...route, protocol: "chat" };
+  }
+  return route;
+}
+
 function catalogInfo(catalogPath) {
   if (!catalogPath || !fs.existsSync(catalogPath)) return { etag: "ruizhi-models-missing", models: [] };
   const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
@@ -808,7 +820,7 @@ async function handleResponses(req, res, options) {
   const model = typeof body.model === "string" ? body.model : "";
   const acceptsSse = String(req.headers.accept || "").includes("text/event-stream");
   const stream = body.stream !== false;
-  const route = routeFor(model, options.routes);
+  const route = routeForRequest(model, options.routes, body);
   const authorization = authHeader(req, options.authHome);
   if (!authorization) return fail(res, 401, "缺少 API Key");
   if (route.protocol === "chat") {

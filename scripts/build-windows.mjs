@@ -243,14 +243,15 @@ function listSystemSkillSourceDirs() {
     .sort((left, right) => left.localeCompare(right));
 }
 
-const workRoot = path.join(projectRoot, ".work", "windows");
+const workRoot = resolveProjectPath(process.env.RUIZHI_WINDOWS_WORK_SUBDIR ?? path.join(".work", "windows"));
 const distRoot = resolveProjectPath(process.env.RUIZHI_WINDOWS_DIST_SUBDIR ?? path.join(".work", "windows-app-out"));
 const appOutRoot = distRoot;
 const extractedDir = path.join(workRoot, "app");
 const codexSourceRoot = path.join(projectRoot, ".work", "codex-source");
-const installerInputRoot = resolveProjectPath(path.join(".work", "windows-installer-input"));
-const installerOutDir = resolveProjectPath(path.join("dist", "installer"));
+const installerInputRoot = resolveProjectPath(process.env.RUIZHI_WINDOWS_INSTALLER_INPUT_SUBDIR ?? path.join(".work", "windows-installer-input"));
+const installerOutDir = resolveProjectPath(process.env.RUIZHI_WINDOWS_INSTALLER_OUT_SUBDIR ?? path.join("dist", "installer"));
 const testAppOutDir = resolveProjectPath(process.env.RUIZHI_WINDOWS_TEST_APP_SUBDIR ?? path.join("dist", windowsTestAppDirName()));
+let pinnedCodexAppRoot = "";
 
 function sha256File(filePath) {
   const hash = createHash("sha256");
@@ -303,6 +304,17 @@ function verifyWindowsSourceManifest(appRoot) {
 }
 
 function findPinnedCodexAppRoot() {
+  if (process.env.RUIZHI_WINDOWS_SOURCE_APP_ROOT) {
+    const appRoot = path.resolve(process.env.RUIZHI_WINDOWS_SOURCE_APP_ROOT);
+    const appAsarPath = path.join(appRoot, "resources", "app.asar");
+    const sourceExePath = path.join(appRoot, config.windows.sourceExeName);
+    if (!fs.existsSync(appAsarPath) || !fs.existsSync(sourceExePath)) {
+      throw new Error(`外部 Codex Desktop 源不存在或不完整：${appRoot}`);
+    }
+    log(`使用外部 Codex Desktop 源：${appRoot}`);
+    return appRoot;
+  }
+
   const configured = config.windows.sourceAppRoot;
   if (!configured) {
     throw new Error("缺少 windows.sourceAppRoot 配置。");
@@ -2926,7 +2938,7 @@ function copyPluginMarketplaces() {
 function patchRuntimeResourceText() {
   const resourcesDir = path.join(appOutRoot, "resources");
   copyWindowsResourceOverrides(resourcesDir, { log });
-  patchOpenAIBundledPluginDescriptions(resourcesDir, { log });
+  patchOpenAIBundledPluginDescriptions(resourcesDir, { log, sourceAppRoot: pinnedCodexAppRoot });
 }
 
 function copyRuntimeOverrides() {
@@ -2937,7 +2949,8 @@ function copyRuntimeOverrides() {
 
   const modelTargetDir = path.join(resourcesDir, "models");
   if (modelCatalogEnabled()) {
-    const codexClientVersion = codexClientVersionFromExe(path.join(resourcesDir, "codex.exe"));
+    const codexClientVersion = process.env.RUIZHI_CODEX_CLIENT_VERSION
+      ?? codexClientVersionFromExe(path.join(pinnedCodexAppRoot, "resources", "codex.exe"));
     writeRuntimeModelCatalog(
       modelCatalogPath(),
       path.join(modelTargetDir, "ruizhi-model-catalog.json"),
@@ -2988,6 +3001,11 @@ function renameElectronExe() {
 }
 
 async function patchElectronExeIcon() {
+  if (process.env.RUIZHI_SKIP_EXE_ICON_PATCH === "1") {
+    log("跳过主程序图标替换：RUIZHI_SKIP_EXE_ICON_PATCH=1");
+    return;
+  }
+
   const target = path.join(appOutRoot, config.windows.appExeName);
   const icon = windowsIconPath();
   let lastError;
@@ -3418,6 +3436,17 @@ function cleanDistCopyLogs(appRoot) {
   }
 }
 
+function shouldCopyPinnedCodexAppEntry(sourcePath) {
+  const relativeParts = path.relative(pinnedCodexAppRoot, sourcePath).split(path.sep).filter(Boolean);
+  if (relativeParts.length > 0 && relativeParts[0].toLowerCase() === "logs") {
+    return false;
+  }
+  if (relativeParts.join("/").toLowerCase() === "resources/plugins/openai-bundled") {
+    return false;
+  }
+  return true;
+}
+
 function validateDistCopyNoAbsolutePaths(appRoot, sourceRoot) {
   const searchDirs = [".vite/build", "webview/assets"];
   for (const subdir of searchDirs) {
@@ -3444,11 +3473,12 @@ async function main() {
   }
 
   const installedAppRoot = findPinnedCodexAppRoot();
+  pinnedCodexAppRoot = installedAppRoot;
   log(`使用固定 Codex Desktop 源：${installedAppRoot}`);
 
   cleanDir(distRoot);
   log("复制 Codex Desktop 文件");
-  await fsExtra.copy(installedAppRoot, appOutRoot);
+  await fsExtra.copy(installedAppRoot, appOutRoot, { filter: shouldCopyPinnedCodexAppEntry });
 
   cleanDistCopyLogs(appOutRoot);
   validateDistCopyNoAbsolutePaths(appOutRoot, installedAppRoot);

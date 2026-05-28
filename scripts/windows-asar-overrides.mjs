@@ -651,6 +651,14 @@ function assertSameModelCatalog(sourceCatalog, targetCatalog, label) {
   return { count: targetSlugs.length, etag: targetCatalog.etag };
 }
 
+function removeValidationDirBestEffort(dir) {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Validation has already produced the useful signal; stale temp dirs should not fail packaging.
+  }
+}
+
 function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
   if (!modelBridgeEnabled(config)) {
     return { bridge: false };
@@ -710,11 +718,11 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
       if (!bootstrap.includes(bridgeBaseUrl)) {
         throw new Error(`${label} bootstrap 未指向本地模型 provider：${bridgeBaseUrl}`);
       }
-      fs.rmSync(extractDir, { recursive: true, force: true });
+      removeValidationDirBestEffort(extractDir);
       return { bridge: true };
     } catch (error) {
       lastError = error;
-      fs.rmSync(extractDir, { recursive: true, force: true });
+      removeValidationDirBestEffort(extractDir);
       if (attempt < 6) {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
       }
@@ -954,7 +962,8 @@ function patchSkillDescription(skillPath, description) {
 
 function restoreOpenAIBundledPluginResources(resourcesDir, options = {}) {
   const log = options.log ?? (() => {});
-  const sourceRoot = path.join(projectRoot, "vendor", "codex-desktop", "windows", "current", "app", "resources", "plugins", "openai-bundled");
+  const sourceAppRoot = options.sourceAppRoot ?? path.join(projectRoot, "vendor", "codex-desktop", "windows", "current", "app");
+  const sourceRoot = path.join(sourceAppRoot, "resources", "plugins", "openai-bundled");
   const targetRoot = path.join(resourcesDir, "plugins", "openai-bundled");
   if (!fs.existsSync(sourceRoot)) {
     throw new Error(`官方 OpenAI 插件资源不存在：${sourceRoot}`);
@@ -965,20 +974,6 @@ function restoreOpenAIBundledPluginResources(resourcesDir, options = {}) {
   fsExtra.copySync(sourceRoot, targetRoot);
   log("已恢复官方 OpenAI 插件资源");
 
-  // Rename plugin directories to match expected names in openAIBundledPluginDefinitions
-  const pluginsRoot = path.join(targetRoot, "plugins");
-  const pluginDirRenames = [
-    ["browser", "browser-use"],
-    ["latex", "latex-tectonic"]
-  ];
-  for (const [from, to] of pluginDirRenames) {
-    const fromPath = path.join(pluginsRoot, from);
-    const toPath = path.join(pluginsRoot, to);
-    if (fs.existsSync(fromPath) && !fs.existsSync(toPath)) {
-      fs.renameSync(fromPath, toPath);
-      log(`已重命名插件目录：${from} -> ${to}`);
-    }
-  }
 }
 
 function pluginCategoryLabel(category) {
@@ -1091,7 +1086,7 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
     return plugin;
   });
 
-  patchJsonFile(path.join(pluginsRoot, "latex-tectonic", ".codex-plugin", "plugin.json"), (plugin) => {
+  patchJsonFile(path.join(pluginsRoot, "latex", ".codex-plugin", "plugin.json"), (plugin) => {
     plugin.description = "使用内置 Tectonic、TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。";
     plugin.interface = plugin.interface ?? {};
     plugin.interface.shortDescription = "LaTeX 编译与环境检查";
@@ -1112,15 +1107,15 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
     "/openai-bundled/plugins/chrome/skills/chrome/SKILL.md"
   );
   patchSkillDescription(
-    path.join(pluginsRoot, "latex-tectonic", "skills", "latex-compile", "SKILL.md"),
+    path.join(pluginsRoot, "latex", "skills", "latex-compile", "SKILL.md"),
     "使用内置 Tectonic、系统 TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。"
   );
   patchSkillDescription(
-    path.join(pluginsRoot, "latex-tectonic", "skills", "latex-doctor", "SKILL.md"),
+    path.join(pluginsRoot, "latex", "skills", "latex-doctor", "SKILL.md"),
     "检查本机 LaTeX 编译环境，判断 Tectonic、TeX Live、MacTeX 或托管 runtime 是否可用。"
   );
   patchSkillDescription(
-    path.join(pluginsRoot, "latex-tectonic", "skills", "texlive-runtime-installer", "SKILL.md"),
+    path.join(pluginsRoot, "latex", "skills", "texlive-runtime-installer", "SKILL.md"),
     "在没有可用系统 LaTeX 环境时安装 Codex 托管的 TeX Live runtime。"
   );
 
@@ -2377,6 +2372,70 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   }
 }
 
+function findWindowsNativeMenuBundle(extractedAppDir) {
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const candidates = walkFiles(buildDir).filter((filePath) => {
+    if (!filePath.endsWith(".js")) {
+      return false;
+    }
+    const source = fs.readFileSync(filePath, "utf8");
+    return source.includes("Menu.setApplicationMenu") && (source.includes("let Xe=[],Ze=[") || source.includes("function ruizhiEnsureNativeMenuItems("));
+  });
+
+  if (candidates.length !== 1) {
+    throw new Error(`Windows 顶部菜单 bundle 匹配数量异常：${candidates.length}`);
+  }
+
+  return candidates[0];
+}
+
+function windowsNativeMenuPatchSource() {
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Check for Updates":"检查更新","Check for Updates…":"检查更新…","Install Update":"安装更新","Quit":"退出","Exit":"退出","New Thread":"新聊天","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder":"打开文件夹","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Reset Zoom":"重置缩放","Toggle Full Screen":"切换全屏","Toggle Developer Tools":"切换开发者工具","Developer Tools":"开发者工具","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Plugins":"插件","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0,e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=e?.items?.[0]?.submenu,d=e=>e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))??null,f=()=>d(e)?.submenu??u,p=async()=>{let e=await n();e&&r(e,i)},m=async()=>{let e=await n();e&&r(e,\`/plugins\`)},g=async()=>{let e=await n();e&&r(e,\`/automations\`)};function ensureSettingsMenu(){let n=e?.items?.find(e=>/^(Settings|设置)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`设置\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function ensurePluginsMenu(){let n=e?.items?.find(e=>/^(Plugins|插件)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`插件\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function h(e,n,r,i,o){let s=e?.items?.find(e=>n.test(a(e)));if(s)return c(s),s.click=i,s;if(e?.insert){let n=new t({label:r,accelerator:o?.accelerator,click:i});e.insert(Math.min(o?.index??e.items.length,e.items.length),n);return n}return null}let y=ensureSettingsMenu(),b=ensurePluginsMenu();h(y,/^(Settings|设置|Preferences|偏好设置)/,\`设置…\`,p,{accelerator:\`CmdOrCtrl+,\`,index:0});h(y,/^(Plugins|插件)$/,\`插件\`,m,{index:1});h(y,/^(Automations|自动化)$/,\`自动化\`,g,{index:2});h(b,/^(Plugins|插件)$/,\`插件\`,m,{index:0});let x=l(/^(Settings|设置|Preferences|偏好设置)/);x&&(x.click=p);let S=l(/^(Plugins|插件)$/);S&&(S.click=m);let C=l(/^(Automations|自动化)$/);C&&(C.click=g)}`;
+}
+
+function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
+  const log = options.log ?? (() => {});
+  const mainBundlePath = findWindowsNativeMenuBundle(extractedAppDir);
+  const original = fs.readFileSync(mainBundlePath, "utf8");
+  let source = original;
+
+  const insertionPoint = "let Xe=[],Ze=[";
+  const insertionIndex = source.indexOf(insertionPoint);
+  if (insertionIndex < 0) {
+    throw new Error("顶部菜单原生入口补丁点不存在：菜单模板入口");
+  }
+
+  const helperStart = source.indexOf("function ruizhiTranslateApplicationMenu(");
+  if (helperStart >= 0 && helperStart < insertionIndex) {
+    const helperSource = source.slice(helperStart, insertionIndex);
+    if (!helperSource.includes("ensureSettingsMenu")) {
+      source = `${source.slice(0, helperStart)}${windowsNativeMenuPatchSource()}${source.slice(insertionIndex)}`;
+    }
+  } else if (!source.includes("function ruizhiEnsureNativeMenuItems(")) {
+    source = source.replace(insertionPoint, `${windowsNativeMenuPatchSource()}${insertionPoint}`);
+  }
+
+  const settingsRouteVar = source.match(/([A-Za-z_$][\w$]*)=`\/settings\/general-settings`/)?.[1];
+  if (!settingsRouteVar) {
+    throw new Error("顶部菜单设置路由变量不存在：/settings/general-settings");
+  }
+
+  if (!source.includes("try{ruizhiEnsureNativeMenuItems({menu:")) {
+    const menuSetPattern = /\}\}n\.Menu\.setApplicationMenu\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\}/;
+    if (!menuSetPattern.test(source)) {
+      throw new Error("顶部菜单中文补丁点不存在：setApplicationMenu");
+    }
+    source = source.replace(menuSetPattern, `}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:${settingsRouteVar}});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(\`锐智菜单修复失败\`,e)}n.Menu.setApplicationMenu($1),$2($3)}`);
+  }
+
+  if (source !== original) {
+    fs.writeFileSync(mainBundlePath, source, "utf8");
+    log(`已补丁 Windows 顶部菜单原生入口：${path.basename(mainBundlePath)}`);
+  } else {
+    log(`Windows 顶部菜单原生入口已是最新：${path.basename(mainBundlePath)}`);
+  }
+}
+
 function patchWindowsTrayMenuLabels(extractedAppDir, config, options = {}) {
   const log = options.log ?? (() => {});
   const buildDir = path.join(extractedAppDir, ".vite", "build");
@@ -2434,31 +2493,8 @@ function patchWindowsTrayMenuLabels(extractedAppDir, config, options = {}) {
     "return`正在停止 Chronicle...`"
   );
 
-  const nativeMenuCode = `function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0,e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{let e=await n();e&&r(e,i)},f=e?.items?.[0]?.submenu;if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}}`;
-  if (!source.includes("function ruizhiEnsureNativeMenuItems(")) {
-    const insertionPoint = "let Xe=[],Ze=[";
-    if (!source.includes(insertionPoint)) {
-      throw new Error("顶部菜单原生入口补丁点不存在：菜单模板入口");
-    }
-    source = source.replace(insertionPoint, `${nativeMenuCode}${insertionPoint}`);
-  }
-
-  if (!source.includes("function ruizhiTranslateApplicationMenu(")) {
-    const insertionPoint = "let Xe=[],Ze=[";
-    if (!source.includes(insertionPoint)) {
-      throw new Error("顶部菜单中文补丁点不存在：菜单模板入口");
-    }
-    const translatorCode = `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","New Thread":"新聊天","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","New Tab":"新标签页","New File":"新建文件","Open Folder":"打开文件夹","Open Project":"打开项目","Open Recent":"打开最近项目","Add Folder":"添加文件夹","Close Window":"关闭窗口","Close Tab":"关闭标签页","Close All Tabs":"关闭所有标签页","Settings":"设置","Preferences":"偏好设置","Log Out":"退出登录","Check for Updates":"检查更新","Check for Updates…":"检查更新…","Install Update":"安装更新","Reload Window":"重新加载窗口","Reload":"重新加载","Hard Reload":"强制重新加载","Force Reload":"强制重新加载","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Terminal":"终端","Toggle File Tree":"切换文件树","Toggle Diff Panel":"切换差异面板","Toggle Browser Panel":"切换浏览器面板","Open Browser Tab":"打开浏览器标签页","Find":"查找","Find in Thread":"在对话中查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Previous Thread":"上一个对话","Next Thread":"下一个对话","Navigate Back":"后退","Navigate Forward":"前进","Back":"后退","Forward":"前进","Open in External Browser":"在外部浏览器中打开","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Reset Zoom":"重置缩放","Toggle Full Screen":"切换全屏","Enter Full Screen":"进入全屏","Exit Full Screen":"退出全屏","Toggle Menu Bar":"切换菜单栏","Toggle Developer Tools":"切换开发者工具","Toggle DevTools":"切换开发者工具","Developer Tools":"开发者工具","Toggle Debug Menu":"切换调试菜单","Open Deeplink from Clipboard":"从剪贴板打开深链接","Toggle Query Devtools":"切换 Query Devtools","Toggle React Scan":"切换 React Scan","Start Performance Trace":"开始性能跟踪","Start Trace Recording":"开始跟踪记录","Stop Performance Trace":"停止性能跟踪","Stop Trace Recording":"停止跟踪记录","Undo":"撤销","Redo":"重做","Cut":"剪切","Copy":"复制","Paste":"粘贴","Paste and Match Style":"粘贴并匹配样式","Delete":"删除","Select All":"全选","Save":"保存","Save As":"另存为","Save As…":"另存为…","Save Image":"保存图片","Save Link As":"链接另存为","Save Link As…":"链接另存为…","Save Video":"保存视频","Save Video As":"视频另存为","Save Video As…":"视频另存为…","Print":"打印","Page Setup":"页面设置","Speech":"语音","Start Speaking":"开始朗读","Stop Speaking":"停止朗读","Writing Tools":"写作工具","Emoji & Symbols":"表情与符号","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","Minimize":"最小化","Zoom":"缩放","Bring All to Front":"全部置于前台","Close":"关闭","Exit":"退出","Quit":"退出","Inspect":"检查","Comment":"评论","File Explorer":"文件资源管理器","Finder":"访达","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}`;
-    source = source.replace(insertionPoint, `${translatorCode}${insertionPoint}`);
-  }
   source = source.replace(`"Codex Documentation":"官方文档"`, `"Codex Documentation":"帮助首页"`);
   source = source.replace(`"Codex Documentation":"使用文档"`, `"Codex Documentation":"帮助首页"`);
-
-  const menuSetPattern = /\}\}n\.Menu\.setApplicationMenu\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\}/;
-  if (!menuSetPattern.test(source)) {
-    throw new Error("顶部菜单中文补丁点不存在：setApplicationMenu");
-  }
-  source = source.replace(menuSetPattern, "}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:yB});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(`锐智菜单修复失败`,e)}n.Menu.setApplicationMenu($1),$2($3)}");
 
   fs.writeFileSync(mainBundlePath, source, "utf8");
   log(`已补丁 Windows 托盘和顶部菜单中文文案：${path.basename(mainBundlePath)}`);
@@ -2579,6 +2615,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     );
   }
 
+  patchWindowsNativeMenuItems(extractedAppDir, config, { log });
   // patchWindowsTrayMenuLabels(extractedAppDir, config, { log }); // 暂时跳过：Codex 42.x 的托盘 JS 匹配数量有变化
   patchVcRuntimeErrorPage(extractedAppDir, { log });
   patchWindowsHelpDocumentationLinks(extractedAppDir, config, { log });

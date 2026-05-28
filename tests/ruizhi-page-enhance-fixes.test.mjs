@@ -244,9 +244,9 @@ test("application menu translation preserves Codex Automations", () => {
 
   assert.match(source, /"Automations":"自动化"/);
   assert.match(source, /ruizhiEnsureNativeMenuItems/);
-  assert.match(source, /label:\\?`自动化\\?`/);
+  assert.match(source, /\\`自动化\\`,g,\{index:2\}/);
   assert.match(source, /[mr]\(e,\\?`\/automations\\?`\)/);
-  assert.match(source, /label:\\?`设置…\\?`/);
+  assert.match(source, /\\`设置…\\`,p,\{accelerator:\\`CmdOrCtrl\+,\\`,index:0\}/);
   assert.match(source, /visible=!0/);
   assert.match(source, /enabled=!0/);
   assert.doesNotMatch(source, /Automations[^;\n]+(remove|delete|hidden|disabled)/i);
@@ -258,9 +258,9 @@ test("Windows packaging keeps native Settings and Automations actions visible wi
   const mainBundle = fs.readdirSync(buildDir).find((name) => /^main-.*\.js$/.test(name));
 
   assert.match(source, /ruizhiEnsureNativeMenuItems/);
-  assert.match(source, /label:\\?`自动化\\?`/);
+  assert.match(source, /\\`自动化\\`,g,\{index:2\}/);
   assert.match(source, /[mr]\(e,\\?`\/automations\\?`\)/);
-  assert.match(source, /label:\\?`设置…\\?`/);
+  assert.match(source, /\\`设置…\\`,p,\{accelerator:\\`CmdOrCtrl\+,\\`,index:0\}/);
   assert.match(source, /visible=!0/);
   assert.match(source, /enabled=!0/);
   assert.doesNotMatch(source, /Plugins\s+-\s+Unlocked|插件\s+-\s+已解锁/);
@@ -341,6 +341,77 @@ test("packaging uses current OpenAI bundled plugin ids for Browser automation", 
     assert.doesNotMatch(source, /\{\s*(?:"name"|name)\s*:\s*"browser-use"\s*,\s*(?:"path"|path)\s*:\s*"\.\/plugins\/browser-use"/, `${scriptPath} should not generate the retired browser-use plugin id`);
     assert.doesNotMatch(source, /\{\s*(?:"name"|name)\s*:\s*"latex-tectonic"\s*,\s*(?:"path"|path)\s*:\s*"\.\/plugins\/latex-tectonic"/, `${scriptPath} should not generate the retired latex-tectonic plugin id`);
   }
+  assert.doesNotMatch(read("scripts/windows-asar-overrides.mjs"), /pluginDirRenames/, "Windows bundled plugin restore should not rename current plugin directories to retired ids");
+  assert.doesNotMatch(read("scripts/windows-asar-overrides.mjs"), /path\.join\(pluginsRoot,\s*"latex-tectonic"/, "Windows bundled plugin patches should target the current latex plugin directory");
+});
+
+test("windows packaging patches the native Plugins menu independently from tray labels", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+  const refreshStart = source.indexOf("export function refreshWindowsAsarBuildMetadata(");
+  assert.notEqual(refreshStart, -1, "Windows metadata refresh should exist");
+  const refreshEnd = source.indexOf("\n}\n\nfunction nodeModuleTargetDir", refreshStart);
+  assert.notEqual(refreshEnd, -1, "Windows metadata refresh body should be locatable");
+  const refreshSource = source.slice(refreshStart, refreshEnd);
+
+  assert.match(source, /function patchWindowsNativeMenuItems\(/, "Windows native menu patch should be split from tray label patching");
+  assert.match(refreshSource, /patchWindowsNativeMenuItems\(extractedAppDir, config, \{ log \}\)/, "Windows refresh should always patch native menu entries");
+  assert.match(source, /try\{ruizhiEnsureNativeMenuItems\(\{menu:/, "Windows native menu patch should mount before setApplicationMenu, not only inject helpers");
+  assert.doesNotMatch(source, /source\.includes\("ruizhiEnsureNativeMenuItems\(\{menu:"\)/, "Windows native menu patch should not mistake the helper definition for a mounted hook");
+  assert.match(source, /settingsRouteVar/, "Windows native menu patch should resolve the current settings route variable dynamically");
+  assert.match(source, /\/settings\/general-settings/, "Windows native menu patch should target the real settings route");
+  assert.doesNotMatch(source, /settingsRoute:yB/, "Windows native menu patch should not hard-code an unrelated minified variable");
+  assert.match(source, /ensureSettingsMenu/, "Windows native menu patch should create a Settings top-level menu when missing");
+  assert.match(source, /ensurePluginsMenu/, "Windows native menu patch should create a Plugins top-level menu when missing");
+  assert.match(source, /helperStart/, "Windows native menu patch should detect stale injected helpers");
+  assert.match(source, /source\.slice\(0, helperStart\).*windowsNativeMenuPatchSource\(\).*source\.slice\(insertionIndex\)/s, "Windows native menu patch should replace stale injected helpers in rebuilt asars");
+  assert.match(source, /Plugins":"插件"/, "Windows native menu translator should localize Plugins");
+  assert.match(source, /\\`插件\\`,m,\{index:1\}/, "Windows native menu patch should add a Plugins label under Settings");
+  assert.match(source, /label:\\`插件\\`,submenu:\[\]/, "Windows native menu patch should add a top-level Plugins menu");
+  assert.match(source, /r\(e,\\`\/plugins\\`\)/, "Windows native menu patch should open /plugins");
+});
+
+test("windows packaging does not copy source Logs into build output", () => {
+  const source = read("scripts/build-windows.mjs");
+
+  assert.match(source, /function shouldCopyPinnedCodexAppEntry\(/, "Windows build should define a copy filter for the pinned app source");
+  assert.match(source, /relativeParts\[0\]\.toLowerCase\(\) === "logs"/, "Windows build should skip top-level Logs from the pinned app source");
+  assert.match(source, /relativeParts\.join\("\/"\)\.toLowerCase\(\) === "resources\/plugins\/openai-bundled"/, "Windows build should skip bundled plugin resources that are restored later");
+  assert.match(source, /fsExtra\.copy\(installedAppRoot, appOutRoot, \{ filter: shouldCopyPinnedCodexAppEntry \}\)/, "Windows build should apply the copy filter when staging the app");
+});
+
+test("windows packaging can use an explicit external source app root", () => {
+  const source = read("scripts/build-windows.mjs");
+
+  assert.match(source, /RUIZHI_WINDOWS_SOURCE_APP_ROOT/, "Windows build should accept an explicit source app root override");
+  assert.match(source, /path\.resolve\(process\.env\.RUIZHI_WINDOWS_SOURCE_APP_ROOT\)/, "Windows source override should support absolute paths outside the workspace");
+  assert.match(source, /verifyWindowsSourceManifest\(appRoot\)/, "Default pinned source should keep manifest verification");
+  assert.match(source, /log\(`使用外部 Codex Desktop 源/, "External source override should be visible in build logs");
+  assert.match(source, /codexClientVersionFromExe\(path\.join\(pinnedCodexAppRoot, "resources", "codex\.exe"\)\)/, "Windows build should read the Codex client version from the pinned source executable");
+  assert.match(source, /RUIZHI_CODEX_CLIENT_VERSION/, "Windows build should allow explicit Codex client version when child-process execution is blocked");
+  assert.match(source, /patchOpenAIBundledPluginDescriptions\(resourcesDir, \{ log, sourceAppRoot: pinnedCodexAppRoot \}\)/, "Windows build should restore bundled plugin resources from the active source app root");
+});
+
+test("windows packaging can skip rcedit icon patching in restricted environments", () => {
+  const source = read("scripts/build-windows.mjs");
+
+  assert.match(source, /RUIZHI_SKIP_EXE_ICON_PATCH/, "Windows build should expose an escape hatch for rcedit spawn restrictions");
+  assert.match(source, /跳过主程序图标替换/, "Windows build should log when exe icon patching is skipped");
+});
+
+test("windows packaging can use an isolated work directory", () => {
+  const source = read("scripts/build-windows.mjs");
+
+  assert.match(source, /RUIZHI_WINDOWS_WORK_SUBDIR/, "Windows build should allow an isolated work directory");
+  assert.match(source, /resolveProjectPath\(process\.env\.RUIZHI_WINDOWS_WORK_SUBDIR/, "Windows work directory override should stay inside the project");
+  assert.match(source, /RUIZHI_WINDOWS_INSTALLER_INPUT_SUBDIR/, "Windows build should allow an isolated installer input directory");
+  assert.match(source, /RUIZHI_WINDOWS_INSTALLER_OUT_SUBDIR/, "Windows build should allow an isolated installer output directory");
+});
+
+test("runtime bundle validation cleanup is best effort", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+
+  assert.match(source, /function removeValidationDirBestEffort\(/, "Runtime validation should isolate cleanup failures");
+  assert.doesNotMatch(source, /fs\.rmSync\(extractDir, \{ recursive: true, force: true \}\);/, "Runtime validation should not let temp cleanup failure mask validation result");
 });
 
 test("packaging bundles current OpenAI plugin metadata without writing config defaults", () => {

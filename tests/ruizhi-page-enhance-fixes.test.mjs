@@ -14,6 +14,32 @@ function read(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
 }
 
+function parseVersion(version) {
+  return String(version).split(".").map((part) => Number.parseInt(part, 10));
+}
+
+function compareVersions(left, right) {
+  const leftParts = parseVersion(left);
+  const rightParts = parseVersion(right);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const leftPart = leftParts[index] || 0;
+    const rightPart = rightParts[index] || 0;
+    if (leftPart !== rightPart) {
+      return leftPart - rightPart;
+    }
+  }
+  return 0;
+}
+
+test("Windows release version advances past the pre-plugin-menu installer", () => {
+  const config = JSON.parse(read("config/rj-codex.json"));
+
+  assert.ok(
+    compareVersions(config.version, "0.2.2") > 0,
+    "Windows installer version must advance so machines with the old 0.2.2 package receive the native Plugins menu patch",
+  );
+});
+
 test("renderer wires thread sorting and robust DOM adapters", () => {
   const source = read("resources/renderer/ruizhi-page-enhance.js");
 
@@ -368,6 +394,14 @@ test("windows packaging patches the native Plugins menu independently from tray 
   assert.match(source, /\\`插件\\`,m,\{index:1\}/, "Windows native menu patch should add a Plugins label under Settings");
   assert.match(source, /label:\\`插件\\`,submenu:\[\]/, "Windows native menu patch should add a top-level Plugins menu");
   assert.match(source, /r\(e,\\`\/plugins\\`\)/, "Windows native menu patch should open /plugins");
+});
+
+test("windows packaging keeps the native menu bar visible on BrowserWindow", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+
+  assert.match(source, /autoHideMenuBar:\s*!1/, "Windows BrowserWindow menu bar must not be hidden after native menu entries are added");
+  assert.match(source, /setMenuBarVisibility\(!0\)/, "Windows BrowserWindow should keep its menu bar visible");
+  assert.doesNotMatch(source, /\.removeMenu\(\)/, "Windows BrowserWindow menu must not be removed after native menu entries are added");
 });
 
 test("windows packaging does not copy source Logs into build output", () => {

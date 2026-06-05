@@ -148,7 +148,7 @@ test("preload update integration leaves the native settings menu item untouched"
   }
 });
 
-test("first launch skips the APIKey prompt when Codex config already exists", () => {
+test("first launch auth status remains available without patching the native login route", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -158,7 +158,13 @@ test("first launch skips the APIKey prompt when Codex config already exists", ()
     assert.match(source, /config\.toml/, `${scriptPath} should treat config.toml as an existing Codex configuration marker`);
     assert.match(source, /RUIZHI_EXISTING_CODEX_CONFIG/, `${scriptPath} should preserve whether config.toml exists without mutating it`);
     assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from an API key or Codex config`);
-    assert.match(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} should skip the APIKey prompt when Codex config exists`);
+    assert.match(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} should keep reporting existing auth state`);
+    assert.doesNotMatch(source, /function patchLoginRoute\(/, `${scriptPath} should not patch Codex's login route`);
+    assert.doesNotMatch(source, /function patchOnboardingApiKeyTexts\(/, `${scriptPath} should not patch Codex's onboarding login content`);
+    assert.doesNotMatch(source, /\["electron\.onboarding\.login\.chatgpt\.signIn",/, `${scriptPath} should leave the native ChatGPT sign-in label untouched`);
+    assert.doesNotMatch(source, /\["electron\.onboarding\.login\.chatgptToken\./, `${scriptPath} should leave native token login messages untouched`);
+    assert.doesNotMatch(source, /\["electron\.onboarding\.login\.(google|microsoft)\./, `${scriptPath} should leave native third-party login messages untouched`);
+    assert.doesNotMatch(source, /login-with-chatgpt-url|readLoginWithChatgptUrl|ruizhiLoginWithChatgptUrl/, `${scriptPath} should not override native ChatGPT login URLs`);
   }
 
   for (const scriptPath of [
@@ -167,16 +173,52 @@ test("first launch skips the APIKey prompt when Codex config already exists", ()
     "overrides/windows-app/asar/.vite/build/preload.js",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /ruizhi:auth:get-sync/, `${scriptPath} should expose cached auth status before the renderer mounts`);
-    assert.match(source, /getCached:\(\)=>cachedAuthStatus/, `${scriptPath} should let the login bundle read cached auth status synchronously`);
+    assert.match(source, /ruizhi:auth:get-sync/, `${scriptPath} should keep exposing cached auth status to non-login UI`);
+    assert.match(source, /getCached:\(\)=>cachedAuthStatus/, `${scriptPath} should keep auth status available through the desktop bridge`);
+    assert.doesNotMatch(source, /ruizhi:auth:get-login-with-chatgpt-url|loginWithChatgptUrl|getLoginWithChatgptUrl/, `${scriptPath} should not expose login URL override hooks`);
   }
-
-  const loginRoute = read("overrides/windows-app/asar/webview/assets/login-route-CUyUF9yR.js");
-  assert.match(loginRoute, /window\.ruizhiDesktop\?\.auth\?\.getCached\?\.\(\)\?\.configured!==!0/);
-  assert.doesNotMatch(loginRoute, /\[H,U\]=\(0,G\.useState\)\(!0\)/);
 });
 
-test("bootstrap treats config.toml as user-owned except runtime provider URL repair", () => {
+test("page enhance installer skips Codex login pages", () => {
+  for (const scriptPath of [
+    "resources/renderer/ruizhi-page-enhance.js",
+    "overrides/windows-app/asar/.vite/build/preload.js",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /function isCodexLoginPage\(/, `${scriptPath} should detect native login documents`);
+    assert.match(source, /if \(isCodexLoginPage\(\)\) return null;/, `${scriptPath} should not install page enhance on login pages`);
+  }
+});
+
+test("packaging keeps archive locale labels native", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.doesNotMatch(source, /codex\.archiveInfo/, `${scriptPath} should not override Codex archive info labels`);
+    assert.doesNotMatch(source, /localTaskRow\.archive/, `${scriptPath} should not override Codex archive task labels`);
+    assert.doesNotMatch(source, /settings\.dataControls\.archivedChats/, `${scriptPath} should not override archived chats settings labels`);
+    assert.doesNotMatch(source, /sidebarElectron\.archive/, `${scriptPath} should not override sidebar archive labels`);
+    assert.doesNotMatch(source, /threadHeader\.archive/, `${scriptPath} should not override thread header archive labels`);
+  }
+});
+
+test("packaging patches onboarding continue button and build date badge", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /function ruizhiBuildDateLabel\(/, `${scriptPath} should compute the build-date label during packaging`);
+    assert.match(source, /锐智构建日期：\$\{ruizhiBuildDate\(\)\}/, `${scriptPath} should include the packaging date in the welcome badge`);
+    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.continue", "使用锐擎继续"\]/, `${scriptPath} should patch the ChatGPT continue button label`);
+    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.signIn\.streamlined", "使用锐擎继续"\]/, `${scriptPath} should patch the streamlined ChatGPT continue button label`);
+    assert.match(source, /\["electron\.onboarding\.login\.includedPlans\.welcomeV2", ruizhiBuildDateLabel\(\)\]/, `${scriptPath} should replace the ChatGPT plan badge with the build date`);
+  }
+});
+
+test("bootstrap treats config.toml as fully user-owned and read-only", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -188,13 +230,19 @@ test("bootstrap treats config.toml as user-owned except runtime provider URL rep
     assert.doesNotMatch(source, /mergeManagedConfig|stripManagedConfigConflicts|managedConfigSectionNames/, `${scriptPath} should not merge or rewrite config.toml`);
     assert.doesNotMatch(source, /configTemplateLines/, `${scriptPath} should not template config.toml defaults`);
     assert.doesNotMatch(source, /fs\.writeFileSync\(target,\s*next,\s*"utf8"\)/, `${scriptPath} should not patch sandbox settings into config.toml`);
+    assert.doesNotMatch(source, /fs\.writeFileSync\(configPath/, `${scriptPath} should not write config.toml`);
+    assert.doesNotMatch(source, /fs\.copyFileSync\(configPath/, `${scriptPath} should not back up config.toml for mutation`);
+    assert.doesNotMatch(source, /syncRuntimeModelProviderConfig|setTomlProviderBaseUrl|bak-provider/, `${scriptPath} should not repair provider URLs in config.toml`);
   }
 
-  for (const scriptPath of ["scripts/build-windows.mjs", "scripts/build-macos.mjs", "scripts/windows-asar-overrides.mjs"]) {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "overrides/windows-app/asar/.vite/build/bootstrap.js",
+  ]) {
     const source = read(scriptPath);
-    assert.match(source, /syncRuntimeModelProviderConfig/, `${scriptPath} should repair the model provider base_url`);
-    assert.match(source, /bak-provider/, `${scriptPath} should back up config.toml before provider URL repair`);
-    assert.match(source, /setTomlProviderBaseUrl/, `${scriptPath} should limit config.toml writes to provider base_url`);
+    assert.match(source, /path\.join\(home,["`]\.codex["`],["`]config\.toml["`]\)/, `${scriptPath} should read only ~/.codex/config.toml`);
+    assert.doesNotMatch(source, /path\.join\(authHome\(\),["`]config\.toml["`]\)|path\.join\(codexHome,["`]config\.toml["`]\)/, `${scriptPath} should not resolve config.toml through RUIZHI_HOME`);
   }
 });
 
@@ -234,6 +282,29 @@ test("page enhance bootstrap carries the Ruizhi app version for settings display
     const source = read(scriptPath);
     assert.match(source, /appVersion[:,]/, `${scriptPath} should pass appVersion to page enhance`);
   }
+});
+
+test("macOS bootstrap patch tolerates updater failure handler alias changes", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /bootstrapFailureHandlerPattern/, "macOS bootstrap patch should match the updater failure handler by shape");
+  assert.match(source, /failureHandlerName/, "macOS bootstrap patch should capture the minified failure handler name");
+  assert.match(source, /electronName/, "macOS bootstrap patch should capture the Electron module alias");
+  assert.match(source, /bootstrapInitCode\(electronName\)/, "macOS init bootstrap should receive the captured Electron alias");
+  assert.match(source, /\$\{electronName\}\.app\.commandLine\.appendSwitch/, "macOS init bootstrap should use the captured Electron alias");
+  assert.match(source, /bootstrapForceUpdateCode\(electronName\)/, "macOS updater bootstrap should receive the captured Electron alias");
+  assert.match(source, /\$\{electronName\}\.app\.isPackaged/, "macOS updater bootstrap should use the captured Electron alias");
+  assert.match(source, /updaterInitializePattern/, "macOS bootstrap patch should match updater initialization by shape");
+  assert.match(source, /runMainAppStartup/, "macOS bootstrap patch should keep the main app startup import boundary");
+});
+
+test("macOS fuse patch resolves renamed Electron framework binaries", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /function findElectronFrameworkExecutable\(/, "macOS fuse patch should resolve the framework binary itself");
+  assert.match(source, /Framework\\\.framework/, "macOS fuse patch should inspect framework bundles");
+  assert.match(source, /temporaryFuseExecutable/, "macOS fuse patch should avoid electron-fuses .app path rewriting");
+  assert.match(source, /flipFuses\(temporaryFuseExecutable/, "macOS fuse patch should flip a temporary framework copy");
 });
 
 test("enhance service returns appVersion and retires destructive session routes", async () => {
@@ -308,6 +379,15 @@ test("macOS application menu keeps native Settings and Automations actions visib
   assert.match(source, /enabled=!0/);
 });
 
+test("macOS application menu patch tolerates main bundle minifier alias changes", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /settingsMenuMatch/, "macOS menu patch should capture settings navigation aliases");
+  assert.match(source, /setApplicationMenuMatch/, "macOS menu patch should capture setApplicationMenu aliases");
+  assert.match(source, /MenuItem:\$\{electronName\}\.MenuItem/, "macOS menu patch should use the captured Electron alias");
+  assert.match(source, /settingsRoute:\$\{settingsRouteName\}/, "macOS menu patch should use the captured settings route alias");
+});
+
 test("packaging opens Codex native settings gates including in-app Browser", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
@@ -322,6 +402,56 @@ test("packaging opens Codex native settings gates including in-app Browser", () 
     assert.doesNotMatch(source, /1506311413/, `${scriptPath} should leave Computer Use controls to Codex defaults`);
     assert.doesNotMatch(source, /410065390/, `${scriptPath} should leave Google Chrome controls to Codex defaults`);
     assert.doesNotMatch(source, /querySelectorAll\([^)]*(自动化|Automations|settingsPage|general-settings)/, `${scriptPath} should not fake native sidebar/profile buttons with DOM insertion`);
+  }
+});
+
+test("packaging plugin auth gate patch tolerates bundle and minifier alias changes", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /pluginAccountGatePattern/, `${scriptPath} should locate the plugin auth gate by code shape`);
+    assert.match(source, /findOneFileByContent/, `${scriptPath} should not depend on a fixed plugin auth bundle name`);
+    assert.match(source, /function \$1\(e\)\{return !1\}/, `${scriptPath} should preserve the captured minified function name`);
+  }
+});
+
+test("packaging native feature gate patch tolerates Statsig hook alias changes", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /statsigGateSourcePattern/, `${scriptPath} should match the Statsig hook call with a regex`);
+    assert.match(source, /targetGateMatch\[1\]/, `${scriptPath} should capture the minified hook alias before patching`);
+    assert.match(source, /\$\{gateHook\}\(Z,e\)/, `${scriptPath} should call the captured hook alias after the Ruizhi override`);
+  }
+});
+
+test("packaging app sunset gate patch tolerates feature gate alias changes", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.ok(source.includes("appSunset\\.title[\\s\\S]*`2929582856`"), `${scriptPath} should locate the app sunset bundle by content`);
+    assert.ok(source.includes("/if\\(([A-Za-z_$][\\w$]*)\\(`2929582856`\\)\\)\\{/"), `${scriptPath} should match the minified feature gate alias`);
+    assert.ok(source.includes("if(false&&$1(`2929582856`)){"), `${scriptPath} should disable the captured app sunset gate`);
+  }
+});
+
+test("packaging model availability patch tolerates model bundle splits", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /modelAvailabilityAllowlistPattern/, `${scriptPath} should locate model filtering by code shape`);
+    assert.match(source, /models-and-reasoning-efforts/, `${scriptPath} should allow the current split model helper bundle`);
+    assert.match(source, /"!1"/, `${scriptPath} should disable the hidden-model allowlist flag`);
+    assert.doesNotMatch(source, /\(\?:\[\^;\]\*\?,\)\*/, `${scriptPath} should avoid broad backtracking in model bundle scans`);
   }
 });
 
@@ -347,11 +477,41 @@ test("packaging enables Codex native Browser desktop availability without Browse
   assert.equal(mainBundle, undefined, "Windows overrides should rely on build-time main bundle patching");
 
   assert.equal(
-    fs.readdirSync(path.join(projectRoot, "overrides", "windows-app", "asar", "webview", "assets"))
+    (fs.existsSync(path.join(projectRoot, "overrides", "windows-app", "asar", "webview", "assets"))
+      ? fs.readdirSync(path.join(projectRoot, "overrides", "windows-app", "asar", "webview", "assets"))
+      : [])
       .filter((name) => /^browser-use-settings-.*\.js$/.test(name)).length,
     0,
     "Windows overrides should not carry stale Browser settings asset patches"
   );
+});
+
+test("packaging keeps ChatGPT authentication URLs in the system browser", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchChatGptAuthExternalBrowser/, `${scriptPath} should patch auth browser dispatch`);
+    assert.match(source, /ruizhiIsChatGptAuthUrl/, `${scriptPath} should detect ChatGPT OAuth URLs explicitly`);
+    assert.match(source, /useExternalBrowser:!0/, `${scriptPath} should force auth URLs to the OS browser`);
+  }
+});
+
+test("packaging Browser desktop availability patch tolerates main bundle minifier alias changes", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /nativeBrowserDesktopFeatureAvailabilityPattern/, `${scriptPath} should match desktop feature availability with a regex`);
+    assert.match(source, /const \[, functionName, buildFlavorName/, `${scriptPath} should capture the minified function aliases`);
+    assert.match(source, /returnExpression/, `${scriptPath} should capture the full availability return expression`);
+    assert.match(source, /return ruizhiNativeBrowserDesktopFeatureAvailability\(\$\{returnExpression\}\)/, `${scriptPath} should wrap the captured availability result`);
+    assert.doesNotMatch(source, /\[\\s\\S\]\*\?\)\\}function/, `${scriptPath} should avoid broad cross-function regex backtracking`);
+  }
 });
 
 test("packaging uses current OpenAI bundled plugin ids for Browser automation", () => {

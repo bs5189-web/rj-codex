@@ -207,8 +207,8 @@ function ruizhiForcePluginInstallEnabled() {
 function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const targetGateSource = "function Ue(e){return nt(),i(Z,e)}";
-  const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && fs.readFileSync(filePath, "utf8").includes(targetGateSource));
+  const statsigGateSourcePattern = /function Ue\(e\)\{return nt\(\),([A-Za-z_$][\w$]*)\(Z,e\)\}/;
+  const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && statsigGateSourcePattern.test(fs.readFileSync(filePath, "utf8")));
   if (candidates.length === 0) {
     log("已跳过 Codex 原生 webview gate 补丁（statsig 模块结构已变化，注入点不存在）");
     return;
@@ -223,11 +223,12 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
     return;
   }
   const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
-  const from = targetGateSource;
-  if (!original.includes(from)) {
+  const targetGateMatch = original.match(statsigGateSourcePattern);
+  if (!targetGateMatch) {
     throw new Error("Codex 原生 webview gate 补丁点不存在");
   }
-  const next = original.replace(from, `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||i(Z,e)}`);
+  const gateHook = targetGateMatch[1];
+  const next = original.replace(statsigGateSourcePattern, `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||${gateHook}(Z,e)}`);
   fs.writeFileSync(statsigFile, next, "utf8");
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
 }
@@ -238,6 +239,21 @@ function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
   }
 
   const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const nativeBrowserDesktopFeatureAvailabilityPattern = /function ([A-Za-z_$][\w$]*)\(e,\{buildFlavor:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\.resolve\(\),env:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.default\.env,platform:([A-Za-z_$][\w$]*)=\6\.default\.platform\}=\{\}\)\{let ([A-Za-z_$][\w$]*)=\7===`win32`&&\5\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:e,([A-Za-z_$][\w$]*)=\2===\3\.\4\.Dev\?([A-Za-z_$][\w$]*)\(\5\):null;return /;
+  const availabilityMatch = source.match(nativeBrowserDesktopFeatureAvailabilityPattern);
+  if (availabilityMatch) {
+    const [, functionName, buildFlavorName, buildFlavorObject, buildFlavorKey, envName, envObject, platformName, baseName, overrideName, overrideFunctionName] = availabilityMatch;
+    const functionEnd = source.indexOf("}function ", availabilityMatch.index + availabilityMatch[0].length);
+    if (functionEnd === -1) {
+      throw new Error("补丁点不存在：Codex 原生 Browser 桌面能力函数边界");
+    }
+    const originalFunction = source.slice(availabilityMatch.index, functionEnd + 1);
+    const returnExpression = source.slice(availabilityMatch.index + availabilityMatch[0].length, functionEnd);
+    return source.replace(
+      originalFunction,
+      `${helper}function ${functionName}(e,{buildFlavor:${buildFlavorName}=${buildFlavorObject}.${buildFlavorKey}.resolve(),env:${envName}=${envObject}.default.env,platform:${platformName}=${envObject}.default.platform}={}){let ${baseName}=${platformName}===\`win32\`&&${envName}.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,${overrideName}=${buildFlavorName}===${buildFlavorObject}.${buildFlavorKey}.Dev?${overrideFunctionName}(${envName}):null;return ruizhiNativeBrowserDesktopFeatureAvailability(${returnExpression})}`
+    );
+  }
   const replacements = [
     [
       "function xe(e,{buildFlavor:n=t.O.resolve(),env:r=f.default.env,platform:i=f.default.platform}={}){let a=i===`win32`&&r.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,o=n===t.O.Dev?Se(r):null;return o==null?a:{...a,...o}}",
@@ -368,6 +384,42 @@ function patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, options =
   }
   fs.writeFileSync(mainFile[0], patched, "utf8");
   log(`已打开 Codex 原生 Browser 桌面能力：${path.basename(mainFile[0])}`);
+}
+
+export function patchChatGptAuthExternalBrowserSource(source) {
+  if (source.includes("function ruizhiIsChatGptAuthUrl(")) {
+    return source;
+  }
+
+  const helper = "function ruizhiIsChatGptAuthUrl(e){try{if(typeof e!==`string`)return!1;let t=new URL(e);return(t.protocol===`https:`||t.protocol===`http:`)&&t.pathname===`/oauth/authorize`&&t.searchParams.get(`client_id`)===`app_EMoamEEZ73f0CkXaXp7hrann`}catch{return!1}}";
+  const openInBrowserPattern = /case`open-in-browser`:\{let\{url:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*);if\(typeof \1==`string`&&this\.windowManager\.queueCodexDeepLinkUrl\(\1,\2\.originHostId\)\)break;if\(\2\.useExternalBrowser===!0\)\{/;
+  if (!openInBrowserPattern.test(source)) {
+    throw new Error("补丁点不存在：ChatGPT 认证链接外部浏览器打开");
+  }
+
+  return source.replace(openInBrowserPattern, (match, urlName, messageName) => {
+    return `${helper}case\`open-in-browser\`:{let{url:${urlName}}=${messageName};if(ruizhiIsChatGptAuthUrl(${urlName}))${messageName}={...${messageName},useExternalBrowser:!0};if(typeof ${urlName}==\`string\`&&this.windowManager.queueCodexDeepLinkUrl(${urlName},${messageName}.originHostId))break;if(${messageName}.useExternalBrowser===!0){`;
+  });
+}
+
+function patchChatGptAuthExternalBrowser(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const mainFile = fs.readdirSync(buildDir)
+    .filter((name) => /^main-.*\.js$/.test(name))
+    .map((name) => path.join(buildDir, name));
+  if (mainFile.length !== 1) {
+    throw new Error(`Electron main bundle 匹配数量异常：${mainFile.length}`);
+  }
+
+  const source = fs.readFileSync(mainFile[0], "utf8");
+  const patched = patchChatGptAuthExternalBrowserSource(source);
+  if (patched === source) {
+    log(`已存在 ChatGPT 认证链接外部浏览器补丁：${path.basename(mainFile[0])}`);
+    return;
+  }
+  fs.writeFileSync(mainFile[0], patched, "utf8");
+  log(`已强制 ChatGPT 认证链接使用系统浏览器：${path.basename(mainFile[0])}`);
 }
 
 export function patchBrowserNativePipeDiagnosticsSource(source) {
@@ -2211,49 +2263,9 @@ function bridgeBootstrapBlock(config) {
     }
     syncModelCache();
     const runtimeBridgeBaseUrl=startModelBridge();
-    syncRuntimeModelProviderConfig(runtimeBridgeBaseUrl);
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
-    function syncRuntimeModelProviderConfig(baseUrl){
-      if(!baseUrl)return;
-      const configPath=path.join(codexHome,"config.toml");
-      const providerIds=["ruijie-uniapi","ruijie-newapi"];
-      let source="";
-      try{
-        source=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
-      }catch(error){
-        console.warn("ruizhi model provider config read failed",error);
-        return;
-      }
-      let next=source;
-      for(const providerId of providerIds)next=setTomlProviderBaseUrl(next,providerId,baseUrl);
-      if(next===source)return;
-      try{
-        fs.mkdirSync(path.dirname(configPath),{recursive:true});
-        if(source){
-          const stamp=new Date().toISOString().replace(/[:.]/g,"-");
-          fs.copyFileSync(configPath,\`\${configPath}.bak-provider-\${stamp}\`);
-        }
-        fs.writeFileSync(configPath,next,"utf8");
-      }catch(error){
-        console.warn("ruizhi model provider config sync failed",error);
-      }
-    }
-    function setTomlProviderBaseUrl(source,providerId,baseUrl){
-      const header=\`[model_providers.\${providerId}]\`;
-      const escapedUrl=String(baseUrl).replace(/\\\\/g,"\\\\\\\\").replace(/"/g,'\\\\"');
-      const start=source.indexOf(header);
-      if(start<0)return source.trimEnd()+\`\\n\\n\${header}\\nname = "锐擎API"\\nbase_url = "\${escapedUrl}"\\n\`;
-      const rest=source.slice(start+header.length);
-      const relativeEnd=rest.search(/\\n\\[[^\\n]+\\]/);
-      const end=relativeEnd<0?source.length:start+header.length+relativeEnd;
-      const section=source.slice(start,end);
-      const nextSection=/\\nbase_url\\s*=\\s*"[^"]*"/.test(section)
-        ? section.replace(/\\nbase_url\\s*=\\s*"[^"]*"/,\`\\nbase_url = "\${escapedUrl}"\`)
-        : section.trimEnd()+\`\\nbase_url = "\${escapedUrl}"\\n\`;
-      return source.slice(0,start)+nextSection+source.slice(end);
-    }
 /* ruizhi-model-bridge:end */
 `;
 }
@@ -2350,7 +2362,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existing=fs\.existsSync\(configPath\)[\s\S]*?if\(next!==existing\)fs\.writeFileSync\(configPath,next,"utf8"\);\n/
   ];
   const readOnlyConfigCheck = [
-    "    const configPath=path.join(codexHome,\"config.toml\");",
+    "    const configPath=path.join(home,\".codex\",\"config.toml\");",
     "    const existingCodexConfig=fs.existsSync(configPath);",
     "    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?\"1\":\"0\";"
   ].join("\n");
@@ -2653,6 +2665,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeWebviewFeatureGates(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });
+  patchChatGptAuthExternalBrowser(extractedAppDir, { log });
   patchBrowserNativePipeDiagnostics(extractedAppDir, { log });
   patchBrowserNativePipePeerAuthorization(extractedAppDir, { log });
   if (options.resourcesDir) {

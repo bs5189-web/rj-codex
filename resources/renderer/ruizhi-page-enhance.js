@@ -3,6 +3,18 @@
   const window = env.window || globalScope.window;
   const document = env.document || window?.document || globalScope.document;
   if (!window || !document) return null;
+  function isCodexLoginPage() {
+    const locationText = [
+      window.location?.pathname,
+      window.location?.hash,
+      window.location?.href
+    ].filter(Boolean).join(" ");
+    if (/(^|[/?#])(login|onboarding|sign-?in)([/?#]|$)/i.test(locationText)) return true;
+    if (document.querySelector("[data-thread-find-target='conversation'],[data-app-action-sidebar-thread-row],nav[role='navigation']")) return false;
+    const bodyText = (document.body?.textContent || "").replace(/\s+/g, " ").trim();
+    return /\b(Welcome to Codex|Get started with Codex|Sign in with ChatGPT|Continue with ChatGPT|OpenAI API key)\b/i.test(bodyText);
+  }
+  if (isCodexLoginPage()) return null;
   if (env.ruizhiDesktop && !window.ruizhiDesktop) {
     try {
       window.ruizhiDesktop = env.ruizhiDesktop;

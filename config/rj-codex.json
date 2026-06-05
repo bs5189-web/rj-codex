@@ -21,9 +21,10 @@
     "manifestUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/windows/latest.yml",
     "downloadBaseUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/windows/",
     "macos": {
+      "enabled": false,
       "artifactName": "Ruizhi-macos-${version}-${arch}.${ext}",
-      "manifestUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/macos/latest.yml",
-      "downloadBaseUrl": "http://minio.rjagi.cn:9000/ai-ruizhi/updates/macos/"
+      "manifestUrl": "",
+      "downloadBaseUrl": ""
     },
     "requestTimeoutMs": 8000,
     "downloadTimeoutMs": 600000

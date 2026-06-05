@@ -49,6 +49,14 @@ function log(message) {
   console.log(`[ruizhi] ${message}`);
 }
 
+function ruizhiBuildDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function ruizhiBuildDateLabel() {
+  return `锐智构建日期：${ruizhiBuildDate()}`;
+}
+
 function assertInsideProject(targetPath) {
   const resolvedRoot = path.resolve(projectRoot).toLowerCase();
   const resolvedTarget = path.resolve(targetPath).toLowerCase();
@@ -442,15 +450,16 @@ function marketplaceSourceToken(name) {
 
 function patchPluginAccountGate() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const gradientFile = findOneFile(assetsDir, /^gradient-.*\.js$/, "插件账号模式 gate bundle");
+  const pluginAccountGatePattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e!==`chatgpt`\}/;
+  const gradientFile = findOneFileByContent(
+    assetsDir,
+    /\.js$/,
+    pluginAccountGatePattern,
+    "插件账号模式 gate bundle"
+  );
 
   writePatchedFile(gradientFile, (source) =>
-    replaceExact(
-      source,
-      "function e(e){return e!==`chatgpt`}",
-      "function e(e){return !1}",
-      "APIKey 模式插件置灰判断"
-    )
+    replaceRegex(source, pluginAccountGatePattern, "function $1(e){return !1}", "APIKey 模式插件置灰判断")
   );
 
   log(`已补丁插件账号模式 gate：${path.basename(gradientFile)}`);
@@ -458,19 +467,22 @@ function patchPluginAccountGate() {
 
 function patchNativeWebviewFeatureGates() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const targetGateSource = "function Ue(e){return nt(),i(Z,e)}";
-  const statsigFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, new RegExp(escapeRegExp(targetGateSource)), "Statsig webview gate bundle");
+  const statsigGateSourcePattern = /function Ue\(e\)\{return nt\(\),([A-Za-z_$][\w$]*)\(Z,e\)\}/;
+  const statsigFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, statsigGateSourcePattern, "Statsig webview gate bundle");
   const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const source = fs.readFileSync(statsigFile, "utf8");
   if (source.includes("ruizhiNativeFeatureGateValue")) {
     log("已存在 Codex 原生 webview gate 补丁");
     return;
   }
-  const patched = replaceExact(
-    source,
-    targetGateSource,
-    `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||i(Z,e)}`,
-    "Codex 原生 webview gate：自动化侧栏与设置菜单"
+  const targetGateMatch = source.match(statsigGateSourcePattern);
+  if (!targetGateMatch) {
+    throw new Error("Codex 原生 webview gate 补丁点不存在");
+  }
+  const gateHook = targetGateMatch[1];
+  const patched = source.replace(
+    statsigGateSourcePattern,
+    `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||${gateHook}(Z,e)}`
   );
   fs.writeFileSync(statsigFile, patched, "utf8");
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
@@ -482,6 +494,21 @@ function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
   }
 
   const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const nativeBrowserDesktopFeatureAvailabilityPattern = /function ([A-Za-z_$][\w$]*)\(e,\{buildFlavor:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\.resolve\(\),env:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.default\.env,platform:([A-Za-z_$][\w$]*)=\6\.default\.platform\}=\{\}\)\{let ([A-Za-z_$][\w$]*)=\7===`win32`&&\5\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:e,([A-Za-z_$][\w$]*)=\2===\3\.\4\.Dev\?([A-Za-z_$][\w$]*)\(\5\):null;return /;
+  const availabilityMatch = source.match(nativeBrowserDesktopFeatureAvailabilityPattern);
+  if (availabilityMatch) {
+    const [, functionName, buildFlavorName, buildFlavorObject, buildFlavorKey, envName, envObject, platformName, baseName, overrideName, overrideFunctionName] = availabilityMatch;
+    const functionEnd = source.indexOf("}function ", availabilityMatch.index + availabilityMatch[0].length);
+    if (functionEnd === -1) {
+      throw new Error("补丁点不存在：Codex 原生 Browser 桌面能力函数边界");
+    }
+    const originalFunction = source.slice(availabilityMatch.index, functionEnd + 1);
+    const returnExpression = source.slice(availabilityMatch.index + availabilityMatch[0].length, functionEnd);
+    return source.replace(
+      originalFunction,
+      `${helper}function ${functionName}(e,{buildFlavor:${buildFlavorName}=${buildFlavorObject}.${buildFlavorKey}.resolve(),env:${envName}=${envObject}.default.env,platform:${platformName}=${envObject}.default.platform}={}){let ${baseName}=${platformName}===\`win32\`&&${envName}.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,${overrideName}=${buildFlavorName}===${buildFlavorObject}.${buildFlavorKey}.Dev?${overrideFunctionName}(${envName}):null;return ruizhiNativeBrowserDesktopFeatureAvailability(${returnExpression})}`
+    );
+  }
   return replaceAnyExact(
     source,
     [
@@ -511,113 +538,33 @@ function patchNativeBrowserDesktopFeatureAvailability() {
   log(`已打开 Codex 原生 Browser 桌面能力：${path.basename(mainFile)}`);
 }
 
-function patchOnboardingApiKeyTexts() {
-  const assetsDir = path.join(extractedDir, "webview", "assets");
-  const onboardingFile = findOneFile(assetsDir, /^onboarding-login-content-.*\.js$/, "onboarding 登录内容 bundle");
+function patchChatGptAuthExternalBrowserSource(source) {
+  if (source.includes("function ruizhiIsChatGptAuthUrl(")) {
+    return source;
+  }
 
-  writePatchedFile(onboardingFile, (source) => {
-    let next = source;
-    next = replaceExact(next, "defaultMessage:`OpenAI API key`", "defaultMessage:`APIKey`", "APIKey 输入标题");
-    next = replaceAllIfPresent(next, "defaultMessage:`sk-...`", "defaultMessage:`请输入 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`sk-…`", "defaultMessage:`请输入 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Continue`", "defaultMessage:`登录`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Enter API key`", "defaultMessage:`输入 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Continue with ChatGPT`", "defaultMessage:`APIKey 登录`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Cancel sign-in`", "defaultMessage:`取消`");
-    const inputMatch = next.match(
-      /\(0,([A-Za-z_$][\w$]*\.jsx)\)\(`input`,\{autoFocus:!0,(?!type:`password`,)className:`mt-2 w-full rounded-xl border border-token-border bg-token-input-background px-4 py-2\.5 focus:ring-2 focus:ring-black\/15 focus:outline-none`,placeholder:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,onChange:[A-Za-z_$][\w$]*\}\)/
-    );
-    if (!inputMatch) {
-      throw new Error("补丁点不存在：APIKey 输入框使用密码类型");
-    }
-    const jsxRuntime = inputMatch[1];
-    next = replaceRegex(
-      next,
-      /(\(0,[A-Za-z_$][\w$]*\.jsx\)\(`input`,\{autoFocus:!0,)(?!type:`password`,)(className:`mt-2 w-full rounded-xl border border-token-border bg-token-input-background px-4 py-2\.5 focus:ring-2 focus:ring-black\/15 focus:outline-none`,placeholder:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,onChange:[A-Za-z_$][\w$]*\}\))/,
-      "$1type:`password`,$2",
-      "APIKey 输入框使用密码类型"
-    );
-    next = replaceRegex(
-      next,
-      /children:\[([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\]\}\),t\[23\]=\1,t\[24\]=\2,t\[25\]=([A-Za-z_$][\w$]*)\):\3=t\[25\],\3\}/,
-      `children:[$1,(0,${jsxRuntime})(\`a\`,{href:\`${config.openai.tokenUrl}\`,target:\`_blank\`,rel:\`noreferrer\`,className:\`text-sm text-token-text-link-foreground hover:underline\`,children:\`获取锐擎API Key\`}),$2]}),t[23]=$1,t[24]=$2,t[25]=$3):$3=t[25],$3}`,
-      "APIKey 表单获取链接"
-    );
-    return next;
+  const helper = "function ruizhiIsChatGptAuthUrl(e){try{if(typeof e!==`string`)return!1;let t=new URL(e);return(t.protocol===`https:`||t.protocol===`http:`)&&t.pathname===`/oauth/authorize`&&t.searchParams.get(`client_id`)===`app_EMoamEEZ73f0CkXaXp7hrann`}catch{return!1}}";
+  const openInBrowserPattern = /case`open-in-browser`:\{let\{url:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*);if\(typeof \1==`string`&&this\.windowManager\.queueCodexDeepLinkUrl\(\1,\2\.originHostId\)\)break;if\(\2\.useExternalBrowser===!0\)\{/;
+  if (!openInBrowserPattern.test(source)) {
+    throw new Error("补丁点不存在：ChatGPT 认证链接外部浏览器打开");
+  }
+
+  return source.replace(openInBrowserPattern, (match, urlName, messageName) => {
+    return `${helper}case\`open-in-browser\`:{let{url:${urlName}}=${messageName};if(ruizhiIsChatGptAuthUrl(${urlName}))${messageName}={...${messageName},useExternalBrowser:!0};if(typeof ${urlName}==\`string\`&&this.windowManager.queueCodexDeepLinkUrl(${urlName},${messageName}.originHostId))break;if(${messageName}.useExternalBrowser===!0){`;
   });
-
-  log(`已补丁 APIKey 登录文案：${path.basename(onboardingFile)}`);
 }
 
-function patchLoginRoute() {
-  const assetsDir = path.join(extractedDir, "webview", "assets");
-  const loginRouteFile = findOneFile(assetsDir, /^login-route-.*\.js$/, "登录路由 bundle");
-
-  writePatchedFile(loginRouteFile, (source) => {
-    let next = source;
-
-    next = replaceAnyExact(
-      next,
-      [
-        [",[F,z]=(0,G.useState)(!1),[H,U]=", ",[F,z]=(0,G.useState)(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),[H,U]="],
-        [",[f,g]=(0,G.useState)(!1),[E,D]=", ",[f,g]=(0,G.useState)(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),[E,D]="],
-        [",[H,U]=(0,G.useState)(!1),[W,le]=", ",[H,U]=(0,G.useState)(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),[W,le]="]
-      ],
-      "桌面登录页根据已有 Codex 配置决定是否展示 APIKey 表单"
-    );
-
-    next = replaceAnyExact(
-      next,
-      [
-        ["ce=()=>{F&&Z(`api_key_cancel`),z(!1),Y(!1),q(``)}", "ce=()=>{F&&Z(`api_key_cancel`),z(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),Y(!1),q(``)}"],
-        ["g=()=>{o(!1),s(!1)}", "g=()=>{o(!1),s(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0)}"],
-        ["de=()=>{U(!1),X(!1),J(``)}", "de=()=>{U(window.ruizhiDesktop?.auth?.getCached?.()?.configured!==!0),X(!1),J(``)}"]
-      ],
-      "APIKey 表单取消后遵循已有 Codex 配置状态"
-    );
-
-    next = replaceAnyExact(
-      next,
-      [
-        ["let g=h;if(a&&!r){", "let g=!1;if(a&&!r){"],
-        ["let _=g;if(a&&!r){", "let _=!1;if(a&&!r){"]
-      ],
-      "隐藏 ChatGPT 方案徽标"
-    );
-    next = replaceAllIfPresent(next, "https://platform.openai.com/api-keys", config.openai.tokenUrl);
-    next = replaceAllIfPresent(next, "defaultMessage:`Welcome to Codex`", "defaultMessage:`欢迎使用锐智`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Get started with Codex`", "defaultMessage:`使用 APIKey 登录`");
-    next = replaceAllIfPresent(next, "defaultMessage:`The best way to build with agents`", "defaultMessage:`输入 APIKey 开始使用`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Sign in with ChatGPT`", "defaultMessage:`APIKey 登录`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Continue with ChatGPT`", "defaultMessage:`APIKey 登录`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Sign in another way`", "defaultMessage:`输入 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Sign up`", "defaultMessage:`注册入口已关闭`");
-    next = replaceAllIfPresent(next, "defaultMessage:`OpenAI API key`", "defaultMessage:`APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Enter your OpenAI API key`", "defaultMessage:`输入 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`sk-...`", "defaultMessage:`请输入 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`sk-…`", "defaultMessage:`请输入 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Get API Key`", "defaultMessage:`获取锐擎API Key`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Cloud tasks disabled with API key`", "defaultMessage:`请使用 APIKey 登录`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Use API Key`", "defaultMessage:`使用 APIKey`");
-    next = replaceAllIfPresent(next, "defaultMessage:`Cancel`", "defaultMessage:`清空`");
-    next = replaceAllIfPresent(next, "defaultMessage:`OK`", "defaultMessage:`登录`");
-    next = replaceRegexAll(
-      next,
-      /try\{await ([A-Za-z_$][\w$]*)\(`login-with-api-key`,\{hostId:([A-Za-z_$][\w$]*),apiKey:([A-Za-z_$][\w$]*)\}\)([),;])/g,
-      "try{if(!window.ruizhiDesktop?.auth?.setAndTest)throw new Error(`APIKey 校验模块未加载`);const ruizhiResult=await window.ruizhiDesktop.auth.setAndTest($3);if(!ruizhiResult?.ok)throw new Error(ruizhiResult?.error||`APIKey 校验失败`);const ruizhiApiKey=ruizhiResult.apiKey||$3;await $1(`login-with-api-key`,{hostId:$2,apiKey:ruizhiApiKey})$4",
-      "登录页 APIKey 提交前校验"
-    );
-    next = replaceRegex(
-      next,
-      /(\(0,[A-Za-z_$][\w$]*\.jsx\)\(`input`,\{ref:[A-Za-z_$][\w$]*,)(?!type:`password`,)(className:`mt-4 w-full rounded-lg border border-token-border bg-token-input-background px-3 py-2 text-sm text-token-foreground focus:border-token-focus-border focus:outline-none`,placeholder:[A-Za-z_$][\w$]*,value:[A-Za-z_$][\w$]*,onChange:[A-Za-z_$][\w$]*,onFocus:[A-Za-z_$][\w$]*\}\))/,
-      "$1type:`password`,$2",
-      "退出登录页 APIKey 输入框使用密码类型"
-    );
-
-    return next;
-  });
-
-  log(`已补丁登录路由：${path.basename(loginRouteFile)}`);
+function patchChatGptAuthExternalBrowser() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchChatGptAuthExternalBrowserSource(source);
+  if (patched === source) {
+    log(`已存在 ChatGPT 认证链接外部浏览器补丁：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已强制 ChatGPT 认证链接使用系统浏览器：${path.basename(mainFile)}`);
 }
 
 function replaceLocaleMessage(source, key, value) {
@@ -639,54 +586,9 @@ function patchWebviewLocales() {
   }
 
   const replacements = new Map([
-    ["codex.archiveInfo.electron", "查看已删除的聊天：{settingsLink}"],
-    ["codex.archiveInfo.extension", "在你的 .codex 文件夹中查看已删除的聊天。"],
-    ["codex.gallery.dropdowns.submenu.tertiary", "删除"],
-    ["codex.localTaskRow.archiveTask", "删除对话"],
-    ["electron.onboarding.login.apikey.cancel", "清空"],
-    ["electron.onboarding.login.apikey.continue", "登录"],
-    ["electron.onboarding.login.apikey.label", "APIKey"],
-    ["electron.onboarding.login.apikey.open", "输入 APIKey"],
-    ["electron.onboarding.login.apikey.open.welcomeV2", "输入 APIKey"],
-    ["electron.onboarding.login.apikey.placeholder", "请输入 APIKey"],
-    ["electron.onboarding.login.chatgpt.cancel", "取消"],
-    ["electron.onboarding.login.chatgpt.cancel.welcomeV2", "取消"],
-    ["electron.onboarding.login.chatgpt.continue", "APIKey 登录"],
-    ["electron.onboarding.login.chatgpt.signIn", "APIKey 登录"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "APIKey 登录"],
-    ["electron.onboarding.login.includedPlans.welcomeV2", ""],
-    ["electron.onboarding.login.signup.welcomeV2", "注册入口已关闭"],
-    ["electron.onboarding.login.subtitle", "输入 APIKey 开始使用"],
-    ["electron.onboarding.login.title", "欢迎使用锐智"],
-    ["electron.onboarding.login.welcomeV2.title", "使用 APIKey 登录"],
-    ["electron.onboarding.login.welcomeV2.title.streamlined", "欢迎使用锐智"],
-    ["localTaskRow.archiveError", "无法删除对话"],
-    ["settings.dataControls.archivedChats.empty", "暂无已删除的聊天。"],
-    ["settings.dataControls.archivedChats.error", "无法加载已删除的聊天。"],
-    ["settings.dataControls.archivedChats.loading", "正在加载已删除的聊天…"],
-    ["settings.dataControls.archivedChats.unarchive", "恢复"],
-    ["settings.dataControls.archivedChats.unarchiveError", "无法恢复聊天"],
-    ["settings.dataControls.archivedChats.unarchiveSuccessPlain", "对话已恢复。"],
-    ["settings.nav.data-controls", "已删除对话"],
-    ["settings.section.data-controls", "已删除对话"],
-    ["sidebarElectron.archiveProjectThreads", "删除对话"],
-    ["sidebarElectron.archiveProjectThreads.archiving", "正在删除…"],
-    ["sidebarElectron.archiveProjectThreads.confirm", "全部删除"],
-    ["sidebarElectron.archiveProjectThreads.confirmSubtitle", "这会将 {projectLabel} 中的对话移到已删除对话。之后你可以在那里恢复它们"],
-    ["sidebarElectron.archiveProjectThreads.confirmTitle", "{count, plural, one {删除 # 个对话？} other {删除 # 个对话？}}"],
-    ["sidebarElectron.archiveProjectThreads.error", "无法删除 {projectLabel} 中的活跃对话"],
-    ["sidebarElectron.archiveProjectThreads.partialError", "已删除 {projectLabel} 中的 {successCount, plural, one {# 个对话} other {# 个对话}}；{failedCount} 个失败"],
-    ["sidebarElectron.archiveProjectThreads.success", "已删除 {count, plural, one {# 个对话} other {# 个对话}}"],
-    ["sidebarElectron.archiveRemoteProjectThreads", "删除对话"],
-    ["sidebarElectron.archiveThread", "删除对话"],
-    ["sidebarElectron.archiveThreadError", "无法删除对话"],
-    ["threadHeader.archiveConfirmConfirm", "删除"],
-    ["threadHeader.archiveConfirmHeartbeatConfirm", "删除并移除"],
-    ["threadHeader.archiveConfirmHeartbeatSubtitleNamed", "此对话有一个正在运行的心跳自动化：{name}。删除对话也会将其移除并停止后续运行。"],
-    ["threadHeader.archiveConfirmHeartbeatSubtitleUnnamed", "此对话有一个正在运行的心跳自动化。删除对话也会将其移除并停止后续运行。"],
-    ["threadHeader.archiveConfirmHeartbeatTitle", "删除对话并移除自动化？"],
-    ["threadHeader.archiveConfirmSubtitle", "稍后可在已删除对话中恢复。"],
-    ["threadHeader.archiveConfirmTitle", "删除对话？"]
+    ["electron.onboarding.login.chatgpt.continue", "使用锐擎继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"],
+    ["electron.onboarding.login.includedPlans.welcomeV2", ruizhiBuildDateLabel()]
   ]);
 
   for (const localeFile of localeFiles) {
@@ -863,18 +765,19 @@ function patchModelAvailabilityAllowlist() {
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
+  const modelAvailabilityAllowlistPattern = /&&[A-Za-z_$][\w$]*!==`amazonBedrock`/;
   const modelSettingsFile = findOneFileByContent(
     assetsDir,
-    /^(use-model-settings|model-queries)-.*\.js$/,
-    /useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`/,
+    /^(use-model-settings|model-queries|models-and-reasoning-efforts)-.*\.js$/,
+    modelAvailabilityAllowlistPattern,
     "model settings bundle"
   );
 
   writePatchedFile(modelSettingsFile, (source) =>
     replaceRegex(
       source,
-      /let ([A-Za-z_$][\w$]*)=[A-Za-z_$][\w$]*\.useHiddenModels&&[A-Za-z_$][\w$]*!==`amazonBedrock`,([A-Za-z_$][\w$]*);/,
-      "let $1=!1,$2;",
+      /[A-Za-z_$][\w$]*(?:\.useHiddenModels)?&&[A-Za-z_$][\w$]*!==`amazonBedrock`/,
+      "!1",
       "禁用官方模型 available_models 白名单过滤"
     )
   );
@@ -1024,7 +927,6 @@ function ruizhiInit(){
     fs.mkdirSync(userData,{recursive:true});
     syncModelCache();
     const runtimeBridgeBaseUrl=startModelBridge();
-    syncRuntimeModelProviderConfig(runtimeBridgeBaseUrl);
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env[ruizhiHomeEnvName]=codexHome;
     process.env.CODEX_HOME=codexHome;
@@ -1167,49 +1069,6 @@ function ruizhiInit(){
       if(!fs.existsSync(target))return;
       const stamp=new Date().toISOString().replace(/[:.]/g,"-");
       fs.copyFileSync(target,\`\${target}.bak-\${stamp}\`);
-    }
-    function syncRuntimeModelProviderConfig(baseUrl){
-      if(!baseUrl)return;
-      const configPath=path.join(codexHome,"config.toml");
-      const providerIds=["ruijie-uniapi","ruijie-newapi"];
-      let source="";
-      try{
-        source=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
-      }catch(error){
-        console.warn("ruizhi model provider config read failed",error);
-        return;
-      }
-      let next=source;
-      for(const providerId of providerIds){
-        next=setTomlProviderBaseUrl(next,providerId,baseUrl);
-      }
-      if(next===source)return;
-      try{
-        fs.mkdirSync(path.dirname(configPath),{recursive:true});
-        if(source){
-          const stamp=new Date().toISOString().replace(/[:.]/g,"-");
-          fs.copyFileSync(configPath,\`\${configPath}.bak-provider-\${stamp}\`);
-        }
-        fs.writeFileSync(configPath,next,"utf8");
-      }catch(error){
-        console.warn("ruizhi model provider config sync failed",error);
-      }
-    }
-    function setTomlProviderBaseUrl(source,providerId,baseUrl){
-      const header=\`[model_providers.\${providerId}]\`;
-      const escapedUrl=String(baseUrl).replace(/\\\\/g,"\\\\\\\\").replace(/"/g,'\\\\"');
-      const start=source.indexOf(header);
-      if(start<0){
-        return source.trimEnd()+\`\\n\\n\${header}\\nname = "锐擎API"\\nbase_url = "\${escapedUrl}"\\n\`;
-      }
-      const rest=source.slice(start+header.length);
-      const relativeEnd=rest.search(/\\n\\[[^\\n]+\\]/);
-      const end=relativeEnd<0?source.length:start+header.length+relativeEnd;
-      const section=source.slice(start,end);
-      const nextSection=/\\nbase_url\\s*=\\s*"[^"]*"/.test(section)
-        ? section.replace(/\\nbase_url\\s*=\\s*"[^"]*"/,\`\\nbase_url = "\${escapedUrl}"\`)
-        : section.trimEnd()+\`\\nbase_url = "\${escapedUrl}"\\n\`;
-      return source.slice(0,start)+nextSection+source.slice(end);
     }
     function syncSystemSkills(){
       const sourceRoot=path.join(resourcesRoot,...systemSkillsRoot);
@@ -1427,7 +1286,7 @@ function ruizhiInit(){
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
 
-    const configPath=path.join(codexHome,"config.toml");
+    const configPath=path.join(home,".codex","config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
   }catch(e){
@@ -1621,11 +1480,15 @@ function ruizhiStartBackgroundUpdateCheck(){
   function authPath(){
     return path.join(authHome(),"auth.json");
   }
+  function codexConfigPath(){
+    const home=os.homedir();
+    return path.join(home,".codex","config.toml");
+  }
   function hasExistingCodexConfig(){
     const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
     if(marker==="1")return true;
     if(marker==="0")return false;
-    const filePath=path.join(authHome(),"config.toml");
+    const filePath=codexConfigPath();
     try{
       return fs.existsSync(filePath)&&fs.statSync(filePath).isFile();
     }catch{
@@ -2237,11 +2100,15 @@ function ruizhiStartBackgroundUpdateCheck(){
   function authPath(){
     return path.join(authHome(),"auth.json");
   }
+  function codexConfigPath(){
+    const home=os.homedir();
+    return path.join(home,".codex","config.toml");
+  }
   function hasExistingCodexConfig(){
     const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
     if(marker==="1")return true;
     if(marker==="0")return false;
-    const filePath=path.join(authHome(),"config.toml");
+    const filePath=codexConfigPath();
     try{
       return fs.existsSync(filePath)&&fs.statSync(filePath).isFile();
     }catch{
@@ -2697,10 +2564,9 @@ function applyLegacyAsarPatches() {
   patchPluginAccountGate();
   patchNativeWebviewFeatureGates();
   patchNativeBrowserDesktopFeatureAvailability();
+  patchChatGptAuthExternalBrowser();
   patchBrowserNativePipeDiagnostics(extractedDir, { log });
   patchTrustedBrowserClientHashes(extractedDir, path.join(appOutRoot, "resources"), { log });
-  patchOnboardingApiKeyTexts();
-  patchLoginRoute();
   patchWebviewLocales();
   patchPackageMetadata();
   patchWebviewHtml();

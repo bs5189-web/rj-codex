@@ -2566,7 +2566,7 @@ function verifyCodeSignature() {
 }
 
 function signApp() {
-  execLogged("xattr", ["-cr", appOutRoot]);
+  execLogged("/usr/bin/xattr", ["-cr", appOutRoot]);
 
   if (!hasDeveloperSigningConfig()) {
     log("未配置 Developer ID 签名 secrets，使用 ad-hoc 签名");

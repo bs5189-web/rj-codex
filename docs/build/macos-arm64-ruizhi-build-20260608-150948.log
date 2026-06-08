@@ -1,0 +1,109 @@
+# macOS arm64 锐智 build log
+started_at=2026-06-08T07:09:48Z
+cwd=/Volumes/ext_data/work/ai/rj-codex
+uname=Darwin minideMac-mini.local 24.6.0 Darwin Kernel Version 24.6.0: Mon Jul 14 11:30:40 PDT 2025; root:xnu-11417.140.69~1/RELEASE_ARM64_T8132 arm64
+node=v23.9.0
+arch=arm64
+source_app=/Applications/Codex.app
+source_app_version=26.602.40724
+command=RUIZHI_MACOS_ARCH=arm64 node scripts/build-macos.mjs
+
+[ruizhi:macos] 目标 macOS 架构：arm64
+[ruizhi:macos] 使用 Codex.app：/Applications/Codex.app
+[ruizhi:macos] 复制 Codex.app
+[ruizhi:macos] plutil -replace CFBundleName -string Codex /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Info.plist
+[ruizhi:macos] plutil -replace CFBundleDisplayName -string 锐智 /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Info.plist
+[ruizhi:macos] plutil -replace CFBundleIdentifier -string cn.ruizhi.desktop /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Info.plist
+[ruizhi:macos] plutil -replace CFBundleShortVersionString -string 0.2.3 /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Info.plist
+[ruizhi:macos] plutil -replace CFBundleVersion -string 0.2.3 /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Info.plist
+[ruizhi:macos] 已补丁 Info.plist 元数据
+[ruizhi:macos] 已确认 macOS app 主程序包含目标架构 arm64：arm64
+[ruizhi:macos] 编译锐智生图工具
+[ruizhi:macos] go build -trimpath -ldflags -s -w -o /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Resources/bin/ruizhi-imagegen /Volumes/ext_data/work/ai/rj-codex/cmd/ruizhi-imagegen
+[ruizhi:macos] 已同步运行态模型目录：client_version=0.0.0
+[ruizhi:macos] 已内置模型协议 bridge：dist/macos/锐智.app/Contents/Resources/bridge/ruizhi-responses-bridge.cjs
+[ruizhi:macos] 已内置页面增强 renderer 与 bridge 服务
+[ruizhi:macos] 已内置运行态 imagegen skill 覆盖
+[ruizhi:macos] 已内置插件 marketplace：锐捷插件
+[ruizhi:macos] macOS 更新已禁用，已移除 app-update.yml
+[ruizhi:macos] 解包 app.asar
+[ruizhi:macos] 已补丁插件账号模式 gate：use-plugins-D190QcN7.js
+[ruizhi:macos] 已打开 Codex 原生 webview gate：statsig-BP9zNYqZ.js
+[ruizhi:macos] 已打开 Codex 原生 Browser 桌面能力：main-B6dx2gAb.js
+[ruizhi:macos] 已强制 ChatGPT 认证链接使用系统浏览器：main-B6dx2gAb.js
+[ruizhi:macos] 已注入 Browser nativePipe 诊断日志：main-B6dx2gAb.js
+[ruizhi:macos] 已禁用 Browser nativePipe peer authorization 签名门禁：main-B6dx2gAb.js
+[ruizhi:macos] 已存在 Browser client nativePipe 信任哈希：2de792ebdf72
+[ruizhi:macos] 已补丁中文翻译：zh-CN-CwNof08D.js
+[ruizhi:macos] 已补丁中文翻译：zh-HK-Cc2k0mda.js
+[ruizhi:macos] 已补丁中文翻译：zh-TW-BuokN2YU.js
+[ruizhi:macos] 已补丁 package 元数据
+[ruizhi:macos] 已补丁 webview HTML 标题
+[ruizhi:macos] 已补丁默认语言：locale-resolver-Dhu_OGFZ.js
+[ruizhi:macos] 已补丁前端默认中文文案：6853 条，182 个文件
+[ruizhi:macos] 已禁用 app sunset 强制更新拦截：app-main-B9IaMgEw.js
+[ruizhi:macos] 已禁用模型白名单过滤：models-and-reasoning-efforts-Bqf_x2Fv.js
+[ruizhi:macos] 跳过补丁点：禁用 Codex 官方 Sparkle/updater 能力
+[ruizhi:macos] 跳过未变化文件：main-B6dx2gAb.js
+[ruizhi:macos] 已禁用 Codex 官方更新逻辑：main-B6dx2gAb.js
+[ruizhi:macos] 已补丁 macOS 顶部菜单：main-B6dx2gAb.js
+[ruizhi:macos] 已补丁帮助文档链接：4 个文件，17 处
+[ruizhi:macos] 已内置 electron-updater 运行时依赖
+[ruizhi:macos] 跳过补丁点：应用名称
+[ruizhi:macos] 已补丁 Electron bootstrap 初始化
+[ruizhi:macos] 已补丁 preload 锐智 bridge
+[ruizhi:macos] 重新打包 app.asar
+[ruizhi:macos] 关闭 app.asar 完整性校验 fuse
+[ruizhi:macos] /usr/bin/xattr -cr /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app
+[ruizhi:macos] 未配置 Developer ID 签名 secrets，使用 ad-hoc 签名
+[ruizhi:macos] codesign --force --deep --sign - --timestamp=none /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app
+/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app: replacing existing signature
+[ruizhi:macos] codesign --verify --deep --strict --verbose=2 /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/.
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Updater.app
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/Autoupdate
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Installer.xpc
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/XPCServices/Downloader.xpc
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Sparkle.framework/Versions/Current/.
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/.
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/web_app_shortcut_copier
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/web_app_shortcut_copier
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (GPU).app
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Service).app
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Alerts).app
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (GPU).app
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Service).app
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Alerts).app
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Renderer).app
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/app_mode_loader
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/app_mode_loader
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/Codex (Renderer).app
+--prepared:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/browser_crashpad_handler
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/Helpers/browser_crashpad_handler
+--validated:/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app/Contents/Frameworks/Codex Framework.framework/Versions/Current/.
+/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app: valid on disk
+/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app: satisfies its Designated Requirement
+[ruizhi:macos] 压缩 macOS 产物
+[ruizhi:macos] ditto -c -k --sequesterRsrc --keepParent /Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app /Volumes/ext_data/work/ai/rj-codex/dist/Ruizhi-macos-0.2.3-arm64.zip
+[ruizhi:macos] macOS zip 已输出：/Volumes/ext_data/work/ai/rj-codex/dist/Ruizhi-macos-0.2.3-arm64.zip
+[ruizhi:macos] 生成 macOS DMG 安装包
+[ruizhi:macos] hdiutil create -volname 锐智 0.2.3 -srcfolder /Volumes/ext_data/work/ai/rj-codex/.work/macos/dmg -ov -format UDZO /Volumes/ext_data/work/ai/rj-codex/dist/Ruizhi-macos-0.2.3-arm64.dmg
+created: /Volumes/ext_data/work/ai/rj-codex/dist/Ruizhi-macos-0.2.3-arm64.dmg
+[ruizhi:macos] macOS DMG 已输出：/Volumes/ext_data/work/ai/rj-codex/dist/Ruizhi-macos-0.2.3-arm64.dmg
+[ruizhi:macos] 已保留历史 macOS electron-updater 清单：/Volumes/ext_data/work/ai/rj-codex/dist/latest-mac-0.2.3-arm64.yml
+[ruizhi:macos] 已保留历史 macOS 更新清单：/Volumes/ext_data/work/ai/rj-codex/dist/ruizhi-latest-macos-0.2.3-arm64.json
+[ruizhi:macos] macOS 更新清单已输出：/Volumes/ext_data/work/ai/rj-codex/dist/ruizhi-latest-macos.json
+[ruizhi:macos] macOS 架构更新清单已输出：/Volumes/ext_data/work/ai/rj-codex/dist/ruizhi-latest-macos-arm64.json
+[ruizhi:macos] macOS 版本更新清单已输出：/Volumes/ext_data/work/ai/rj-codex/dist/ruizhi-latest-macos-0.2.3-arm64.json
+[ruizhi:macos] macOS electron-updater 清单已输出：/Volumes/ext_data/work/ai/rj-codex/dist/latest-mac.yml
+[ruizhi:macos] macOS legacy electron-updater 清单已输出：/Volumes/ext_data/work/ai/rj-codex/dist/latest.yml
+[ruizhi:macos] macOS 架构 electron-updater 清单已输出：/Volumes/ext_data/work/ai/rj-codex/dist/latest-mac-arm64.yml
+[ruizhi:macos] macOS 版本 electron-updater 清单已输出：/Volumes/ext_data/work/ai/rj-codex/dist/latest-mac-0.2.3-arm64.yml
+[ruizhi:macos] macOS 构建完成
+
+finished_at=2026-06-08T07:10:43Z
+exit_status=0

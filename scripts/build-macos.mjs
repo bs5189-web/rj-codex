@@ -51,8 +51,11 @@ function log(message) {
   console.log(`[ruizhi:macos] ${message}`);
 }
 
-function ruizhiBuildDate() {
-  return new Date().toISOString().slice(0, 10);
+function ruizhiBuildDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function ruizhiBuildDateLabel() {
@@ -973,16 +976,41 @@ function patchWebviewLocales() {
   const localeFiles = fs.readdirSync(assetsDir)
     .filter((name) => /^zh-(CN|HK|TW)-.*\.js$/.test(name))
     .map((name) => path.join(assetsDir, name));
+  const globalReplacements = new Map([
+    ["electron.onboarding.login.includedPlans.welcomeV2", ruizhiBuildDateLabel()]
+  ]);
+  const allLocaleFiles = fs.readdirSync(assetsDir)
+    .filter((name) => /\.js$/.test(name))
+    .map((name) => path.join(assetsDir, name))
+    .filter((filePath) => {
+      const source = fs.readFileSync(filePath, "utf8");
+      return [...globalReplacements.keys()].some((key) =>
+        new RegExp(`"${escapeRegExp(key)}":\``).test(source)
+      );
+    });
 
   if (localeFiles.length === 0) {
     throw new Error("找不到中文 webview locale bundle");
   }
+  if (allLocaleFiles.length === 0) {
+    throw new Error("找不到 webview locale bundle");
+  }
 
   const replacements = new Map([
     ["electron.onboarding.login.chatgpt.continue", "使用锐擎继续"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"],
-    ["electron.onboarding.login.includedPlans.welcomeV2", ruizhiBuildDateLabel()]
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"]
   ]);
+
+  for (const localeFile of allLocaleFiles) {
+    writePatchedFile(localeFile, (source) => {
+      let next = source;
+      for (const [key, value] of globalReplacements) {
+        next = replaceLocaleMessage(next, key, value);
+      }
+      return next;
+    });
+    log(`已补丁通用翻译：${path.basename(localeFile)}`);
+  }
 
   for (const localeFile of localeFiles) {
     writePatchedFile(localeFile, (source) => {

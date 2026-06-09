@@ -286,29 +286,40 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
       const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
       return String(manifest.version||"").trim()||null;
     }
-    function copyPluginDisplayFiles(sourceRoot,targetRoot){
-      const entries=[[".codex-plugin"],["assets"],["skills"]];
+    function copyPluginCacheFiles(pluginName,sourceRoot,targetRoot){
+      const runtimePluginNames=new Set(["browser","chrome"]);
+      const entries=[
+        {name:".codex-plugin",parts:[".codex-plugin"]},
+        {name:"assets",parts:["assets"]},
+        {name:"skills",parts:["skills"]},
+        {name:"scripts",parts:["scripts"]}
+      ];
       for(const entry of entries){
-        const source=path.join(sourceRoot,...entry);
+        if(entry.name==="scripts"&&runtimePluginNames.has(pluginName)===false)continue;
+        const source=path.join(sourceRoot,...entry.parts);
         if(!fs.existsSync(source))continue;
-        const target=path.join(targetRoot,...entry);
+        const target=path.join(targetRoot,...entry.parts);
         fs.mkdirSync(path.dirname(target),{recursive:true});
         fs.cpSync(source,target,{recursive:true,force:true});
       }
     }
+    function ensureOpenAIBundledPluginCache(sourceRoot,cacheRoot,pluginName,version){
+      const pluginCacheRoot=path.join(cacheRoot,pluginName);
+      const targetRoot=path.join(pluginCacheRoot,version);
+      fs.mkdirSync(pluginCacheRoot,{recursive:true});
+      copyPluginCacheFiles(pluginName,sourceRoot,targetRoot);
+    }
     function syncInstalledOpenAIBundledPluginCache(){
       const sourcePluginsRoot=path.join(codexHome,".tmp","bundled-marketplaces","openai-bundled","plugins");
       const cacheRoot=path.join(codexHome,"plugins","cache","openai-bundled");
-      if(!fs.existsSync(sourcePluginsRoot)||!fs.existsSync(cacheRoot))return;
+      if(!fs.existsSync(sourcePluginsRoot))return;
       for(const entry of fs.readdirSync(sourcePluginsRoot,{withFileTypes:true})){
         if(!entry.isDirectory())continue;
-        const pluginCacheRoot=path.join(cacheRoot,entry.name);
-        if(!fs.existsSync(pluginCacheRoot))continue;
         try{
           const sourceRoot=path.join(sourcePluginsRoot,entry.name);
           const version=readPluginVersion(sourceRoot);
           if(!version)continue;
-          copyPluginDisplayFiles(sourceRoot,path.join(pluginCacheRoot,version));
+          ensureOpenAIBundledPluginCache(sourceRoot,cacheRoot,entry.name,version);
         }catch(error){
           console.error("ruizhi OpenAI plugin cache sync failed",entry.name,error);
         }

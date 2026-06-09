@@ -676,10 +676,13 @@ test("bootstrap refreshes cached bundled Browser runtime scripts on launch", () 
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
+    "overrides/windows-app/asar/.vite/build/bootstrap.js",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /copyPluginCacheFiles/, `${scriptPath} should refresh existing plugin cache files`);
+    assert.match(source, /ensureOpenAIBundledPluginCache/, `${scriptPath} should create missing plugin cache roots`);
+    assert.match(source, /copyPluginCacheFiles/, `${scriptPath} should refresh plugin cache files`);
     assert.match(source, /runtimePluginNames=new Set\(\["browser","chrome"\]\)/, `${scriptPath} should refresh Browser runtime plugin caches`);
     assert.match(source, /entry\.name==="scripts"&&runtimePluginNames\.has\(pluginName\)/, `${scriptPath} should copy scripts only for Browser runtimes`);
+    assert.doesNotMatch(source, /!fs\.existsSync\(sourcePluginsRoot\)\|\|!fs\.existsSync\(cacheRoot\)/, `${scriptPath} should not skip first-run cache creation`);
   }
 });

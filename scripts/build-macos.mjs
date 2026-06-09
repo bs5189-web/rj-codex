@@ -1633,19 +1633,23 @@ function ruizhiInit(){
         fs.cpSync(source,target,{recursive:true,force:true});
       }
     }
+    function ensureOpenAIBundledPluginCache(sourceRoot,cacheRoot,pluginName,version){
+      const pluginCacheRoot=path.join(cacheRoot,pluginName);
+      const targetRoot=path.join(pluginCacheRoot,version);
+      fs.mkdirSync(pluginCacheRoot,{recursive:true});
+      copyPluginCacheFiles(pluginName,sourceRoot,targetRoot);
+    }
     function syncInstalledOpenAIBundledPluginCache(){
       const sourcePluginsRoot=path.join(codexHome,".tmp","bundled-marketplaces","openai-bundled","plugins");
       const cacheRoot=path.join(codexHome,"plugins","cache","openai-bundled");
-      if(!fs.existsSync(sourcePluginsRoot)||!fs.existsSync(cacheRoot))return;
+      if(!fs.existsSync(sourcePluginsRoot))return;
       for(const entry of fs.readdirSync(sourcePluginsRoot,{withFileTypes:true})){
         if(!entry.isDirectory())continue;
-        const pluginCacheRoot=path.join(cacheRoot,entry.name);
-        if(!fs.existsSync(pluginCacheRoot))continue;
         try{
           const sourceRoot=path.join(sourcePluginsRoot,entry.name);
           const version=readPluginVersion(sourceRoot);
           if(!version)continue;
-          copyPluginCacheFiles(entry.name,sourceRoot,path.join(pluginCacheRoot,version));
+          ensureOpenAIBundledPluginCache(sourceRoot,cacheRoot,entry.name,version);
         }catch(error){
           console.error("ruizhi OpenAI plugin cache sync failed",entry.name,error);
         }

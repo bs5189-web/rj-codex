@@ -5,3 +5,10 @@ dist/
 vendor/codex-desktop/windows/current/app/
 *.log
 .DS_Store
+
+# macOS AppleDouble / resource fork files (created on non-HFS+ volumes)
+._*
+**/._*
+# macOS .DS_Store and similar metadata
+**/.DS_Store
+**/Thumbs.db

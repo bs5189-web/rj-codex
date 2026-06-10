@@ -6,7 +6,7 @@
   const home=os.homedir();
   const productName="锐智";
   const ruizhiHomeEnvName="RUIZHI_HOME";
-  const ruizhiDefaultHomeDirName=".codex";
+  const ruizhiDefaultHomeDirName=".ruizhi";
   const electronUserDataDirName="锐智";
   const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
@@ -28,7 +28,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     const locale="zh-CN";
     const posixLocale="zh_CN";
     const ruizhiHomeEnvName="RUIZHI_HOME";
-    const ruizhiDefaultHomeDirName=".codex";
+    const ruizhiDefaultHomeDirName=".ruizhi";
     const openaiBaseUrl="https://uniapi.ruijie.com.cn/v1";
     const modelProviderBaseUrl="http://127.0.0.1:17888/v1";
     const modelBridgeConfig={"enabled":true,"host":"127.0.0.1","port":17888,"scriptResourcePath":["bridge","ruizhi-responses-bridge.cjs"],"routes":{"gpt-5.5":"responses","gpt-5.4":"responses","gpt-5.4-mini":"responses","gpt-5.3-codex":"responses","qwen3.6-plus":"responses","qwen3.6-flash":"responses","qwen3-coder-plus":"responses","qwen3-coder-480b-a35b-instruct":"responses","qwen3-coder-30b-a3b-instruct":"responses","claude-opus-4-7":{"protocol":"chat","reasoningEffort":true},"claude-sonnet-4-6":{"protocol":"chat","reasoningEffort":true},"glm-5.1":{"protocol":"chat","reasoningEffort":true},"kimi-k2.6":{"protocol":"chat","reasoningEffort":true},"MiniMax/MiniMax-M2.7":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-pro":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash-maxthink":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash":{"protocol":"chat","reasoningEffort":true}}};
@@ -388,7 +388,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    const configPath=path.join(home,".codex","config.toml");
+    const configPath=path.join(codexHome,"config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
   }catch(e){

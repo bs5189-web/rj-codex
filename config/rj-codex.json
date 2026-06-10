@@ -48,7 +48,7 @@
   },
   "runtime": {
     "homeEnv": "RUIZHI_HOME",
-    "defaultHomeDirName": ".codex",
+    "defaultHomeDirName": ".ruizhi",
     "electronUserDataDirName": "锐智"
   },
   "models": {

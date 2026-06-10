@@ -30,7 +30,7 @@ const config = JSON.parse(fs.readFileSync(path.join(projectRoot, "config", "rj-c
 const appVersion = process.env.RUIZHI_BUILD_VERSION ?? config.version;
 const runtimeConfig = config.runtime ?? {};
 const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
-const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".codex";
+const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
 const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
 const imageGenerationConfig = config.imageGeneration ?? {};
 const apiKeyTestConfig = config.apiKeyTest ?? {};
@@ -1290,7 +1290,7 @@ function ruizhiInit(){
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
 
-    const configPath=path.join(home,".codex","config.toml");
+    const configPath=path.join(codexHome,"config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
   }catch(e){
@@ -1485,8 +1485,7 @@ function ruizhiStartBackgroundUpdateCheck(){
     return path.join(authHome(),"auth.json");
   }
   function codexConfigPath(){
-    const home=os.homedir();
-    return path.join(home,".codex","config.toml");
+    return path.join(authHome(),"config.toml");
   }
   function hasExistingCodexConfig(){
     const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
@@ -2105,8 +2104,7 @@ function ruizhiStartBackgroundUpdateCheck(){
     return path.join(authHome(),"auth.json");
   }
   function codexConfigPath(){
-    const home=os.homedir();
-    return path.join(home,".codex","config.toml");
+    return path.join(authHome(),"config.toml");
   }
   function hasExistingCodexConfig(){
     const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
@@ -2711,7 +2709,7 @@ function patchCodexHomeSource() {
     }
     return next;
   });
-  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，默认沿用 CODEX_HOME/.codex");
+  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，桌面默认使用 ~/.ruizhi");
 }
 
 function patchCodexBundledModels() {

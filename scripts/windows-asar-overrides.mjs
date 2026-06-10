@@ -2072,7 +2072,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const productName = config.productName ?? "锐智";
   const runtimeConfig = config.runtime ?? {};
   const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
-  const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".codex";
+  const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
   const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
   const preludeStart = "/* ruizhi-early-env:start */";
   const preludeEnd = "/* ruizhi-early-env:end */";
@@ -2362,7 +2362,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existing=fs\.existsSync\(configPath\)[\s\S]*?if\(next!==existing\)fs\.writeFileSync\(configPath,next,"utf8"\);\n/
   ];
   const readOnlyConfigCheck = [
-    "    const configPath=path.join(home,\".codex\",\"config.toml\");",
+    "    const configPath=path.join(codexHome,\"config.toml\");",
     "    const existingCodexConfig=fs.existsSync(configPath);",
     "    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?\"1\":\"0\";"
   ].join("\n");

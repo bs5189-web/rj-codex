@@ -11,9 +11,9 @@ function readProjectFile(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
 }
 
-test("runtime defaults share Codex home but isolate Electron user data", () => {
+test("runtime defaults use Ruizhi home but isolate Electron user data", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
-  assert.equal(config.runtime.defaultHomeDirName, ".codex");
+  assert.equal(config.runtime.defaultHomeDirName, ".ruizhi");
   assert.equal(config.runtime.electronUserDataDirName, config.productName);
   assert.match(
     readProjectFile("scripts/build-macos.mjs"),
@@ -35,9 +35,7 @@ test("runtime defaults share Codex home but isolate Electron user data", () => {
 
   for (const sourcePath of sources) {
     const source = readProjectFile(sourcePath);
-    assert.match(source, /["`]\.codex["`]/, `${sourcePath} should default CODEX_HOME to .codex`);
-    assert.doesNotMatch(source, /path\.join\(home,\s*["`]\.ruizhi["`]\)/, `${sourcePath} should not default CODEX_HOME to .ruizhi`);
-    assert.doesNotMatch(source, /p\.push\(["`]\.ruizhi["`]\)/, `${sourcePath} should not patch CLI default home to .ruizhi`);
+    assert.match(source, /["`]\.ruizhi["`]/, `${sourcePath} should default CODEX_HOME to .ruizhi`);
     assert.match(source, /electronUserDataDirName/, `${sourcePath} should route Electron userData through the runtime setting`);
   }
 });

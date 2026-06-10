@@ -23,7 +23,7 @@ const macosUpdateConfig = updatesConfig.macos ?? {};
 const macosBuildArch = normalizeMacosBuildArch(process.env.RUIZHI_MACOS_ARCH ?? process.arch);
 const runtimeConfig = config.runtime ?? {};
 const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
-const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".codex";
+const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
 const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
 const imageGenerationConfig = config.imageGeneration ?? {};
 const modelBridgeConfig = config.modelBridge ?? {};
@@ -1718,7 +1718,7 @@ function ruizhiInit(){
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    const configPath=path.join(home,".codex","config.toml");
+    const configPath=path.join(codexHome,"config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
   }catch(e){
@@ -1798,8 +1798,7 @@ function ruizhiStartBackgroundUpdateCheck(){
     return path.join(authHome(),"auth.json");
   }
   function codexConfigPath(){
-    const home=os.homedir();
-    return path.join(home,".codex","config.toml");
+    return path.join(authHome(),"config.toml");
   }
   function hasExistingCodexConfig(){
     const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;

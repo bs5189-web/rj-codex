@@ -155,10 +155,13 @@ test("first launch auth status remains available without patching the native log
   ]) {
     const source = read(scriptPath);
     assert.match(source, /function hasExistingCodexConfig\(/, `${scriptPath} should detect existing ~/.codex configuration`);
+    assert.match(source, /function readAuthJson\(/, `${scriptPath} should parse auth.json instead of inferring auth mode from API key presence`);
+    assert.match(source, /authMode=auth&&typeof auth\.auth_mode==="string"\?auth\.auth_mode:null/, `${scriptPath} should expose auth_mode from auth.json`);
     assert.match(source, /config\.toml/, `${scriptPath} should treat config.toml as an existing Codex configuration marker`);
     assert.match(source, /RUIZHI_EXISTING_CODEX_CONFIG/, `${scriptPath} should preserve whether config.toml exists without mutating it`);
-    assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from an API key or Codex config`);
-    assert.match(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} should keep reporting existing auth state`);
+    assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from auth.json or Codex config`);
+    assert.match(source, /configured:authConfigured\|\|existingConfig/, `${scriptPath} should keep reporting existing auth state`);
+    assert.doesNotMatch(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} must not treat API key presence as the only auth.json signal`);
     assert.doesNotMatch(source, /function patchLoginRoute\(/, `${scriptPath} should not patch Codex's login route`);
     assert.doesNotMatch(source, /function patchOnboardingApiKeyTexts\(/, `${scriptPath} should not patch Codex's onboarding login content`);
     assert.doesNotMatch(source, /\["electron\.onboarding\.login\.chatgpt\.signIn",/, `${scriptPath} should leave the native ChatGPT sign-in label untouched`);

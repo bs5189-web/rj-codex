@@ -388,7 +388,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    const configPath=path.join(codexHome,"config.toml");
+    const configPath=path.join(home,".codex","config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
   }catch(e){

@@ -1490,10 +1490,13 @@ function ruizhiInit(){
         return value.trimEnd()+guidance;
       };
       for(const model of catalog.models){
-        if(!model||typeof model.slug!=="string"||!/^qwen/i.test(model.slug))continue;
-        model.base_instructions=append(model.base_instructions);
-        if(model.model_messages&&typeof model.model_messages==="object"){
-          model.model_messages.instructions_template=append(model.model_messages.instructions_template);
+        if(!model||typeof model!=="object")continue;
+        if(!Array.isArray(model.input_modalities))model.input_modalities=["text","image"];
+        if(typeof model.slug==="string"&&/^qwen/i.test(model.slug)){
+          model.base_instructions=append(model.base_instructions);
+          if(model.model_messages&&typeof model.model_messages==="object"){
+            model.model_messages.instructions_template=append(model.model_messages.instructions_template);
+          }
         }
       }
       return catalog;
@@ -1718,7 +1721,7 @@ function ruizhiInit(){
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    const configPath=path.join(codexHome,"config.toml");
+    const configPath=path.join(home,".codex","config.toml");
     const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
   }catch(e){
@@ -1798,7 +1801,8 @@ function ruizhiStartBackgroundUpdateCheck(){
     return path.join(authHome(),"auth.json");
   }
   function codexConfigPath(){
-    return path.join(authHome(),"config.toml");
+    const home=os.homedir();
+    return path.join(home,".codex","config.toml");
   }
   function hasExistingCodexConfig(){
     const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
@@ -1817,19 +1821,24 @@ function ruizhiStartBackgroundUpdateCheck(){
     if(value.length<=18)return value.slice(0,4)+"*******"+value.slice(-4);
     return value.slice(0,10)+"*******"+value.slice(-7);
   }
-  function readApiKeyStatus(){
+  function readAuthJson(){
     const filePath=authPath();
-    let key="";
+    if(!fs.existsSync(filePath))return null;
+    const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
+    return auth&&typeof auth==="object"?auth:null;
+  }
+  function readApiKeyStatus(){
     const existingConfig=hasExistingCodexConfig();
     try{
-      if(fs.existsSync(filePath)){
-        const auth=JSON.parse(fs.readFileSync(filePath,"utf8"));
-        key=String(auth.OPENAI_API_KEY||"").trim();
-      }
+      const auth=readAuthJson();
+      const key=String(auth?.OPENAI_API_KEY||"").trim();
+      const authMode=auth&&typeof auth.auth_mode==="string"?auth.auth_mode:null;
+      const authConfigured=authMode!=null||key.length>0;
+      const configuredBy=authMode?"auth-json:"+authMode:key.length>0?"api-key":existingConfig?"codex-config":"none";
+      return {configured:authConfigured||existingConfig,masked:maskApiKey(key),configuredBy,authMode,version:${electronName}.app.getVersion()};
     }catch(error){
       return {configured:existingConfig,masked:"",configuredBy:existingConfig?"codex-config":"none",error:String(error?.message||error),version:${electronName}.app.getVersion()};
     }
-    return {configured:key.length>0||existingConfig,masked:maskApiKey(key),configuredBy:key.length>0?"api-key":existingConfig?"codex-config":"none",version:${electronName}.app.getVersion()};
   }
   function registerRuizhiAuthIpc(){
     ${electronName}.ipcMain.on("ruizhi:auth:get-sync",event=>{event.returnValue=readApiKeyStatus();});

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { applyRuizhiModelCatalogCompatibilityPatches } from "../scripts/windows-asar-overrides.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(__filename), "..");
@@ -54,6 +55,43 @@ test("Qwen Responses models keep Codex desktop plugin-control guidance", () => {
   }
 });
 
+test("model catalog compatibility defaults missing modalities to text and image", () => {
+  const catalog = {
+    models: [
+      { slug: "api-model-without-modalities", visibility: "list" },
+      { slug: "api-model-text-only", visibility: "list", input_modalities: ["text"] },
+    ],
+  };
+
+  applyRuizhiModelCatalogCompatibilityPatches(catalog);
+
+  assert.deepEqual(catalog.models[0].input_modalities, ["text", "image"]);
+  assert.deepEqual(catalog.models[1].input_modalities, ["text"]);
+});
+
+test("model catalog compatibility preserves full reasoning level lists", () => {
+  const supportedReasoningLevels = [
+    { effort: "minimal", description: "最少推理" },
+    { effort: "low", description: "轻量推理" },
+    { effort: "medium", description: "标准推理" },
+    { effort: "high", description: "深度推理" },
+    { effort: "xhigh", description: "最高推理" },
+  ];
+  const catalog = {
+    models: [
+      {
+        slug: "api-model-full-reasoning",
+        visibility: "list",
+        supported_reasoning_levels: supportedReasoningLevels.map((entry) => ({ ...entry })),
+      },
+    ],
+  };
+
+  applyRuizhiModelCatalogCompatibilityPatches(catalog);
+
+  assert.deepEqual(catalog.models[0].supported_reasoning_levels, supportedReasoningLevels);
+});
+
 test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex home", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
@@ -77,6 +115,8 @@ test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex 
     assert.match(source, /function normalizeModelCatalogFile\(filePath\)/);
     assert.match(source, /function applyRuizhiModelCatalogCompatibilityPatches\(catalog\)/);
     assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
+    assert.match(source, /model\.input_modalities=\["text","image"\]/);
+    assert.doesNotMatch(source, /supported_reasoning_levels\s*=\s*\[[^\]]*low[^\]]*medium[^\]]*high[^\]]*\]/s);
     assert.match(source, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
     assert.match(source, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
     assert.doesNotMatch(source, /const userModelCatalogFile="model-catalog\.json";/);
@@ -116,9 +156,10 @@ test("macOS build forces current model picker allowlist patch", () => {
   const source = readProjectFile("scripts/build-macos.mjs");
 
   assert.match(source, /function findOneFileByContent\(/);
-  assert.match(source, /\/\^\(use-model-settings\|model-queries\)-\.\*\\\.js\$\/,/);
-  assert.match(source, /\/useHiddenModels&&\[A-Za-z_\$\]\[\\w\$\]\*!==`amazonBedrock`\/,/);
-  assert.match(source, /replaceRegex\(\s*source,\s*\/let \(\[A-Za-z_\$\]\[\\w\$\]\*\)=\[A-Za-z_\$\]\[\\w\$\]\*\\\.useHiddenModels&&\[A-Za-z_\$\]\[\\w\$\]\*!==`amazonBedrock`,\(\[A-Za-z_\$\]\[\\w\$\]\*\);\/,/s);
+  assert.match(source, /\/\^\(use-model-settings\|model-queries\|models-and-reasoning-efforts\)-\.\*\\\.js\$\/,/);
+  assert.match(source, /const modelAvailabilityAllowlistPattern = \/&&\[A-Za-z_\$\]\[\\w\$\]\*!==`amazonBedrock`\//);
+  assert.ok(source.includes('"!1"'), "macOS build should disable the available_models allowlist condition");
+  assert.match(source, /\(\?:\\\.useHiddenModels\)\?/);
   assert.doesNotMatch(
     source,
     /replaceExactIfPresent\(source,\s*"let l=s\.useHiddenModels&&a!==`amazonBedrock`,u;"/,

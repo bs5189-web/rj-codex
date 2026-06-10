@@ -633,10 +633,15 @@ export function normalizeModelCatalogForClientVersion(catalog, clientVersion) {
 export function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
   if (!catalog || typeof catalog !== "object" || !Array.isArray(catalog.models)) return catalog;
   for (const model of catalog.models) {
-    if (!model || typeof model.slug !== "string" || !/^qwen/i.test(model.slug)) continue;
-    model.base_instructions = appendDesktopPluginControlGuidance(model.base_instructions);
-    if (model.model_messages && typeof model.model_messages === "object") {
-      model.model_messages.instructions_template = appendDesktopPluginControlGuidance(model.model_messages.instructions_template);
+    if (!model || typeof model !== "object") continue;
+    if (!Array.isArray(model.input_modalities)) {
+      model.input_modalities = ["text", "image"];
+    }
+    if (typeof model.slug === "string" && /^qwen/i.test(model.slug)) {
+      model.base_instructions = appendDesktopPluginControlGuidance(model.base_instructions);
+      if (model.model_messages && typeof model.model_messages === "object") {
+        model.model_messages.instructions_template = appendDesktopPluginControlGuidance(model.model_messages.instructions_template);
+      }
     }
   }
   return catalog;
@@ -2227,10 +2232,13 @@ function bridgeBootstrapBlock(config) {
         return value.trimEnd()+guidance;
       };
       for(const model of catalog.models){
-        if(!model||typeof model.slug!=="string"||!/^qwen/i.test(model.slug))continue;
-        model.base_instructions=append(model.base_instructions);
-        if(model.model_messages&&typeof model.model_messages==="object"){
-          model.model_messages.instructions_template=append(model.model_messages.instructions_template);
+        if(!model||typeof model!=="object")continue;
+        if(!Array.isArray(model.input_modalities))model.input_modalities=["text","image"];
+        if(typeof model.slug==="string"&&/^qwen/i.test(model.slug)){
+          model.base_instructions=append(model.base_instructions);
+          if(model.model_messages&&typeof model.model_messages==="object"){
+            model.model_messages.instructions_template=append(model.model_messages.instructions_template);
+          }
         }
       }
       return catalog;

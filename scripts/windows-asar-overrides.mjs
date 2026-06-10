@@ -2275,9 +2275,21 @@ function bridgeBootstrapBlock(config) {
         if(value.includes("plugin://browser@openai-bundled")&&value.includes("mcp__node_repl__js"))return value;
         return value.trimEnd()+guidance;
       };
+      const defaultReasoningLevels=()=>[
+        {effort:"minimal",description:"最少推理"},
+        {effort:"low",description:"轻量推理"},
+        {effort:"medium",description:"标准推理"},
+        {effort:"high",description:"深度推理"},
+        {effort:"xhigh",description:"最高推理"}
+      ];
       for(const model of catalog.models){
         if(!model||typeof model!=="object")continue;
         if(!Array.isArray(model.input_modalities))model.input_modalities=["text","image"];
+        model.inputModalities=model.input_modalities;
+        if(!Array.isArray(model.supported_reasoning_levels)||model.supported_reasoning_levels.length===0)model.supported_reasoning_levels=defaultReasoningLevels();
+        if(typeof model.default_reasoning_level!=="string"||model.default_reasoning_level.length===0)model.default_reasoning_level="medium";
+        model.supportedReasoningEfforts=model.supported_reasoning_levels.map(entry=>({reasoningEffort:entry.effort,description:entry.description??entry.effort}));
+        model.defaultReasoningEffort=model.default_reasoning_level;
         if(typeof model.slug==="string"&&/^qwen/i.test(model.slug)){
           model.base_instructions=append(model.base_instructions);
           if(model.model_messages&&typeof model.model_messages==="object"){

@@ -442,8 +442,8 @@ test("packaging native feature gate patch tolerates Statsig hook alias changes",
   ]) {
     const source = read(scriptPath);
     assert.match(source, /statsigGateSourcePattern/, `${scriptPath} should match the Statsig hook call with a regex`);
-    assert.match(source, /targetGateMatch\[1\]/, `${scriptPath} should capture the minified hook alias before patching`);
-    assert.match(source, /\$\{gateHook\}\(Z,e\)/, `${scriptPath} should call the captured hook alias after the Ruizhi override`);
+    assert.match(source, /targetGateMatch\[2\]/, `${scriptPath} should capture the minified gate hook alias before patching`);
+    assert.match(source, /\$\{gateHook\}\(\$\{gateStore\},e\)/, `${scriptPath} should call the captured gate hook and store aliases after the Ruizhi override`);
   }
 });
 
@@ -457,7 +457,7 @@ test("packaging disables native Statsig initialize network traffic", () => {
     assert.match(source, /patchNativeStatsigNetwork/, `${scriptPath} should patch Statsig network settings`);
     assert.ok(source.includes("https:\\/\\/ab\\.chatgpt\\.com\\/v1"), `${scriptPath} should locate the hard-coded Statsig API root`);
     assert.match(source, /preventAllNetworkTraffic:!0/, `${scriptPath} should disable Statsig initialize requests`);
-    assert.doesNotMatch(source, /networkOverrideFunc:ij\}\}/, `${scriptPath} should not leave native Statsig network enabled`);
+    assert.doesNotMatch(source, /networkOverrideFunc:ij\}/, `${scriptPath} should not hard-code stale native Statsig network aliases`);
   }
 });
 
@@ -470,9 +470,9 @@ test("packaging disables native CES analytics network traffic", () => {
     const source = read(scriptPath);
     assert.match(source, /patchNativeCesAnalyticsNetwork/, `${scriptPath} should patch CES analytics settings`);
     assert.ok(source.includes("https:\\/\\/chatgpt\\.com\\/ces\\/v1"), `${scriptPath} should locate the hard-coded CES API root`);
-    assert.match(source, /bA=`ruizhi-disabled:\/\/ces\/v1\/rgstr`/, `${scriptPath} should replace the CES event endpoint`);
-    assert.match(source, /xA=`ruizhi-disabled:\/\/ces\/v1`/, `${scriptPath} should replace the CES base endpoint`);
-    assert.match(source, /o=!1&&r&&a===`success`&&i===!0/, `${scriptPath} should keep AnalyticsLogger disabled before initialization`);
+    assert.match(source, /ruizhi-disabled:\/\/ces\/v1\/rgstr/, `${scriptPath} should replace the CES event endpoint`);
+    assert.match(source, /ruizhi-disabled:\/\/ces\/v1/, `${scriptPath} should replace the CES base endpoint`);
+    assert.match(source, /!1&&\$2&&\$3===`success`&&\$4===!0/, `${scriptPath} should keep AnalyticsLogger disabled before initialization`);
   }
 });
 

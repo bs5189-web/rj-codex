@@ -463,7 +463,7 @@ function patchPluginAccountGate() {
 
 function patchNativeWebviewFeatureGates() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const statsigGateSourcePattern = /function Ue\(e\)\{return nt\(\),([A-Za-z_$][\w$]*)\(Z,e\)\}/;
+  const statsigGateSourcePattern = /function Ue\(e\)\{return ([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),e\)\}/;
   const statsigFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, statsigGateSourcePattern, "Statsig webview gate bundle");
   const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const source = fs.readFileSync(statsigFile, "utf8");
@@ -475,10 +475,12 @@ function patchNativeWebviewFeatureGates() {
   if (!targetGateMatch) {
     throw new Error("Codex 原生 webview gate 补丁点不存在");
   }
-  const gateHook = targetGateMatch[1];
+  const initHook = targetGateMatch[1];
+  const gateHook = targetGateMatch[2];
+  const gateStore = targetGateMatch[3];
   const patched = source.replace(
     statsigGateSourcePattern,
-    `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||${gateHook}(Z,e)}`
+    `${nativeGateCode}function Ue(e){return ${initHook}(),ruizhiNativeFeatureGateValue(e)||${gateHook}(${gateStore},e)}`
   );
   fs.writeFileSync(statsigFile, patched, "utf8");
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
@@ -486,22 +488,22 @@ function patchNativeWebviewFeatureGates() {
 
 function patchNativeStatsigNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const statsigNetworkPattern = /networkConfig:\{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,networkOverrideFunc:ij\}/;
-  const statsigFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, /https:\/\/ab\.chatgpt\.com\/v1/, "Statsig network bundle");
+  const statsigNetworkPattern = /networkConfig:\{api:([A-Za-z_$][\w$]*),logEventUrl:([A-Za-z_$][\w$]*),sdkExceptionUrl:([A-Za-z_$][\w$]*),networkOverrideFunc:([A-Za-z_$][\w$]*)\}/;
+  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/ab\.chatgpt\.com\/v1/, "Statsig network bundle");
   writePatchedFile(statsigFile, (source) =>
-    replaceRegex(source, statsigNetworkPattern, "networkConfig:{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,preventAllNetworkTraffic:!0}", "Statsig 初始化网络禁用")
+    replaceRegex(source, statsigNetworkPattern, "networkConfig:{api:$1,logEventUrl:$2,sdkExceptionUrl:$3,preventAllNetworkTraffic:!0}", "Statsig 初始化网络禁用")
   );
   log(`已禁用 Codex 原生 Statsig 初始化网络：${path.basename(statsigFile)}`);
 }
 
 function patchNativeCesAnalyticsNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const cesEndpointPattern = /bA=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,xA=`https:\/\/chatgpt\.com\/ces\/v1`/;
-  const cesEnabledPattern = /o=r&&a===`success`&&i===!0/;
-  const cesFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, /https:\/\/chatgpt\.com\/ces\/v1/, "CES analytics bundle");
+  const cesEndpointPattern = /([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1`/;
+  const cesEnabledPattern = /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)===`success`&&([A-Za-z_$][\w$]*)===!0/;
+  const cesFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/chatgpt\.com\/ces\/v1/, "CES analytics bundle");
   writePatchedFile(cesFile, (source) => {
-    let next = replaceRegex(source, cesEndpointPattern, "bA=`ruizhi-disabled://ces/v1/rgstr`,xA=`ruizhi-disabled://ces/v1`", "CES 分析上报端点禁用");
-    next = replaceRegex(next, cesEnabledPattern, "o=!1&&r&&a===`success`&&i===!0", "CES 分析上报初始化禁用");
+    let next = replaceRegex(source, cesEndpointPattern, "$1=`ruizhi-disabled://ces/v1/rgstr`,$2=`ruizhi-disabled://ces/v1`", "CES 分析上报端点禁用");
+    next = replaceRegex(next, cesEnabledPattern, "$1=!1&&$2&&$3===`success`&&$4===!0", "CES 分析上报初始化禁用");
     return next;
   });
   log(`已禁用 Codex 原生 CES 分析上报：${path.basename(cesFile)}`);

@@ -207,7 +207,7 @@ function ruizhiForcePluginInstallEnabled() {
 function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const statsigGateSourcePattern = /function Ue\(e\)\{return nt\(\),([A-Za-z_$][\w$]*)\(Z,e\)\}/;
+  const statsigGateSourcePattern = /function Ue\(e\)\{return ([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),e\)\}/;
   const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && statsigGateSourcePattern.test(fs.readFileSync(filePath, "utf8")));
   if (candidates.length === 0) {
     log("已跳过 Codex 原生 webview gate 补丁（statsig 模块结构已变化，注入点不存在）");
@@ -227,8 +227,10 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   if (!targetGateMatch) {
     throw new Error("Codex 原生 webview gate 补丁点不存在");
   }
-  const gateHook = targetGateMatch[1];
-  const next = original.replace(statsigGateSourcePattern, `${nativeGateCode}function Ue(e){return nt(),ruizhiNativeFeatureGateValue(e)||${gateHook}(Z,e)}`);
+  const initHook = targetGateMatch[1];
+  const gateHook = targetGateMatch[2];
+  const gateStore = targetGateMatch[3];
+  const next = original.replace(statsigGateSourcePattern, `${nativeGateCode}function Ue(e){return ${initHook}(),ruizhiNativeFeatureGateValue(e)||${gateHook}(${gateStore},e)}`);
   fs.writeFileSync(statsigFile, next, "utf8");
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
 }
@@ -236,8 +238,8 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
 function patchNativeStatsigNetwork(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const statsigNetworkPattern = /networkConfig:\{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,networkOverrideFunc:ij\}/;
-  const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && /https:\/\/ab\.chatgpt\.com\/v1/.test(fs.readFileSync(filePath, "utf8")));
+  const statsigNetworkPattern = /networkConfig:\{api:([A-Za-z_$][\w$]*),logEventUrl:([A-Za-z_$][\w$]*),sdkExceptionUrl:([A-Za-z_$][\w$]*),networkOverrideFunc:([A-Za-z_$][\w$]*)\}/;
+  const candidates = walkFiles(assetsDir).filter((filePath) => /^.+\.js$/.test(path.basename(filePath)) && /https:\/\/ab\.chatgpt\.com\/v1/.test(fs.readFileSync(filePath, "utf8")));
   if (candidates.length === 0) {
     log("已跳过 Codex 原生 Statsig 初始化网络禁用（statsig 模块结构已变化，注入点不存在）");
     return;
@@ -254,7 +256,7 @@ function patchNativeStatsigNetwork(extractedAppDir, options = {}) {
   if (!statsigNetworkPattern.test(original)) {
     throw new Error("Codex 原生 Statsig 初始化网络禁用补丁点不存在");
   }
-  const next = original.replace(statsigNetworkPattern, "networkConfig:{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,preventAllNetworkTraffic:!0}");
+  const next = original.replace(statsigNetworkPattern, "networkConfig:{api:$1,logEventUrl:$2,sdkExceptionUrl:$3,preventAllNetworkTraffic:!0}");
   fs.writeFileSync(statsigFile, next, "utf8");
   log(`已禁用 Codex 原生 Statsig 初始化网络：${path.basename(statsigFile)}`);
 }
@@ -262,9 +264,9 @@ function patchNativeStatsigNetwork(extractedAppDir, options = {}) {
 function patchNativeCesAnalyticsNetwork(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const cesEndpointPattern = /bA=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,xA=`https:\/\/chatgpt\.com\/ces\/v1`/;
-  const cesEnabledPattern = /o=r&&a===`success`&&i===!0/;
-  const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && /https:\/\/chatgpt\.com\/ces\/v1/.test(fs.readFileSync(filePath, "utf8")));
+  const cesEndpointPattern = /([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1`/;
+  const cesEnabledPattern = /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)===`success`&&([A-Za-z_$][\w$]*)===!0/;
+  const candidates = walkFiles(assetsDir).filter((filePath) => /^.+\.js$/.test(path.basename(filePath)) && /https:\/\/chatgpt\.com\/ces\/v1/.test(fs.readFileSync(filePath, "utf8")));
   if (candidates.length === 0) {
     log("已跳过 Codex 原生 CES 分析上报禁用（statsig 模块结构已变化，注入点不存在）");
     return;
@@ -274,7 +276,7 @@ function patchNativeCesAnalyticsNetwork(extractedAppDir, options = {}) {
   }
   const cesFile = candidates[0];
   const original = fs.readFileSync(cesFile, "utf8");
-  if (original.includes("ruizhi-disabled://ces/v1") && original.includes("o=!1&&r&&a===`success`&&i===!0")) {
+  if (original.includes("ruizhi-disabled://ces/v1")) {
     log("已存在 Codex 原生 CES 分析上报禁用补丁");
     return;
   }
@@ -285,8 +287,8 @@ function patchNativeCesAnalyticsNetwork(extractedAppDir, options = {}) {
     throw new Error("Codex 原生 CES 分析上报初始化禁用补丁点不存在");
   }
   const next = original
-    .replace(cesEndpointPattern, "bA=`ruizhi-disabled://ces/v1/rgstr`,xA=`ruizhi-disabled://ces/v1`")
-    .replace(cesEnabledPattern, "o=!1&&r&&a===`success`&&i===!0");
+    .replace(cesEndpointPattern, "$1=`ruizhi-disabled://ces/v1/rgstr`,$2=`ruizhi-disabled://ces/v1`")
+    .replace(cesEnabledPattern, "$1=!1&&$2&&$3===`success`&&$4===!0");
   fs.writeFileSync(cesFile, next, "utf8");
   log(`已禁用 Codex 原生 CES 分析上报：${path.basename(cesFile)}`);
 }

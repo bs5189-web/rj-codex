@@ -780,20 +780,16 @@ function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
   }
 
   const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
-  const nativeBrowserDesktopFeatureAvailabilityPattern = /function ([A-Za-z_$][\w$]*)\(e,\{buildFlavor:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)\.resolve\(\),env:([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\.default\.env,platform:([A-Za-z_$][\w$]*)=\6\.default\.platform\}=\{\}\)\{let ([A-Za-z_$][\w$]*)=\7===`win32`&&\5\.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===`1`\?\{\.\.\.e,computerUse:!0,computerUseNodeRepl:!0\}:e,([A-Za-z_$][\w$]*)=\2===\3\.\4\.Dev\?([A-Za-z_$][\w$]*)\(\5\):null;return /;
+  const nativeBrowserDesktopFeatureAvailabilityPattern = /function ([A-Za-z_$][\w$]*)\(e,\{buildFlavor:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.resolve\(\),env:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.env,platform:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.platform\}=\{\}\)\{let [\s\S]*?CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE[\s\S]*?return /;
   const availabilityMatch = source.match(nativeBrowserDesktopFeatureAvailabilityPattern);
   if (availabilityMatch) {
-    const [, functionName, buildFlavorName, buildFlavorObject, buildFlavorKey, envName, envObject, platformName, baseName, overrideName, overrideFunctionName] = availabilityMatch;
     const functionEnd = source.indexOf("}function ", availabilityMatch.index + availabilityMatch[0].length);
     if (functionEnd === -1) {
       throw new Error("补丁点不存在：Codex 原生 Browser 桌面能力函数边界");
     }
     const originalFunction = source.slice(availabilityMatch.index, functionEnd + 1);
     const returnExpression = source.slice(availabilityMatch.index + availabilityMatch[0].length, functionEnd);
-    return source.replace(
-      originalFunction,
-      `${helper}function ${functionName}(e,{buildFlavor:${buildFlavorName}=${buildFlavorObject}.${buildFlavorKey}.resolve(),env:${envName}=${envObject}.default.env,platform:${platformName}=${envObject}.default.platform}={}){let ${baseName}=${platformName}===\`win32\`&&${envName}.CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE===\`1\`?{...e,computerUse:!0,computerUseNodeRepl:!0}:e,${overrideName}=${buildFlavorName}===${buildFlavorObject}.${buildFlavorKey}.Dev?${overrideFunctionName}(${envName}):null;return ruizhiNativeBrowserDesktopFeatureAvailability(${returnExpression})}`
-    );
+    return source.replace(originalFunction, `${helper}${availabilityMatch[0]}ruizhiNativeBrowserDesktopFeatureAvailability(${returnExpression})}`);
   }
   const replacements = [
     [

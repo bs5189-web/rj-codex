@@ -553,9 +553,9 @@ test("packaging Browser desktop availability patch tolerates main bundle minifie
   ]) {
     const source = read(scriptPath);
     assert.match(source, /nativeBrowserDesktopFeatureAvailabilityPattern/, `${scriptPath} should match desktop feature availability with a regex`);
-    assert.match(source, /const \[, functionName, buildFlavorName/, `${scriptPath} should capture the minified function aliases`);
+    assert.match(source, /CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE/, `${scriptPath} should anchor on the desktop feature availability function body`);
     assert.match(source, /returnExpression/, `${scriptPath} should capture the full availability return expression`);
-    assert.match(source, /return ruizhiNativeBrowserDesktopFeatureAvailability\(\$\{returnExpression\}\)/, `${scriptPath} should wrap the captured availability result`);
+    assert.match(source, /ruizhiNativeBrowserDesktopFeatureAvailability\(\$\{returnExpression\}\)/, `${scriptPath} should wrap the captured availability result`);
     assert.doesNotMatch(source, /\[\\s\\S\]\*\?\)\\}function/, `${scriptPath} should avoid broad cross-function regex backtracking`);
   }
 });

@@ -484,6 +484,29 @@ function patchNativeWebviewFeatureGates() {
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
 }
 
+function patchNativeStatsigNetwork() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const statsigNetworkPattern = /networkConfig:\{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,networkOverrideFunc:ij\}/;
+  const statsigFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, /https:\/\/ab\.chatgpt\.com\/v1/, "Statsig network bundle");
+  writePatchedFile(statsigFile, (source) =>
+    replaceRegex(source, statsigNetworkPattern, "networkConfig:{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,preventAllNetworkTraffic:!0}", "Statsig 初始化网络禁用")
+  );
+  log(`已禁用 Codex 原生 Statsig 初始化网络：${path.basename(statsigFile)}`);
+}
+
+function patchNativeCesAnalyticsNetwork() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const cesEndpointPattern = /bA=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,xA=`https:\/\/chatgpt\.com\/ces\/v1`/;
+  const cesEnabledPattern = /o=r&&a===`success`&&i===!0/;
+  const cesFile = findOneFileByContent(assetsDir, /^statsig-.*\.js$/, /https:\/\/chatgpt\.com\/ces\/v1/, "CES analytics bundle");
+  writePatchedFile(cesFile, (source) => {
+    let next = replaceRegex(source, cesEndpointPattern, "bA=`ruizhi-disabled://ces/v1/rgstr`,xA=`ruizhi-disabled://ces/v1`", "CES 分析上报端点禁用");
+    next = replaceRegex(next, cesEnabledPattern, "o=!1&&r&&a===`success`&&i===!0", "CES 分析上报初始化禁用");
+    return next;
+  });
+  log(`已禁用 Codex 原生 CES 分析上报：${path.basename(cesFile)}`);
+}
+
 function patchNativeProfileVisibility() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileVisibilityFile = findOneFileByContent(
@@ -2566,6 +2589,8 @@ function patchBootstrap() {
 function applyLegacyAsarPatches() {
   patchPluginAccountGate();
   patchNativeWebviewFeatureGates();
+  patchNativeStatsigNetwork();
+  patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeBrowserDesktopFeatureAvailability();
   patchChatGptAuthExternalBrowser();

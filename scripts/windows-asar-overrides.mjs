@@ -233,6 +233,64 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
 }
 
+function patchNativeStatsigNetwork(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const statsigNetworkPattern = /networkConfig:\{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,networkOverrideFunc:ij\}/;
+  const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && /https:\/\/ab\.chatgpt\.com\/v1/.test(fs.readFileSync(filePath, "utf8")));
+  if (candidates.length === 0) {
+    log("已跳过 Codex 原生 Statsig 初始化网络禁用（statsig 模块结构已变化，注入点不存在）");
+    return;
+  }
+  if (candidates.length !== 1) {
+    throw new Error(`Statsig network bundle 匹配数量异常：${candidates.length}`);
+  }
+  const statsigFile = candidates[0];
+  const original = fs.readFileSync(statsigFile, "utf8");
+  if (original.includes("preventAllNetworkTraffic:!0")) {
+    log("已存在 Codex 原生 Statsig 初始化网络禁用补丁");
+    return;
+  }
+  if (!statsigNetworkPattern.test(original)) {
+    throw new Error("Codex 原生 Statsig 初始化网络禁用补丁点不存在");
+  }
+  const next = original.replace(statsigNetworkPattern, "networkConfig:{api:cj,logEventUrl:bA,sdkExceptionUrl:lj,preventAllNetworkTraffic:!0}");
+  fs.writeFileSync(statsigFile, next, "utf8");
+  log(`已禁用 Codex 原生 Statsig 初始化网络：${path.basename(statsigFile)}`);
+}
+
+function patchNativeCesAnalyticsNetwork(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const cesEndpointPattern = /bA=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,xA=`https:\/\/chatgpt\.com\/ces\/v1`/;
+  const cesEnabledPattern = /o=r&&a===`success`&&i===!0/;
+  const candidates = walkFiles(assetsDir).filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)) && /https:\/\/chatgpt\.com\/ces\/v1/.test(fs.readFileSync(filePath, "utf8")));
+  if (candidates.length === 0) {
+    log("已跳过 Codex 原生 CES 分析上报禁用（statsig 模块结构已变化，注入点不存在）");
+    return;
+  }
+  if (candidates.length !== 1) {
+    throw new Error(`CES analytics bundle 匹配数量异常：${candidates.length}`);
+  }
+  const cesFile = candidates[0];
+  const original = fs.readFileSync(cesFile, "utf8");
+  if (original.includes("ruizhi-disabled://ces/v1") && original.includes("o=!1&&r&&a===`success`&&i===!0")) {
+    log("已存在 Codex 原生 CES 分析上报禁用补丁");
+    return;
+  }
+  if (!cesEndpointPattern.test(original)) {
+    throw new Error("Codex 原生 CES 分析上报禁用补丁点不存在");
+  }
+  if (!cesEnabledPattern.test(original)) {
+    throw new Error("Codex 原生 CES 分析上报初始化禁用补丁点不存在");
+  }
+  const next = original
+    .replace(cesEndpointPattern, "bA=`ruizhi-disabled://ces/v1/rgstr`,xA=`ruizhi-disabled://ces/v1`")
+    .replace(cesEnabledPattern, "o=!1&&r&&a===`success`&&i===!0");
+  fs.writeFileSync(cesFile, next, "utf8");
+  log(`已禁用 Codex 原生 CES 分析上报：${path.basename(cesFile)}`);
+}
+
 function patchNativeProfileVisibility(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
@@ -2683,6 +2741,8 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     log("已跳过插件市场文案补丁");
   }
   patchNativeWebviewFeatureGates(extractedAppDir, { log });
+  patchNativeStatsigNetwork(extractedAppDir, { log });
+  patchNativeCesAnalyticsNetwork(extractedAppDir, { log });
   patchNativeProfileVisibility(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });

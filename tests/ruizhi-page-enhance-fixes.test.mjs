@@ -447,6 +447,35 @@ test("packaging native feature gate patch tolerates Statsig hook alias changes",
   }
 });
 
+test("packaging disables native Statsig initialize network traffic", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchNativeStatsigNetwork/, `${scriptPath} should patch Statsig network settings`);
+    assert.ok(source.includes("https:\\/\\/ab\\.chatgpt\\.com\\/v1"), `${scriptPath} should locate the hard-coded Statsig API root`);
+    assert.match(source, /preventAllNetworkTraffic:!0/, `${scriptPath} should disable Statsig initialize requests`);
+    assert.doesNotMatch(source, /networkOverrideFunc:ij\}\}/, `${scriptPath} should not leave native Statsig network enabled`);
+  }
+});
+
+test("packaging disables native CES analytics network traffic", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchNativeCesAnalyticsNetwork/, `${scriptPath} should patch CES analytics settings`);
+    assert.ok(source.includes("https:\\/\\/chatgpt\\.com\\/ces\\/v1"), `${scriptPath} should locate the hard-coded CES API root`);
+    assert.match(source, /bA=`ruizhi-disabled:\/\/ces\/v1\/rgstr`/, `${scriptPath} should replace the CES event endpoint`);
+    assert.match(source, /xA=`ruizhi-disabled:\/\/ces\/v1`/, `${scriptPath} should replace the CES base endpoint`);
+    assert.match(source, /o=!1&&r&&a===`success`&&i===!0/, `${scriptPath} should keep AnalyticsLogger disabled before initialization`);
+  }
+});
+
 test("packaging app sunset gate patch tolerates feature gate alias changes", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",

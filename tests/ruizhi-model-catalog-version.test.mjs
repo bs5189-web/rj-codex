@@ -66,7 +66,9 @@ test("model catalog compatibility defaults missing modalities to text and image"
   applyRuizhiModelCatalogCompatibilityPatches(catalog);
 
   assert.deepEqual(catalog.models[0].input_modalities, ["text", "image"]);
+  assert.deepEqual(catalog.models[0].inputModalities, ["text", "image"]);
   assert.deepEqual(catalog.models[1].input_modalities, ["text"]);
+  assert.deepEqual(catalog.models[1].inputModalities, ["text"]);
 });
 
 test("model catalog compatibility preserves full reasoning level lists", () => {
@@ -90,6 +92,38 @@ test("model catalog compatibility preserves full reasoning level lists", () => {
   applyRuizhiModelCatalogCompatibilityPatches(catalog);
 
   assert.deepEqual(catalog.models[0].supported_reasoning_levels, supportedReasoningLevels);
+  assert.deepEqual(catalog.models[0].supportedReasoningEfforts, [
+    { reasoningEffort: "minimal", description: "最少推理" },
+    { reasoningEffort: "low", description: "轻量推理" },
+    { reasoningEffort: "medium", description: "标准推理" },
+    { reasoningEffort: "high", description: "深度推理" },
+    { reasoningEffort: "xhigh", description: "最高推理" },
+  ]);
+});
+
+test("model catalog compatibility fills empty reasoning levels for API catalogs", () => {
+  const catalog = {
+    models: [
+      {
+        slug: "api-model-empty-reasoning",
+        visibility: "list",
+        supported_reasoning_levels: [],
+      },
+    ],
+  };
+
+  applyRuizhiModelCatalogCompatibilityPatches(catalog);
+
+  assert.deepEqual(
+    catalog.models[0].supported_reasoning_levels.map((entry) => entry.effort),
+    ["minimal", "low", "medium", "high", "xhigh"],
+  );
+  assert.deepEqual(
+    catalog.models[0].supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
+    ["minimal", "low", "medium", "high", "xhigh"],
+  );
+  assert.equal(catalog.models[0].default_reasoning_level, "medium");
+  assert.equal(catalog.models[0].defaultReasoningEffort, "medium");
 });
 
 test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex home", () => {
@@ -116,7 +150,9 @@ test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex 
     assert.match(source, /function applyRuizhiModelCatalogCompatibilityPatches\(catalog\)/);
     assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
     assert.match(source, /model\.input_modalities=\["text","image"\]/);
-    assert.doesNotMatch(source, /supported_reasoning_levels\s*=\s*\[[^\]]*low[^\]]*medium[^\]]*high[^\]]*\]/s);
+    assert.match(source, /model\.inputModalities=model\.input_modalities/);
+    assert.match(source, /model\.supportedReasoningEfforts=model\.supported_reasoning_levels\.map/);
+    assert.match(source, /model\.defaultReasoningEffort=model\.default_reasoning_level/);
     assert.match(source, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
     assert.match(source, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
     assert.doesNotMatch(source, /const userModelCatalogFile="model-catalog\.json";/);

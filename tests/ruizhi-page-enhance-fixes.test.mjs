@@ -408,6 +408,20 @@ test("packaging opens Codex native settings gates including in-app Browser", () 
   }
 });
 
+test("packaging opens the native profile dropdown entry point", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchNativeProfileVisibility/, `${scriptPath} should patch the native profile visibility bundle`);
+    assert.match(source, /2478676115/, `${scriptPath} should open the native profile visibility gate`);
+    assert.match(source, /3503973010/, `${scriptPath} should open the native profile dropdown layer`);
+    assert.match(source, /show_dropdown_entry_point/, `${scriptPath} should force the profile dropdown entry point on`);
+  }
+});
+
 test("packaging plugin auth gate patch tolerates bundle and minifier alias changes", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",

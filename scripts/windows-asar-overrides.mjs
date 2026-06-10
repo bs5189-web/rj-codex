@@ -233,6 +233,28 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
 }
 
+function patchNativeProfileVisibility(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const profileVisibilityFile = findOneFileByContent(
+    assetsDir,
+    /^profile-visibility-.*\.js$/,
+    /2478676115[\s\S]*3503973010[\s\S]*show_dropdown_entry_point/,
+    "profile visibility bundle"
+  );
+  let source = fs.readFileSync(profileVisibilityFile, "utf8");
+  if (source.includes("ruizhiProfileDropdownEntryPoint")) {
+    log("已存在 Codex 个人资料入口补丁");
+    return;
+  }
+  source = source.replace(
+    /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:t\}=i\(\),l=n\(o\),u=r\(s\);if\(t!==`chatgpt`\)return!1;let d;return e\[0\]!==l\|\|e\[1\]!==u\?\(d=l&&u\.get\(c,!1\),e\[0\]=l,e\[1\]=u,e\[2\]=d\):d=e\[2\],d\}/,
+    "function ruizhiProfileDropdownEntryPoint(){return true}function u(){return ruizhiProfileDropdownEntryPoint()}"
+  );
+  fs.writeFileSync(profileVisibilityFile, source, "utf8");
+  log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
+}
+
 function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
   if (source.includes("function ruizhiNativeBrowserDesktopFeatureAvailability(")) {
     return source;
@@ -637,6 +659,18 @@ export function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
     if (!Array.isArray(model.input_modalities)) {
       model.input_modalities = ["text", "image"];
     }
+    model.inputModalities = model.input_modalities;
+    if (!Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length === 0) {
+      model.supported_reasoning_levels = defaultReasoningLevels();
+    }
+    if (typeof model.default_reasoning_level !== "string" || model.default_reasoning_level.length === 0) {
+      model.default_reasoning_level = "medium";
+    }
+    model.supportedReasoningEfforts = model.supported_reasoning_levels.map((entry) => ({
+      reasoningEffort: entry.effort,
+      description: entry.description ?? entry.effort,
+    }));
+    model.defaultReasoningEffort = model.default_reasoning_level;
     if (typeof model.slug === "string" && /^qwen/i.test(model.slug)) {
       model.base_instructions = appendDesktopPluginControlGuidance(model.base_instructions);
       if (model.model_messages && typeof model.model_messages === "object") {
@@ -645,6 +679,16 @@ export function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
     }
   }
   return catalog;
+}
+
+function defaultReasoningLevels() {
+  return [
+    { effort: "minimal", description: "最少推理" },
+    { effort: "low", description: "轻量推理" },
+    { effort: "medium", description: "标准推理" },
+    { effort: "high", description: "深度推理" },
+    { effort: "xhigh", description: "最高推理" },
+  ];
 }
 
 function appendDesktopPluginControlGuidance(value) {
@@ -2671,6 +2715,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     log("已跳过插件市场文案补丁");
   }
   patchNativeWebviewFeatureGates(extractedAppDir, { log });
+  patchNativeProfileVisibility(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });
   patchChatGptAuthExternalBrowser(extractedAppDir, { log });

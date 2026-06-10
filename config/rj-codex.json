@@ -53,8 +53,7 @@
   },
   "models": {
     "enabled": true,
-    "catalogPath": "resources/ruizhi-model-catalog.json",
-    "remoteCatalogUrl": "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-codex/-/raw/main/model-catalog.json?inline=false"
+    "catalogPath": "resources/ruizhi-model-catalog.json"
   },
   "modelBridge": {
     "enabled": true,

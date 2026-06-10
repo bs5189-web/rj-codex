@@ -126,25 +126,20 @@ test("model catalog compatibility fills empty reasoning levels for API catalogs"
   assert.equal(catalog.models[0].defaultReasoningEffort, "medium");
 });
 
-test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex home", () => {
+test("desktop bootstrap refreshes the Codex models cache only from the bundled catalog", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
-  assert.equal(
-    config.models.remoteCatalogUrl,
-    "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-codex/-/raw/main/model-catalog.json?inline=false"
-  );
+  assert.equal(config.models.catalogPath, "resources/ruizhi-model-catalog.json");
+  assert.equal(config.models.remoteCatalogUrl, undefined);
 
   for (const scriptPath of ["scripts/build-windows.mjs", "scripts/build-macos.mjs"]) {
     const source = readProjectFile(scriptPath);
 
-    assert.match(source, /const modelCatalogRemoteUrl=\$\{jsonLiteral\(modelCatalogRemoteUrl\(\)\)\};/);
     assert.match(source, /const userModelCatalogFile="models_cache\.json";/);
-    assert.match(source, /setTimeout\(\(\)=>\{/);
     assert.match(source, /syncBundledModelCatalogCache\(\);/);
     assert.match(source, /function bundledModelCatalogPath\(\)/);
     assert.match(source, /path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
     assert.match(source, /writeModelCatalogCacheFromSource\(bundledModelCatalogPath\(\),target\)/);
-    assert.match(source, /downloadRemoteModelCatalog\(modelCatalogRemoteUrl,temp\);/);
     assert.match(source, /normalizeModelCatalogFile\(temp\);/);
     assert.match(source, /function normalizeModelCatalogFile\(filePath\)/);
     assert.match(source, /function applyRuizhiModelCatalogCompatibilityPatches\(catalog\)/);
@@ -155,13 +150,17 @@ test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex 
     assert.match(source, /model\.defaultReasoningEffort=model\.default_reasoning_level/);
     assert.match(source, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
     assert.match(source, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
+    assert.doesNotMatch(source, /remoteCatalogUrl/);
+    assert.doesNotMatch(source, /modelCatalogRemoteUrl/);
+    assert.doesNotMatch(source, /downloadRemoteModelCatalog/);
+    assert.doesNotMatch(source, /ruizhi remote model catalog sync failed/);
+    assert.doesNotMatch(source, /RUIZHI_MODEL_CATALOG_URL/);
     assert.doesNotMatch(source, /const userModelCatalogFile="model-catalog\.json";/);
     assert.doesNotMatch(source, /catalogPath:path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
   }
 
   const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
   assert.match(asarPatchSource, /const userModelCatalogFile="models_cache\.json";/);
-  assert.match(asarPatchSource, /setTimeout\(\(\)=>\{/);
   assert.match(asarPatchSource, /syncBundledModelCatalogCache\(\);/);
   assert.match(asarPatchSource, /function bundledModelCatalogPath\(\)/);
   assert.match(asarPatchSource, /path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
@@ -172,6 +171,11 @@ test("desktop bootstrap refreshes the Codex models cache from GitLab into Codex 
   assert.match(asarPatchSource, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
   assert.match(asarPatchSource, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
   assert.match(asarPatchSource, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
+  assert.doesNotMatch(asarPatchSource, /remoteCatalogUrl/);
+  assert.doesNotMatch(asarPatchSource, /modelCatalogRemoteUrl/);
+  assert.doesNotMatch(asarPatchSource, /downloadRemoteModelCatalog/);
+  assert.doesNotMatch(asarPatchSource, /ruizhi remote model catalog sync failed/);
+  assert.doesNotMatch(asarPatchSource, /RUIZHI_MODEL_CATALOG_URL/);
   assert.doesNotMatch(asarPatchSource, /const userModelCatalogFile="model-catalog\.json";/);
 });
 

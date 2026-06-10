@@ -246,10 +246,6 @@ function modelCatalogPath() {
   return resolved;
 }
 
-function modelCatalogRemoteUrl() {
-  return config.models?.remoteCatalogUrl ?? "";
-}
-
 function modelCatalogEnabled() {
   return config.models?.enabled !== false;
 }
@@ -1328,7 +1324,6 @@ function ruizhiInit(){
       routes: modelBridgeRoutes()
     })};
     const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabled())};
-    const modelCatalogRemoteUrl=${jsonLiteral(modelCatalogRemoteUrl())};
     const imageGenHelper=${jsonLiteral(imageGenHelper)};
     const modelCatalogFile="ruizhi-model-catalog.json";
     const userModelCatalogFile="models_cache.json";
@@ -1415,31 +1410,10 @@ function ruizhiInit(){
       return changed;
     }
     function syncModelCache(){
-      const target=path.join(codexHome,userModelCatalogFile);
       if(!modelCatalogEnabled){
         return;
       }
       syncBundledModelCatalogCache();
-      if(!modelCatalogRemoteUrl)return;
-      setTimeout(()=>{
-        const temp=path.join(codexHome,\`.model-catalog.\${Date.now()}.\${Math.random().toString(16).slice(2)}.tmp\`);
-        try{
-          downloadRemoteModelCatalog(modelCatalogRemoteUrl,temp);
-          validateModelCatalogFile(temp);
-          normalizeModelCatalogFile(temp);
-          const changed=!fs.existsSync(target)||fs.readFileSync(temp).compare(fs.readFileSync(target))!==0;
-          if(!changed){
-            fs.rmSync(temp,{force:true});
-            return;
-          }
-          backupExistingModelCatalog(target);
-          fs.renameSync(temp,target);
-        }catch(error){
-          fs.rmSync(temp,{force:true});
-          console.warn("ruizhi remote model catalog sync failed",error);
-          syncBundledModelCatalogCache();
-        }
-      },1000);
     }
     function bundledModelCatalogPath(){
       return path.join(resourcesRoot,"models",modelCatalogFile);
@@ -1474,31 +1448,10 @@ function ruizhiInit(){
         throw error;
       }
     }
-    function downloadRemoteModelCatalog(url,target){
-      const childProcess=require("node:child_process");
-      fs.mkdirSync(path.dirname(target),{recursive:true});
-      let result;
-      if(process.platform==="win32"){
-        const command=[
-          "$ErrorActionPreference='Stop';",
-          "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;",
-          "Invoke-WebRequest -Uri $env:RUIZHI_MODEL_CATALOG_URL -OutFile $env:RUIZHI_MODEL_CATALOG_TARGET -UseBasicParsing"
-        ].join(" ");
-        result=childProcess.spawnSync("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Command",command],{
-          encoding:"utf8",
-          timeout:25000,
-          env:{...process.env,RUIZHI_MODEL_CATALOG_URL:url,RUIZHI_MODEL_CATALOG_TARGET:target}
-        });
-      }else{
-        result=childProcess.spawnSync("curl",["-fL","--connect-timeout","8","--max-time","25","-o",target,url],{encoding:"utf8",timeout:30000});
-      }
-      if(result.error)throw result.error;
-      if(result.status!==0)throw new Error(String(result.stderr||result.stdout||\`download failed with status \${result.status}\`).trim());
-    }
     function validateModelCatalogFile(filePath){
       const catalog=JSON.parse(fs.readFileSync(filePath,"utf8"));
       if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models)||catalog.models.length===0){
-        throw new Error("远程模型目录格式无效");
+        throw new Error("模型目录格式无效");
       }
       return catalog;
     }

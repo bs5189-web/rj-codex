@@ -222,7 +222,7 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
     log("已存在 Codex 原生 webview gate 补丁");
     return;
   }
-  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`,`3903563814`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const targetGateMatch = original.match(statsigGateSourcePattern);
   if (!targetGateMatch) {
     throw new Error("Codex 原生 webview gate 补丁点不存在");
@@ -384,14 +384,21 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
     "profile visibility bundle"
   );
   let source = fs.readFileSync(profileVisibilityFile, "utf8");
-  if (source.includes("ruizhiProfileDropdownEntryPoint")) {
+  if (source.includes("ruizhiProfileVisibility()")) {
     log("已存在 Codex 个人资料入口补丁");
     return;
   }
   source = source.replace(
+    /function l\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:r,isLoading:s\}=i\(\),c=t\(\),l=n\(o\),u=s\|\|r===`chatgpt`&&c,d=r===`chatgpt`&&l,f;return e\[0\]!==u\|\|e\[1\]!==d\?\(f=\{isProfileVisibilityLoading:u,isProfileVisible:d\},e\[0\]=u,e\[1\]=d,e\[2\]=f\):f=e\[2\],f\}/,
+    "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function l(){return ruizhiProfileVisibility()}"
+  );
+  source = source.replace(
     /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:t\}=i\(\),l=n\(o\),u=r\(s\);if\(t!==`chatgpt`\)return!1;let d;return e\[0\]!==l\|\|e\[1\]!==u\?\(d=l&&u\.get\(c,!1\),e\[0\]=l,e\[1\]=u,e\[2\]=d\):d=e\[2\],d\}/,
     "function ruizhiProfileDropdownEntryPoint(){return true}function u(){return ruizhiProfileDropdownEntryPoint()}"
   );
+  if (!source.includes("ruizhiProfileVisibility()") || !source.includes("ruizhiProfileDropdownEntryPoint()")) {
+    throw new Error("Codex 个人资料入口补丁点不存在");
+  }
   fs.writeFileSync(profileVisibilityFile, source, "utf8");
   log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
 }

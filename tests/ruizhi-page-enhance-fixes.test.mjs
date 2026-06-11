@@ -402,6 +402,7 @@ test("packaging opens Codex native settings gates including in-app Browser", () 
     assert.match(source, /3075919032/, `${scriptPath} should keep Codex native Automations nav visible`);
     assert.match(source, /4166894088/, `${scriptPath} should keep Codex native profile Settings visible`);
     assert.match(source, /410262010/, `${scriptPath} should make in-app Browser controls available`);
+    assert.match(source, /3903563814/, `${scriptPath} should allow Browser plugin navigation to non-local sites`);
     assert.doesNotMatch(source, /1506311413/, `${scriptPath} should leave Computer Use controls to Codex defaults`);
     assert.doesNotMatch(source, /410065390/, `${scriptPath} should leave Google Chrome controls to Codex defaults`);
     assert.doesNotMatch(source, /querySelectorAll\([^)]*(自动化|Automations|settingsPage|general-settings)/, `${scriptPath} should not fake native sidebar/profile buttons with DOM insertion`);
@@ -418,7 +419,10 @@ test("packaging opens the native profile dropdown entry point", () => {
     assert.match(source, /patchNativeProfileVisibility/, `${scriptPath} should patch the native profile visibility bundle`);
     assert.match(source, /2478676115/, `${scriptPath} should open the native profile visibility gate`);
     assert.match(source, /3503973010/, `${scriptPath} should open the native profile dropdown layer`);
+    assert.match(source, /ruizhiProfileVisibility/, `${scriptPath} should keep the Settings profile section visible`);
+    assert.match(source, /isProfileVisibilityLoading:false,isProfileVisible:true/, `${scriptPath} should not redirect away from Settings profile`);
     assert.match(source, /show_dropdown_entry_point/, `${scriptPath} should force the profile dropdown entry point on`);
+    assert.match(source, /ruizhiProfileDropdownEntryPoint/, `${scriptPath} should keep the profile dropdown entry point visible`);
   }
 });
 

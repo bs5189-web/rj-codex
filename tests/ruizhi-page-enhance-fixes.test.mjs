@@ -391,7 +391,7 @@ test("macOS application menu patch tolerates main bundle minifier alias changes"
   assert.match(source, /settingsRoute:\$\{settingsRouteName\}/, "macOS menu patch should use the captured settings route alias");
 });
 
-test("packaging opens Codex native settings gates including in-app Browser", () => {
+test("packaging opens Codex native settings gates including Browser and Chrome", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -403,8 +403,8 @@ test("packaging opens Codex native settings gates including in-app Browser", () 
     assert.match(source, /4166894088/, `${scriptPath} should keep Codex native profile Settings visible`);
     assert.match(source, /410262010/, `${scriptPath} should make in-app Browser controls available`);
     assert.match(source, /3903563814/, `${scriptPath} should allow Browser plugin navigation to non-local sites`);
+    assert.match(source, /410065390/, `${scriptPath} should make Google Chrome controls available`);
     assert.doesNotMatch(source, /1506311413/, `${scriptPath} should leave Computer Use controls to Codex defaults`);
-    assert.doesNotMatch(source, /410065390/, `${scriptPath} should leave Google Chrome controls to Codex defaults`);
     assert.doesNotMatch(source, /querySelectorAll\([^)]*(自动化|Automations|settingsPage|general-settings)/, `${scriptPath} should not fake native sidebar/profile buttons with DOM insertion`);
   }
 });

@@ -709,7 +709,7 @@ function patchNativeWebviewFeatureGates() {
   if (!statsigFile) {
     throw new Error("Statsig webview gate 补丁目标不存在");
   }
-  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`,`3903563814`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`,`3903563814`,`410065390`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const source = fs.readFileSync(statsigFile, "utf8");
   if (source.includes("ruizhiNativeFeatureGateValue")) {
     log("已存在 Codex 原生 webview gate 补丁");

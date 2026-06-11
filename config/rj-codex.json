@@ -37,7 +37,7 @@
   "openai": {
     "baseUrl": "https://uniapi.ruijie.com.cn/v1",
     "tokenUrl": "https://uniapi.ruijie.com.cn/console/token",
-    "defaultModel": "gpt-5.5",
+    "defaultModel": "DeepSeek-V4-Flash",
     "defaultReasoningEffort": "medium",
     "requestMaxRetries": 0,
     "streamMaxRetries": 0

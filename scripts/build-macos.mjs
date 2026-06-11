@@ -740,6 +740,30 @@ function patchNativeStatsigNetwork() {
   log(`已禁用 Codex 原生 Statsig 初始化网络：${path.basename(statsigFile)}`);
 }
 
+function patchNativeStatsigBootstrap() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const statsigBootstrapPattern = /async function ([A-Za-z_$][\w$]*)\(\{appSessionId:([A-Za-z_$][\w$]*),appVersion:([A-Za-z_$][\w$]*),buildFlavor:([A-Za-z_$][\w$]*),locale:([A-Za-z_$][\w$]*),stableId:([A-Za-z_$][\w$]*),systemName:([A-Za-z_$][\w$]*),systemVersion:([A-Za-z_$][\w$]*),windowType:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=null;try\{let\{statsigPayload:([A-Za-z_$][\w$]*)\}=await Promise\.race\(\[[\s\S]*?Timed out while fetching post-login Statsig bootstrap[\s\S]*?\]\),\{user:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\.parse\(JSON\.parse\(([A-Za-z_$][\w$]*)\)\);return\{statsigPayload:([A-Za-z_$][\w$]*),user:([A-Za-z_$][\w$]*)\}\}finally\{([A-Za-z_$][\w$]*)!=null&&globalThis\.clearTimeout\(([A-Za-z_$][\w$]*)\)\}\}/;
+  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /Timed out while fetching post-login Statsig bootstrap/, "Statsig bootstrap bundle");
+  writePatchedFile(statsigFile, (source) => {
+    const match = source.match(statsigBootstrapPattern);
+    if (!match) {
+      throw new Error("补丁点不存在：Statsig post-login bootstrap 等待禁用");
+    }
+    const functionName = match[1];
+    const appSessionId = match[2];
+    const appVersion = match[3];
+    const locale = match[5];
+    const stableId = match[6];
+    const validator = match[13];
+    const localBootstrapCode = "function ruizhiCreateStatsigBootstrapPayload(e){return JSON.stringify({has_updates:!0,response_format:`init-v2`,time:Date.now(),feature_gates:{},dynamic_configs:{},layer_configs:{},param_stores:{},values:{},exposures:{},sdk_flags:{},user:{userID:e.stableId||e.appSessionId||`ruizhi-local`,customIDs:{stableID:e.stableId},locale:e.locale,appVersion:e.appVersion}})}";
+    return source.replace(
+      statsigBootstrapPattern,
+      `${localBootstrapCode}async function ${functionName}({appSessionId:${appSessionId},appVersion:${appVersion},buildFlavor:${match[4]},locale:${locale},stableId:${stableId},systemName:${match[7]},systemVersion:${match[8]},windowType:${match[9]}}){let ${match[11]}=ruizhiCreateStatsigBootstrapPayload({appSessionId:${appSessionId},appVersion:${appVersion},locale:${locale},stableId:${stableId}}),{user:${match[12]}}=${validator}.parse(JSON.parse(${match[11]}));return{statsigPayload:${match[11]},user:${match[12]}}}`
+    );
+  });
+  log(`已禁用 Codex 原生 Statsig post-login bootstrap 等待：${path.basename(statsigFile)}`);
+}
+
 function patchNativeCesAnalyticsNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const cesEndpointPattern = /([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1`/;
@@ -1240,6 +1264,56 @@ function patchModelAvailabilityAllowlist() {
   );
 
   log(`已禁用模型白名单过滤：${path.basename(modelSettingsFile)}`);
+}
+
+function patchListModelsForHostFromUserCache() {
+  if (!modelCatalogEnabled()) {
+    log("跳过模型缓存列表补丁：自定义模型目录已关闭");
+    return;
+  }
+
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const modelQueriesFile = findOneFileByContent(
+    assetsDir,
+    /^model-queries-.*\.js$/,
+    /list-models-for-host/,
+    "model queries bundle"
+  );
+
+  writePatchedFile(modelQueriesFile, (source) => {
+    const modelListQueryFnReplacement = (rpcCall, hostId, limit) =>
+      `queryFn:()=>{let ruizhiArgs={hostId:${hostId},includeHidden:!0,cursor:null,limit:${limit}},ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call;if(typeof ruizhiCall!==\`function\`)return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs);return ruizhiCall(\`/models/list\`,ruizhiArgs).then(ruizhiResult=>{if(ruizhiResult?.status===\`ok\`&&Array.isArray(ruizhiResult.data)){let ruizhiModels=ruizhiResult.data;return {data:ruizhiModels,nextCursor:null}}return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs)})}`;
+    if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) return source;
+    const legacyModelListQueryFnPattern = /function ruizhiListModelsForHostFromUserCache\(e\)\{let t=globalThis\.ruizhiDesktop\?\.enhance\?\.call;if\(typeof t!==`function`\)return ([A-Za-z_$][\w$]*)\(`list-models-for-host`,e\);return t\(`\/models\/list`,e\)\.then\(t=>\{if\(t\?\.status===`ok`&&Array\.isArray\(t\.data\)\)\{let models=t\.data;return \{data:models,nextCursor:null\}\}return [A-Za-z_$][\w$]*\(`list-models-for-host`,e\)\}\)\}queryFn:\(\)=>ruizhiListModelsForHostFromUserCache\(\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
+    const legacyMatch = source.match(legacyModelListQueryFnPattern);
+    if (legacyMatch) {
+      return replaceRegex(
+        source,
+        legacyModelListQueryFnPattern,
+        modelListQueryFnReplacement(legacyMatch[1], legacyMatch[2], legacyMatch[3]),
+        "修复旧版用户 models_cache.json 模型列表补丁"
+      );
+    }
+    if (source.includes("function ruizhiListModelsForHostFromUserCache(")) {
+      throw new Error("补丁点未知：旧版用户 models_cache.json 模型列表补丁");
+    }
+    const modelListQueryFnPattern = /queryFn:\(\)=>([A-Za-z_$][\w$]*)\(`list-models-for-host`,\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
+    const match = source.match(modelListQueryFnPattern);
+    if (!match) {
+      throw new Error("补丁点不存在：改用用户 models_cache.json 作为模型列表数据源");
+    }
+    const rpcCall = match[1];
+    const hostId = match[2];
+    const limit = match[3];
+    return replaceRegex(
+      source,
+      modelListQueryFnPattern,
+      modelListQueryFnReplacement(rpcCall, hostId, limit),
+      "改用用户 models_cache.json 作为模型列表数据源"
+    );
+  });
+
+  log(`已改用用户模型缓存列表：${path.basename(modelQueriesFile)}`);
 }
 
 function patchOfficialUpdateLogic() {
@@ -2129,6 +2203,7 @@ async function repackAppAsar() {
   patchPluginAccountGate();
   patchNativeWebviewFeatureGates();
   patchNativeStatsigNetwork();
+  patchNativeStatsigBootstrap();
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeBrowserDesktopFeatureAvailability();
@@ -2143,6 +2218,7 @@ async function repackAppAsar() {
   patchFrontendDefaultMessages();
   patchAppSunsetGate();
   patchModelAvailabilityAllowlist();
+  patchListModelsForHostFromUserCache();
   patchOfficialUpdateLogic();
   patchApplicationMenu();
   patchHelpDocumentationLinks();

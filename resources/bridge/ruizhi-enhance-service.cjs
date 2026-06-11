@@ -76,6 +76,8 @@ function createRuizhiEnhanceService(options = {}) {
           return withStorage(dbPath, backupDir, (storage) => storage.threadSortKey(sessionFromPayload(payload)));
         case "/thread-sort-keys":
           return withStorage(dbPath, backupDir, (storage) => storage.threadSortKeys(Array.isArray(payload?.sessions) ? payload.sessions.map(sessionFromPayload) : []));
+        case "/models/list":
+          return listModelsFromUserCache(codexHome, payload);
         default:
           return { status: "failed", message: `Unknown enhance route: ${route}` };
       }
@@ -90,6 +92,64 @@ function createRuizhiEnhanceService(options = {}) {
   }
 
   return { call, settings, writeSettings };
+}
+
+function listModelsFromUserCache(codexHome, payload = {}) {
+  const catalogPath = path.join(codexHome, "models_cache.json");
+  const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8"));
+  applyRuizhiModelCatalogCompatibilityPatches(catalog);
+  const defaultModel = typeof catalog.default_model === "string" && catalog.default_model.trim()
+    ? catalog.default_model.trim()
+    : "DeepSeek-V4-Flash";
+  const includeHidden = payload?.includeHidden === true;
+  const limit = Number.isInteger(payload?.limit) && payload.limit > 0 ? payload.limit : 100;
+  const models = (Array.isArray(catalog.models) ? catalog.models : [])
+    .map((model) => modelFromCatalogEntry(model, defaultModel))
+    .filter((model) => includeHidden || !model.hidden)
+    .slice(0, limit);
+  return { status: "ok", data: models, nextCursor: null, etag: typeof catalog.etag === "string" ? catalog.etag : "ruizhi-models" };
+}
+
+function modelFromCatalogEntry(entry, defaultModel) {
+  const model = String(entry?.model || entry?.slug || "").trim();
+  const displayName = String(entry?.displayName || entry?.display_name || model).trim() || model;
+  const visibility = String(entry?.visibility || "list");
+  return {
+    ...entry,
+    model,
+    slug: entry?.slug || model,
+    displayName,
+    display_name: entry?.display_name || displayName,
+    description: typeof entry?.description === "string" ? entry.description : "",
+    hidden: visibility !== "list",
+    isDefault: model === defaultModel || entry?.isDefault === true,
+    supportedReasoningEfforts: Array.isArray(entry?.supportedReasoningEfforts) ? entry.supportedReasoningEfforts : [],
+    defaultReasoningEffort: typeof entry?.defaultReasoningEffort === "string" ? entry.defaultReasoningEffort : "medium"
+  };
+}
+
+function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
+  if (!catalog || typeof catalog !== "object" || !Array.isArray(catalog.models)) return catalog;
+  const defaultReasoningLevels = () => [
+    { effort: "minimal", description: "最少推理" },
+    { effort: "low", description: "轻量推理" },
+    { effort: "medium", description: "标准推理" },
+    { effort: "high", description: "深度推理" },
+    { effort: "xhigh", description: "最高推理" }
+  ];
+  for (const model of catalog.models) {
+    if (!model || typeof model !== "object") continue;
+    if (!Array.isArray(model.input_modalities)) model.input_modalities = ["text", "image"];
+    model.inputModalities = model.input_modalities;
+    if (!Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length === 0) model.supported_reasoning_levels = defaultReasoningLevels();
+    if (typeof model.default_reasoning_level !== "string" || model.default_reasoning_level.length === 0) model.default_reasoning_level = "medium";
+    model.supportedReasoningEfforts = model.supported_reasoning_levels.map((entry) => ({
+      reasoningEffort: entry.effort,
+      description: entry.description ?? entry.effort
+    }));
+    model.defaultReasoningEffort = model.default_reasoning_level;
+  }
+  return catalog;
 }
 
 function normalizeConfig(config) {

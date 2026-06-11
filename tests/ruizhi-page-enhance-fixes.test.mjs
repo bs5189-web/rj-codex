@@ -461,6 +461,20 @@ test("packaging disables native Statsig initialize network traffic", () => {
   }
 });
 
+test("packaging disables post-login Statsig bootstrap wait", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchNativeStatsigBootstrap/, `${scriptPath} should patch the post-login Statsig bootstrap path`);
+    assert.match(source, /Timed out while fetching post-login Statsig bootstrap/, `${scriptPath} should locate the startup-blocking bootstrap function`);
+    assert.match(source, /ruizhiCreateStatsigBootstrapPayload/, `${scriptPath} should provide a local bootstrap payload`);
+    assert.match(source, /return\{statsigPayload:\$\{match\[11\]\},user:\$\{match\[12\]\}\}/, `${scriptPath} should replace the remote bootstrap result with the local payload shape`);
+  }
+});
+
 test("packaging disables native CES analytics network traffic", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",

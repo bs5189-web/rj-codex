@@ -235,6 +235,58 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
 }
 
+function patchListModelsForHostFromUserCache(extractedAppDir, config, options = {}) {
+  const log = options.log ?? (() => {});
+  if (!modelCatalogEnabled(config)) {
+    log("跳过模型缓存列表补丁：自定义模型目录已关闭");
+    return;
+  }
+
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const candidates = walkFiles(assetsDir).filter((filePath) => /^model-queries-.*\.js$/.test(path.basename(filePath)) && /list-models-for-host/.test(fs.readFileSync(filePath, "utf8")));
+  if (candidates.length !== 1) {
+    throw new Error(`model queries bundle 匹配数量异常：${candidates.length}`);
+  }
+
+  const modelQueriesFile = candidates[0];
+  const source = fs.readFileSync(modelQueriesFile, "utf8");
+  const modelListQueryFnReplacement = (rpcCall, hostId, limit) =>
+    `queryFn:()=>{let ruizhiArgs={hostId:${hostId},includeHidden:!0,cursor:null,limit:${limit}},ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call;if(typeof ruizhiCall!==\`function\`)return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs);return ruizhiCall(\`/models/list\`,ruizhiArgs).then(ruizhiResult=>{if(ruizhiResult?.status===\`ok\`&&Array.isArray(ruizhiResult.data)){let ruizhiModels=ruizhiResult.data;return {data:ruizhiModels,nextCursor:null}}return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs)})}`;
+  if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) {
+    log(`已存在用户模型缓存列表补丁：${path.basename(modelQueriesFile)}`);
+    return;
+  }
+  const legacyModelListQueryFnPattern = /function ruizhiListModelsForHostFromUserCache\(e\)\{let t=globalThis\.ruizhiDesktop\?\.enhance\?\.call;if\(typeof t!==`function`\)return ([A-Za-z_$][\w$]*)\(`list-models-for-host`,e\);return t\(`\/models\/list`,e\)\.then\(t=>\{if\(t\?\.status===`ok`&&Array\.isArray\(t\.data\)\)\{let models=t\.data;return \{data:models,nextCursor:null\}\}return [A-Za-z_$][\w$]*\(`list-models-for-host`,e\)\}\)\}queryFn:\(\)=>ruizhiListModelsForHostFromUserCache\(\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
+  const legacyMatch = source.match(legacyModelListQueryFnPattern);
+  if (legacyMatch) {
+    const next = source.replace(
+      legacyModelListQueryFnPattern,
+      modelListQueryFnReplacement(legacyMatch[1], legacyMatch[2], legacyMatch[3])
+    );
+    fs.writeFileSync(modelQueriesFile, next, "utf8");
+    log(`已修复旧版用户模型缓存列表补丁：${path.basename(modelQueriesFile)}`);
+    return;
+  }
+  if (source.includes("function ruizhiListModelsForHostFromUserCache(")) {
+    throw new Error("model queries 用户模型缓存旧补丁形态未知，无法安全迁移");
+  }
+
+  const modelListQueryFnPattern = /queryFn:\(\)=>([A-Za-z_$][\w$]*)\(`list-models-for-host`,\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
+  const match = source.match(modelListQueryFnPattern);
+  if (!match) {
+    throw new Error("model queries 用户模型缓存补丁点不存在");
+  }
+  const rpcCall = match[1];
+  const hostId = match[2];
+  const limit = match[3];
+  const next = source.replace(
+    modelListQueryFnPattern,
+    modelListQueryFnReplacement(rpcCall, hostId, limit)
+  );
+  fs.writeFileSync(modelQueriesFile, next, "utf8");
+  log(`已改用用户模型缓存列表：${path.basename(modelQueriesFile)}`);
+}
+
 function patchNativeStatsigNetwork(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
@@ -259,6 +311,35 @@ function patchNativeStatsigNetwork(extractedAppDir, options = {}) {
   const next = original.replace(statsigNetworkPattern, "networkConfig:{api:$1,logEventUrl:$2,sdkExceptionUrl:$3,preventAllNetworkTraffic:!0}");
   fs.writeFileSync(statsigFile, next, "utf8");
   log(`已禁用 Codex 原生 Statsig 初始化网络：${path.basename(statsigFile)}`);
+}
+
+function patchNativeStatsigBootstrap(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const statsigBootstrapPattern = /async function ([A-Za-z_$][\w$]*)\(\{appSessionId:([A-Za-z_$][\w$]*),appVersion:([A-Za-z_$][\w$]*),buildFlavor:([A-Za-z_$][\w$]*),locale:([A-Za-z_$][\w$]*),stableId:([A-Za-z_$][\w$]*),systemName:([A-Za-z_$][\w$]*),systemVersion:([A-Za-z_$][\w$]*),windowType:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=null;try\{let\{statsigPayload:([A-Za-z_$][\w$]*)\}=await Promise\.race\(\[[\s\S]*?Timed out while fetching post-login Statsig bootstrap[\s\S]*?\]\),\{user:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\.parse\(JSON\.parse\(([A-Za-z_$][\w$]*)\)\);return\{statsigPayload:([A-Za-z_$][\w$]*),user:([A-Za-z_$][\w$]*)\}\}finally\{([A-Za-z_$][\w$]*)!=null&&globalThis\.clearTimeout\(([A-Za-z_$][\w$]*)\)\}\}/;
+  const statsigFile = candidates[0];
+  const original = fs.readFileSync(statsigFile, "utf8");
+  if (original.includes("ruizhiCreateStatsigBootstrapPayload")) {
+    log("已存在 Codex 原生 Statsig post-login bootstrap 等待禁用补丁");
+    return;
+  }
+  const match = original.match(statsigBootstrapPattern);
+  if (!match) {
+    throw new Error("Codex 原生 Statsig post-login bootstrap 等待禁用补丁点不存在");
+  }
+  const functionName = match[1];
+  const appSessionId = match[2];
+  const appVersion = match[3];
+  const locale = match[5];
+  const stableId = match[6];
+  const validator = match[13];
+  const localBootstrapCode = "function ruizhiCreateStatsigBootstrapPayload(e){return JSON.stringify({has_updates:!0,response_format:`init-v2`,time:Date.now(),feature_gates:{},dynamic_configs:{},layer_configs:{},param_stores:{},values:{},exposures:{},sdk_flags:{},user:{userID:e.stableId||e.appSessionId||`ruizhi-local`,customIDs:{stableID:e.stableId},locale:e.locale,appVersion:e.appVersion}})}";
+  const next = original.replace(
+    statsigBootstrapPattern,
+    `${localBootstrapCode}async function ${functionName}({appSessionId:${appSessionId},appVersion:${appVersion},buildFlavor:${match[4]},locale:${locale},stableId:${stableId},systemName:${match[7]},systemVersion:${match[8]},windowType:${match[9]}}){let ${match[11]}=ruizhiCreateStatsigBootstrapPayload({appSessionId:${appSessionId},appVersion:${appVersion},locale:${locale},stableId:${stableId}}),{user:${match[12]}}=${validator}.parse(JSON.parse(${match[11]}));return{statsigPayload:${match[11]},user:${match[12]}}}`
+  );
+  fs.writeFileSync(statsigFile, next, "utf8");
+  log(`已禁用 Codex 原生 Statsig post-login bootstrap 等待：${path.basename(statsigFile)}`);
 }
 
 function patchNativeCesAnalyticsNetwork(extractedAppDir, options = {}) {
@@ -2740,9 +2821,11 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   }
   patchNativeWebviewFeatureGates(extractedAppDir, { log });
   patchNativeStatsigNetwork(extractedAppDir, { log });
+  patchNativeStatsigBootstrap(extractedAppDir, { log });
   patchNativeCesAnalyticsNetwork(extractedAppDir, { log });
   patchNativeProfileVisibility(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
+  patchListModelsForHostFromUserCache(extractedAppDir, config, { log });
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });
   patchChatGptAuthExternalBrowser(extractedAppDir, { log });
   patchBrowserNativePipeDiagnostics(extractedAppDir, { log });

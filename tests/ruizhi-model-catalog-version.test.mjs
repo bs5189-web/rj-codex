@@ -33,6 +33,21 @@ test("DeepSeek V4 chat models only advertise UniAPI-compatible options", () => {
   }
 });
 
+test("Ruizhi startup default model is DeepSeek V4 Flash", () => {
+  const config = JSON.parse(readProjectFile("config/rj-codex.json"));
+  const catalog = JSON.parse(readProjectFile("resources/ruizhi-model-catalog.json"));
+  const defaultModel = "DeepSeek-V4-Flash";
+
+  assert.equal(config.openai.defaultModel, defaultModel);
+  assert.equal(catalog.default_model, defaultModel);
+  assert.equal(catalog.models[0]?.slug, defaultModel);
+  assert.ok(catalog.models.some((model) => model.slug === defaultModel), "default model should exist in catalog");
+
+  const serviceSource = readProjectFile("resources/bridge/ruizhi-enhance-service.cjs");
+  assert.match(serviceSource, /: "DeepSeek-V4-Flash"/);
+  assert.match(serviceSource, /isDefault: model === defaultModel/);
+});
+
 test("Qwen Responses models keep Codex desktop plugin-control guidance", () => {
   const catalog = JSON.parse(readProjectFile("resources/ruizhi-model-catalog.json"));
   const slugs = ["qwen3.6-plus", "qwen3.6-flash", "qwen3-coder-plus"];
@@ -177,6 +192,49 @@ test("desktop bootstrap refreshes the Codex models cache only from the bundled c
   assert.doesNotMatch(asarPatchSource, /ruizhi remote model catalog sync failed/);
   assert.doesNotMatch(asarPatchSource, /RUIZHI_MODEL_CATALOG_URL/);
   assert.doesNotMatch(asarPatchSource, /const userModelCatalogFile="model-catalog\.json";/);
+});
+
+test("desktop patches host model listing to read the user models cache", () => {
+  for (const scriptPath of ["scripts/build-windows.mjs", "scripts/build-macos.mjs"]) {
+    const source = readProjectFile(scriptPath);
+
+    assert.match(source, /function patchListModelsForHostFromUserCache\(\)/);
+    assert.match(source, /models_cache\.json/);
+    assert.match(source, /list-models-for-host/);
+    assert.match(source, /modelListQueryFnPattern/);
+    assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
+    assert.match(source, /return \{data:ruizhiModels,nextCursor:null\}/);
+  }
+
+  const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
+  assert.match(asarPatchSource, /function patchListModelsForHostFromUserCache\(/);
+  assert.match(asarPatchSource, /models_cache\.json/);
+  assert.match(asarPatchSource, /list-models-for-host/);
+  assert.match(asarPatchSource, /modelListQueryFnPattern/);
+  assert.match(asarPatchSource, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
+  assert.match(asarPatchSource, /return \{data:ruizhiModels,nextCursor:null\}/);
+});
+
+test("host model listing patch separates the helper from queryFn", () => {
+  for (const scriptPath of ["scripts/build-windows.mjs", "scripts/build-macos.mjs", "scripts/windows-asar-overrides.mjs"]) {
+    const source = readProjectFile(scriptPath);
+
+    assert.doesNotMatch(
+      source,
+      /\$\{helper\}queryFn:/,
+      `${scriptPath} must not concatenate a function declaration directly before queryFn`,
+    );
+    assert.match(
+      source,
+      /legacyModelListQueryFnPattern/,
+      `${scriptPath} should repair existing bundles that already contain the old broken helper`,
+    );
+    assert.doesNotMatch(
+      source,
+      /source\.includes\("function ruizhiListModelsForHostFromUserCache\("\)\) return source/,
+      `${scriptPath} must not silently keep the old broken helper`,
+    );
+  }
 });
 
 test("macOS build rewrites runtime model catalog with bundled Codex version", () => {

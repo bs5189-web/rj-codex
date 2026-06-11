@@ -403,6 +403,56 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
   log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
 }
 
+function patchNativeProfileUsageFallback(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const profileQueriesFile = findOneFileByContent(
+    assetsDir,
+    /^profile-queries-.*\.js$/,
+    /\/wham\/profiles\/me/,
+    "profile queries bundle"
+  );
+  let source = fs.readFileSync(profileQueriesFile, "utf8");
+  if (source.includes("/profile/usage")) {
+    log("已存在 Codex 个人资料 Token 活动本地兜底补丁");
+    return;
+  }
+  source = source.replace(
+    /let e=await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/profiles\/me`\);return\{/,
+    "let e;try{console.info(`[ruizhi][profile] GET /wham/profiles/me start`);e=await $1.safeGet(`/wham/profiles/me`);console.info(`[ruizhi][profile] GET /wham/profiles/me success`,{hasUsage:!!e?.usage,hasDailyBuckets:Array.isArray(e?.usage?.daily_usage_buckets)})}catch(t){console.warn(`[ruizhi][profile] GET /wham/profiles/me failed, trying local fallback`,{message:String(t?.message||t)});let n=globalThis.ruizhiDesktop?.enhance?.call;if(typeof n!==`function`)throw t;let r=await n(`/profile/usage`,{});if(r?.status!==`ok`)throw t;console.info(`[ruizhi][profile] local /profile/usage success`,{hasUsage:!!r?.usage,hasDailyBuckets:Array.isArray(r?.usage?.daily_usage_buckets)});e=r}return{"
+  );
+  if (!source.includes("/profile/usage") || !source.includes("[ruizhi][profile] GET /wham/profiles/me start")) {
+    throw new Error("Codex 个人资料 Token 活动本地兜底/日志补丁点不存在");
+  }
+  fs.writeFileSync(profileQueriesFile, source, "utf8");
+  log(`已补丁 Codex 个人资料 Token 活动本地兜底与调用日志：${path.basename(profileQueriesFile)}`);
+}
+
+function patchNativeProfileApiCallLogging(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const mainBuildDir = path.join(extractedAppDir, ".vite", "build");
+  const mainFile = findOneFileByContent(
+    mainBuildDir,
+    /^main-.*\.js$/,
+    /CODEX_API_BASE_URL[\s\S]*?prodApiBaseUrl/,
+    "main API base bundle"
+  );
+  let source = fs.readFileSync(mainFile, "utf8");
+  if (source.includes("[ruizhi][profile-api]")) {
+    log("已存在 Codex /wham/profiles/me 主进程调用日志补丁");
+    return;
+  }
+  source = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(e,t\)\{return`\$\{([A-Za-z_$][\w$]*)\(e\)\}\/\$\{t\.replace\(\/\^\\\/\+\/,``\)\}`\}/,
+    "function $1(e,t){let n=`${$2(e)}/${t.replace(/^\\/+/,``)}`;try{String(t).replace(/^\\/+/,``)===`wham/profiles/me`&&console.info(`[ruizhi][profile-api] GET /wham/profiles/me`,{url:n,apiBase:$2(e)})}catch{}return n}"
+  );
+  if (!source.includes("[ruizhi][profile-api]")) {
+    throw new Error("Codex /wham/profiles/me 主进程调用日志补丁点不存在");
+  }
+  fs.writeFileSync(mainFile, source, "utf8");
+  log(`已补丁 Codex /wham/profiles/me 主进程调用日志：${path.basename(mainFile)}`);
+}
+
 function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
   if (source.includes("function ruizhiNativeBrowserDesktopFeatureAvailability(")) {
     return source;
@@ -2267,6 +2317,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
   const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
   const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
+  const chatGptBackendApiBaseUrl = "https://gptauth.rjagi.cn";
   const preludeStart = "/* ruizhi-early-env:start */";
   const preludeEnd = "/* ruizhi-early-env:end */";
   const prelude = `${preludeStart}
@@ -2279,12 +2330,14 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiHomeEnvName=${JSON.stringify(ruizhiHomeEnvName)};
   const ruizhiDefaultHomeDirName=${JSON.stringify(ruizhiDefaultHomeDirName)};
   const electronUserDataDirName=${JSON.stringify(electronUserDataDirName)};
+  const chatGptBackendApiBaseUrl=${JSON.stringify(chatGptBackendApiBaseUrl)};
   const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
   const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
   process.env[ruizhiHomeEnvName]=codexHome;
   process.env.CODEX_HOME=codexHome;
   process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
+  process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
   fs.mkdirSync(codexHome,{recursive:true});
   fs.mkdirSync(userData,{recursive:true});
 }catch(e){console.error("ruizhi early env init failed",e)}})();
@@ -2428,6 +2481,7 @@ function bridgeBootstrapBlock(config) {
     syncModelCache();
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
+    process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
 /* ruizhi-model-bridge:end */
@@ -2473,7 +2527,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   let source = fs.readFileSync(bootstrapPath, "utf8");
   let next = source;
 
-  const constantsPattern = /const openaiBaseUrl="[^"]*";(?:\s*const modelProviderBaseUrl=[^;]+;)?(?:\s*const modelBridgeConfig=\{[\s\S]*?\};)?(?:\s*const pageEnhanceConfig=\{[\s\S]*?\};)?/;
+  const constantsPattern = /const openaiBaseUrl="[^"]*";(?:\s*const chatGptBackendApiBaseUrl=[^;]+;)?(?:\s*const modelProviderBaseUrl=[^;]+;)?(?:\s*const modelBridgeConfig=\{[\s\S]*?\};)?(?:\s*const pageEnhanceConfig=\{[\s\S]*?\};)?/;
   if (!constantsPattern.test(next)) {
     throw new Error("Windows bootstrap openaiBaseUrl 补丁点不存在");
   }
@@ -2481,6 +2535,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     constantsPattern,
     [
       `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
+      `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};`,
       `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
       `const modelBridgeConfig=${jsonLiteral(bridgeConfig)};`
     ].join("\n    ")
@@ -2831,6 +2886,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeStatsigBootstrap(extractedAppDir, { log });
   patchNativeCesAnalyticsNetwork(extractedAppDir, { log });
   patchNativeProfileVisibility(extractedAppDir, { log });
+  patchNativeProfileUsageFallback(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchListModelsForHostFromUserCache(extractedAppDir, config, { log });
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });

@@ -78,6 +78,8 @@ function createRuizhiEnhanceService(options = {}) {
           return withStorage(dbPath, backupDir, (storage) => storage.threadSortKeys(Array.isArray(payload?.sessions) ? payload.sessions.map(sessionFromPayload) : []));
         case "/models/list":
           return listModelsFromUserCache(codexHome, payload);
+        case "/profile/usage":
+          return withStorage(dbPath, backupDir, (storage) => storage.profileUsage());
         default:
           return { status: "failed", message: `Unknown enhance route: ${route}` };
       }
@@ -428,6 +430,54 @@ class StorageAdapter {
     return { status: "ok", sort_keys: sortKeys };
   }
 
+  profileUsage() {
+    if (!this.hasTable("threads") || !this.hasColumns("threads", ["tokens_used"])) {
+      return { status: "failed", message: "不支持当前本地存储结构" };
+    }
+    const rows = this.all("SELECT tokens_used, created_at, updated_at, created_at_ms, updated_at_ms FROM threads WHERE COALESCE(tokens_used, 0) > 0");
+    const daily = new Map();
+    let totalTextTokens = 0;
+    let peakTokens = 0;
+    for (const row of rows) {
+      const tokens = Math.max(0, Math.round(Number(row.tokens_used) || 0));
+      if (tokens <= 0) continue;
+      const date = isoDateFromThreadRow(row);
+      if (!date) continue;
+      const next = (daily.get(date) || 0) + tokens;
+      daily.set(date, next);
+      totalTextTokens += tokens;
+      peakTokens = Math.max(peakTokens, next);
+    }
+    const dailyUsage = Array.from(daily.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([date, credits]) => ({ start_date: date, tokens: credits }));
+    const streaks = usageStreaks(dailyUsage.map((entry) => entry.start_date));
+    return {
+      status: "ok",
+      profile: {
+        display_name: os.userInfo().username || "锐智 用户",
+        profile_picture_url: null,
+        username: null
+      },
+      stats: {
+        lifetime_tokens: totalTextTokens,
+        peak_daily_tokens: peakTokens,
+        longest_running_turn_sec: null,
+        current_streak_days: streaks.current,
+        longest_streak_days: streaks.longest,
+        daily_usage_buckets: dailyUsage,
+        fast_mode_usage_percentage: null,
+        top_invocations: [],
+        most_used_reasoning_effort: null,
+        most_used_reasoning_effort_percentage: null,
+        unique_skills_used: null,
+        total_skills_used: null,
+        total_threads: rows.length
+      },
+      metadata: { stats_error: "" }
+    };
+  }
+
   hasCodexThreads() {
     return this.hasTable("threads") && this.hasColumns("threads", ["id", "title", "rollout_path"]);
   }
@@ -652,6 +702,40 @@ function timestampPayload(row) {
     updated_at: row.updated_at ?? null,
     archived_at: row.archived_at ?? null
   };
+}
+
+function isoDateFromThreadRow(row) {
+  const millis = numberOrNull(row.updated_at_ms) ?? numberOrNull(row.created_at_ms);
+  const seconds = numberOrNull(row.updated_at) ?? numberOrNull(row.created_at);
+  const date = millis != null ? new Date(millis) : seconds != null ? new Date(seconds * 1000) : null;
+  return date && Number.isFinite(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+}
+
+function usageStreaks(dates) {
+  const sorted = Array.from(new Set(dates)).sort();
+  let longest = 0;
+  let currentRun = 0;
+  let previous = null;
+  for (const date of sorted) {
+    currentRun = previous && addUtcDays(previous, 1) === date ? currentRun + 1 : 1;
+    longest = Math.max(longest, currentRun);
+    previous = date;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  let current = 0;
+  let cursor = today;
+  const dateSet = new Set(sorted);
+  while (dateSet.has(cursor)) {
+    current += 1;
+    cursor = addUtcDays(cursor, -1);
+  }
+  return { current, longest };
+}
+
+function addUtcDays(dateIso, days) {
+  const date = new Date(`${dateIso}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 function numberOrNull(value) {

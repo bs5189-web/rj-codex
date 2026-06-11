@@ -561,6 +561,54 @@ function patchNativeProfileVisibility() {
   log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
 }
 
+function patchNativeProfileUsageFallback() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const profileQueriesFile = findOneFileByContent(
+    assetsDir,
+    /^profile-queries-.*\.js$/,
+    /\/wham\/profiles\/me/,
+    "profile queries bundle"
+  );
+  const source = fs.readFileSync(profileQueriesFile, "utf8");
+  if (source.includes("/profile/usage")) {
+    log("已存在 Codex 个人资料 Token 活动本地兜底补丁");
+    return;
+  }
+  const patched = source.replace(
+    /let e=await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/profiles\/me`\);return\{/,
+    "let e;try{console.info(`[ruizhi][profile] GET /wham/profiles/me start`);e=await $1.safeGet(`/wham/profiles/me`);console.info(`[ruizhi][profile] GET /wham/profiles/me success`,{hasUsage:!!e?.usage,hasDailyBuckets:Array.isArray(e?.usage?.daily_usage_buckets)})}catch(t){console.warn(`[ruizhi][profile] GET /wham/profiles/me failed, trying local fallback`,{message:String(t?.message||t)});let n=globalThis.ruizhiDesktop?.enhance?.call;if(typeof n!==`function`)throw t;let r=await n(`/profile/usage`,{});if(r?.status!==`ok`)throw t;console.info(`[ruizhi][profile] local /profile/usage success`,{hasUsage:!!r?.usage,hasDailyBuckets:Array.isArray(r?.usage?.daily_usage_buckets)});e=r}return{"
+  );
+  if (!patched.includes("/profile/usage") || !patched.includes("[ruizhi][profile] GET /wham/profiles/me start")) {
+    throw new Error("Codex 个人资料 Token 活动本地兜底/日志补丁点不存在");
+  }
+  fs.writeFileSync(profileQueriesFile, patched, "utf8");
+  log(`已补丁 Codex 个人资料 Token 活动本地兜底与调用日志：${path.basename(profileQueriesFile)}`);
+}
+
+function patchNativeProfileApiCallLogging() {
+  const mainBuildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFileByContent(
+    mainBuildDir,
+    /^main-.*\.js$/,
+    /CODEX_API_BASE_URL[\s\S]*?prodApiBaseUrl/,
+    "main API base bundle"
+  );
+  const source = fs.readFileSync(mainFile, "utf8");
+  if (source.includes("[ruizhi][profile-api]")) {
+    log("已存在 Codex /wham/profiles/me 主进程调用日志补丁");
+    return;
+  }
+  const patched = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(e,t\)\{return`\$\{([A-Za-z_$][\w$]*)\(e\)\}\/\$\{t\.replace\(\/\^\\\/\+\/,``\)\}`\}/,
+    "function $1(e,t){let n=`${$2(e)}/${t.replace(/^\\/+/,``)}`;try{String(t).replace(/^\\/+/,``)===`wham/profiles/me`&&console.info(`[ruizhi][profile-api] GET /wham/profiles/me`,{url:n,apiBase:$2(e)})}catch{}return n}"
+  );
+  if (!patched.includes("[ruizhi][profile-api]")) {
+    throw new Error("Codex /wham/profiles/me 主进程调用日志补丁点不存在");
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已补丁 Codex /wham/profiles/me 主进程调用日志：${path.basename(mainFile)}`);
+}
+
 function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
   if (source.includes("function ruizhiNativeBrowserDesktopFeatureAvailability(")) {
     return source;
@@ -976,6 +1024,7 @@ function ruizhiInit(){
     const ruizhiHomeEnvName=${jsonLiteral(ruizhiHomeEnvName)};
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
+    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),
@@ -1049,6 +1098,7 @@ function ruizhiInit(){
     process.env[ruizhiHomeEnvName]=codexHome;
     process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
+    process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
     process.env.RUIZHI_IMAGEGEN_EXE=path.join(resourcesRoot,"bin",imageGenHelper);
@@ -2672,6 +2722,8 @@ function applyLegacyAsarPatches() {
   patchNativeStatsigBootstrap();
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
+  patchNativeProfileUsageFallback();
+  patchNativeProfileApiCallLogging();
   patchNativeBrowserDesktopFeatureAvailability();
   patchChatGptAuthExternalBrowser();
   patchBrowserNativePipeDiagnostics(extractedDir, { log });

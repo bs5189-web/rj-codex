@@ -426,6 +426,47 @@ test("packaging opens the native profile dropdown entry point", () => {
   }
 });
 
+test("packaging routes and logs native profile token activity", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchNativeProfileUsageFallback/, `${scriptPath} should patch the native profile usage query bundle`);
+    assert.match(source, /\/wham\/profiles\/me/, `${scriptPath} should preserve the official profile endpoint first`);
+    assert.match(source, /\/profile\/usage/, `${scriptPath} should fall back to local Ruizhi profile usage`);
+    assert.match(source, /globalThis\.ruizhiDesktop\?\.enhance\?\.call/, `${scriptPath} should use the existing enhance bridge for local usage`);
+    assert.match(source, /CODEX_API_BASE_URL/, `${scriptPath} should set the native ChatGPT backend API base at launch`);
+    assert.match(source, /https:\/\/gptauth\.rjagi\.cn/, `${scriptPath} should route native backend API calls to Ruizhi auth backend`);
+    assert.match(source, /patchNativeProfileApiCallLogging/, `${scriptPath} should patch main-process profile API URL logging`);
+    assert.match(source, /\[ruizhi\]\[profile-api\]/, `${scriptPath} should log the resolved profile API URL without auth headers`);
+    assert.match(source, /replace\(\/\^\\\\\/\+\//, `${scriptPath} should preserve the slash escape in generated regex literals`);
+    assert.match(source, /\[ruizhi\]\[profile\] GET \/wham\/profiles\/me start/, `${scriptPath} should log renderer profile API attempts`);
+  }
+});
+
+test("profile API logging patch emits parseable regex literals", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+  const replacementMatch = source.match(/source = source\.replace\([\s\S]*?,\n\s*("function \$1\(e,t\)\{[\s\S]*?return n\}")\n\s*\);/);
+  assert.ok(replacementMatch, "should keep the profile API logging replacement discoverable");
+  const replacement = Function(`return ${replacementMatch[1]}`)()
+    .replaceAll("$1", "ruizhiProfileApiUrl")
+    .replaceAll("$2", "ruizhiApiBase");
+  assert.doesNotThrow(
+    () => new Function("ruizhiApiBase", `return (${replacement});`),
+    "generated profile API logging function should not produce an invalid regex literal"
+  );
+});
+
+test("enhance service exposes local profile token usage", () => {
+  const source = read("resources/bridge/ruizhi-enhance-service.cjs");
+  assert.match(source, /case "\/profile\/usage"/, "enhance service should expose a local profile usage route");
+  assert.match(source, /profileUsage\(\)/, "enhance service should aggregate profile usage locally");
+  assert.match(source, /daily_usage_buckets/, "local profile usage should match the native profile API shape");
+  assert.match(source, /tokens_used/, "local profile usage should be backed by stored thread token counts");
+});
+
 test("packaging plugin auth gate patch tolerates bundle and minifier alias changes", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",

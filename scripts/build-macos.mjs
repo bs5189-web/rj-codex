@@ -1857,9 +1857,9 @@ function ruizhiInit(){
     const marketplaceSources=syncMarketplaces();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    const configPath=path.join(home,".codex","config.toml");
-    const existingCodexConfig=fs.existsSync(configPath);
-    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
+    const configPath=path.join(codexHome,"config.toml");
+    const existingRuizhiConfig=fs.existsSync(configPath);
+    process.env.RUIZHI_EXISTING_CONFIG=existingRuizhiConfig?"1":"0";
   }catch(e){
     console.error("ruizhi bootstrap init failed",e);
   }
@@ -1936,15 +1936,14 @@ function ruizhiStartBackgroundUpdateCheck(){
   function authPath(){
     return path.join(authHome(),"auth.json");
   }
-  function codexConfigPath(){
-    const home=os.homedir();
-    return path.join(home,".codex","config.toml");
+  function ruizhiConfigPath(){
+    return path.join(ruizhiEnhanceCodexHome(),"config.toml");
   }
-  function hasExistingCodexConfig(){
-    const marker=process.env.RUIZHI_EXISTING_CODEX_CONFIG;
+  function hasExistingRuizhiConfig(){
+    const marker=process.env.RUIZHI_EXISTING_CONFIG;
     if(marker==="1")return true;
     if(marker==="0")return false;
-    const filePath=codexConfigPath();
+    const filePath=ruizhiConfigPath();
     try{
       return fs.existsSync(filePath)&&fs.statSync(filePath).isFile();
     }catch{
@@ -1964,16 +1963,16 @@ function ruizhiStartBackgroundUpdateCheck(){
     return auth&&typeof auth==="object"?auth:null;
   }
   function readApiKeyStatus(){
-    const existingConfig=hasExistingCodexConfig();
+    const existingConfig=hasExistingRuizhiConfig();
     try{
       const auth=readAuthJson();
       const key=String(auth?.OPENAI_API_KEY||"").trim();
       const authMode=auth&&typeof auth.auth_mode==="string"?auth.auth_mode:null;
       const authConfigured=authMode!=null||key.length>0;
-      const configuredBy=authMode?"auth-json:"+authMode:key.length>0?"api-key":existingConfig?"codex-config":"none";
+      const configuredBy=authMode?"auth-json:"+authMode:key.length>0?"api-key":existingConfig?"ruizhi-config":"none";
       return {configured:authConfigured||existingConfig,masked:maskApiKey(key),configuredBy,authMode,version:${electronName}.app.getVersion()};
     }catch(error){
-      return {configured:existingConfig,masked:"",configuredBy:existingConfig?"codex-config":"none",error:String(error?.message||error),version:${electronName}.app.getVersion()};
+      return {configured:existingConfig,masked:"",configuredBy:existingConfig?"ruizhi-config":"none",error:String(error?.message||error),version:${electronName}.app.getVersion()};
     }
   }
   function registerRuizhiAuthIpc(){

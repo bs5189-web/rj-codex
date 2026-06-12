@@ -2580,9 +2580,9 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existing=fs\.existsSync\(configPath\)[\s\S]*?if\(next!==existing\)fs\.writeFileSync\(configPath,next,"utf8"\);\n/
   ];
   const readOnlyConfigCheck = [
-    "    const configPath=path.join(home,\".codex\",\"config.toml\");",
-    "    const existingCodexConfig=fs.existsSync(configPath);",
-    "    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?\"1\":\"0\";"
+    "    const configPath=path.join(codexHome,\"config.toml\");",
+    "    const existingRuizhiConfig=fs.existsSync(configPath);",
+    "    process.env.RUIZHI_EXISTING_CONFIG=existingRuizhiConfig?\"1\":\"0\";"
   ].join("\n");
   let replacedConfigWrite = false;
   for (const pattern of oldConfigWritePatterns) {
@@ -2593,12 +2593,12 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     }
   }
   if (!replacedConfigWrite && !next.includes(readOnlyConfigCheck)) {
-    throw new Error("Windows bootstrap config.toml 只读检查补丁点不存在");
+    throw new Error("Windows bootstrap 锐智 config.toml 只读检查补丁点不存在");
   }
 
   if (next !== source) {
     fs.writeFileSync(bootstrapPath, next, "utf8");
-    log("已刷新 Windows bootstrap 模型 provider、bridge 与 config.toml 只读逻辑");
+    log("已刷新 Windows bootstrap 模型 provider、bridge 与锐智 config.toml 只读逻辑");
   }
 }
 

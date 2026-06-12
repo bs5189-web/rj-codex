@@ -1321,6 +1321,58 @@ function ruizhiInit(){
       }
       return tokenValues;
     }
+    function tomlString(value){
+      return JSON.stringify(String(value??""));
+    }
+    function managedMarketplaceSpecs(){
+      return marketplaceSpecs.filter(spec=>spec.hardcodedPlugins!==true&&spec.alwaysCopy!==true);
+    }
+    function managedMarketplaceBlock(spec,source){
+      return [
+        "[marketplaces."+spec.name+"]",
+        "source_type = \\\"local\\\"",
+        "source = "+tomlString(source),
+        ""
+      ].join("\\n");
+    }
+    function upsertTomlTable(source,tableName,block){
+      const header="["+tableName+"]";
+      const lines=String(source??"").split("\\n");
+      let start=-1;
+      for(let index=0;index<lines.length;index+=1){
+        if(lines[index].trim()===header){start=index;break;}
+      }
+      if(start>=0){
+        let end=lines.length;
+        for(let index=start+1;index<lines.length;index+=1){
+          if(/^\\s*\\[[^\\]]+\\]\\s*$/.test(lines[index])){end=index;break;}
+        }
+        const replacement=block.replace(/\\n$/,"").split("\\n");
+        lines.splice(start,end-start,...replacement);
+        return lines.join("\\n").replace(/\\n*$/,"\\n");
+      }
+      const prefix=String(source??"").replace(/\\n*$/,"");
+      return prefix+(prefix.trim().length>0?"\\n\\n":"")+block.replace(/\\n*$/,"\\n");
+    }
+    function syncManagedMarketplaceConfig(marketplaceSources){
+      const specs=managedMarketplaceSpecs();
+      if(specs.length===0)return;
+      const configPath=path.join(home,".codex","config.toml");
+      let next=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+      let changed=false;
+      for(const spec of specs){
+        const source=marketplaceSources[spec.sourceToken];
+        if(!source||!fs.existsSync(path.join(source,".agents","plugins","marketplace.json")))continue;
+        const tableName="marketplaces."+spec.name;
+        const block=managedMarketplaceBlock(spec,source);
+        const updated=upsertTomlTable(next,tableName,block);
+        if(updated!==next){next=updated;changed=true;}
+      }
+      if(changed){
+        fs.mkdirSync(path.dirname(configPath),{recursive:true});
+        fs.writeFileSync(configPath,next,"utf8");
+      }
+    }
     function readPluginVersion(root){
       const manifestPath=path.join(root,".codex-plugin","plugin.json");
       if(!fs.existsSync(manifestPath))return null;
@@ -1426,12 +1478,13 @@ function ruizhiInit(){
       }
     }
 
+    const configPath=path.join(home,".codex","config.toml");
+    const existingCodexConfig=fs.existsSync(configPath);
     const marketplaceSources=syncMarketplaces();
+    syncManagedMarketplaceConfig(marketplaceSources);
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
 
-    const configPath=path.join(home,".codex","config.toml");
-    const existingCodexConfig=fs.existsSync(configPath);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
   }catch(e){
     console.error("ruizhi bootstrap init failed",e);

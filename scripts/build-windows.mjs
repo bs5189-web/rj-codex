@@ -1125,6 +1125,7 @@ function ruizhiInit(){
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env[ruizhiHomeEnvName]=codexHome;
+    process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
     process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;

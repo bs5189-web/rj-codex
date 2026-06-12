@@ -2362,6 +2362,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
   const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
   process.env[ruizhiHomeEnvName]=codexHome;
+  process.env.CODEX_HOME=codexHome;
   process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
   process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
   fs.mkdirSync(codexHome,{recursive:true});

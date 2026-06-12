@@ -234,34 +234,6 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
   fs.writeFileSync(statsigFile, next, "utf8");
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
 }
-
-function patchNativeAppshotsAvailability(extractedAppDir, options = {}) {
-  const log = options.log ?? (() => {});
-  const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const appshotsAvailabilityFile = findOneFileByContent(
-    assetsDir,
-    /^appshot-availability-.*\.js$/,
-    /requirements\?\.allowAppshots/,
-    "appshots availability bundle"
-  );
-  const source = fs.readFileSync(appshotsAvailabilityFile, "utf8");
-  if (source.includes("ruizhiAppshotsAvailable")) {
-    log(`已存在应用快照设置入口补丁：${path.basename(appshotsAvailabilityFile)}`);
-    return;
-  }
-  let next = source.replace(
-    /if\([A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)!==`macOS`\|\|![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,`1304276663`\)\)return!1;/,
-    ""
-  );
-  next = next.replace(/return ([A-Za-z_$][\w$]*)!=null&&\1\.requirements\?\.allowAppshots!==!1/, "return ruizhiAppshotsAvailable($1)");
-  if (next === source || !next.includes("ruizhiAppshotsAvailable")) {
-    throw new Error("覆盖层构建元数据补丁点不存在：显示应用快照设置入口");
-  }
-  next = next.replace(/var ([A-Za-z_$][\w$]*)=/, "function ruizhiAppshotsAvailable(e){return !0}var $1=");
-  fs.writeFileSync(appshotsAvailabilityFile, next, "utf8");
-  log(`已显示应用快照设置入口：${path.basename(appshotsAvailabilityFile)}`);
-}
-
 function patchListModelsForHostFromUserCache(extractedAppDir, config, options = {}) {
   const log = options.log ?? (() => {});
   if (!modelCatalogEnabled(config)) {
@@ -485,7 +457,7 @@ function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
     return source;
   }
 
-  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,appshotsEnabled:!0,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{appshotsEnabled:e.appshotsEnabled,browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{appshotsEnabled:t.appshotsEnabled,browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
   const nativeBrowserDesktopFeatureAvailabilityPattern = /function ([A-Za-z_$][\w$]*)\(e,\{buildFlavor:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.resolve\(\),env:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.env,platform:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.platform\}=\{\}\)\{let [\s\S]*?CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE[\s\S]*?return /;
   const availabilityMatch = source.match(nativeBrowserDesktopFeatureAvailabilityPattern);
   if (availabilityMatch) {
@@ -2914,7 +2886,6 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeCesAnalyticsNetwork(extractedAppDir, { log });
   patchNativeProfileVisibility(extractedAppDir, { log });
   patchNativeProfileUsageFallback(extractedAppDir, { log });
-  patchNativeAppshotsAvailability(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchListModelsForHostFromUserCache(extractedAppDir, config, { log });
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });

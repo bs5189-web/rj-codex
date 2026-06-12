@@ -1493,8 +1493,7 @@ function ruizhiInit(){
       return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),electronUserDataDirName);
     }
     const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
-    const explicitCodexHome=(process.env.CODEX_HOME||"").trim();
-    const codexHome=explicitRuizhiHome||explicitCodexHome||path.join(home,ruizhiDefaultHomeDirName);
+    const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
     const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
     function stableModelBridgePort(basePort,seed){
       let hash=0;
@@ -1536,7 +1535,6 @@ function ruizhiInit(){
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env[ruizhiHomeEnvName]=codexHome;
-    process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
     process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
@@ -1929,7 +1927,7 @@ function ruizhiStartBackgroundUpdateCheck(){
   }
   function ruizhiEnhanceCodexHome(){
     const home=os.homedir();
-    const explicit=(process.env[${jsonLiteral(ruizhiHomeEnvName)}]||"").trim()||(process.env.CODEX_HOME||"").trim();
+    const explicit=(process.env[${jsonLiteral(ruizhiHomeEnvName)}]||"").trim();
     return explicit||path.join(home,${jsonLiteral(ruizhiDefaultHomeDirName)});
   }
   function authHome(){

@@ -1053,8 +1053,7 @@ function ruizhiInit(){
       return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),electronUserDataDirName);
     }
     const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
-    const explicitCodexHome=(process.env.CODEX_HOME||"").trim();
-    const codexHome=explicitRuizhiHome||explicitCodexHome||path.join(home,ruizhiDefaultHomeDirName);
+    const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
     const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
     function stableModelBridgePort(basePort,seed){
       let hash=0;
@@ -1096,7 +1095,6 @@ function ruizhiInit(){
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env[ruizhiHomeEnvName]=codexHome;
-    process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
     process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
@@ -1619,7 +1617,7 @@ function ruizhiStartBackgroundUpdateCheck(){
   }
   function authHome(){
     const home=os.homedir();
-    const explicit=(process.env[authConfig.ruizhiHomeEnvName]||"").trim()||(process.env.CODEX_HOME||"").trim();
+    const explicit=(process.env[authConfig.ruizhiHomeEnvName]||"").trim();
     return explicit||path.join(home,authConfig.ruizhiDefaultHomeDirName);
   }
   function authPath(){
@@ -2244,7 +2242,7 @@ function ruizhiStartBackgroundUpdateCheck(){
   }
   function authHome(){
     const home=os.homedir();
-    const explicit=(process.env[authConfig.ruizhiHomeEnvName]||"").trim()||(process.env.CODEX_HOME||"").trim();
+    const explicit=(process.env[authConfig.ruizhiHomeEnvName]||"").trim();
     return explicit||path.join(home,authConfig.ruizhiDefaultHomeDirName);
   }
   function authPath(){
@@ -2869,7 +2867,7 @@ function patchCodexHomeSource() {
     }
     return next;
   });
-  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，桌面默认使用 ~/.ruizhi");
+  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，锐智默认使用 ~/.ruizhi");
 }
 
 function patchCodexBundledModels() {

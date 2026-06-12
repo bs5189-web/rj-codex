@@ -2331,11 +2331,10 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiDefaultHomeDirName=${JSON.stringify(ruizhiDefaultHomeDirName)};
   const electronUserDataDirName=${JSON.stringify(electronUserDataDirName)};
   const chatGptBackendApiBaseUrl=${JSON.stringify(chatGptBackendApiBaseUrl)};
-  const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
+  const codexHome=(process.env[ruizhiHomeEnvName]||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
   const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
   process.env[ruizhiHomeEnvName]=codexHome;
-  process.env.CODEX_HOME=codexHome;
   process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
   process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
   fs.mkdirSync(codexHome,{recursive:true});
@@ -2581,7 +2580,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existing=fs\.existsSync\(configPath\)[\s\S]*?if\(next!==existing\)fs\.writeFileSync\(configPath,next,"utf8"\);\n/
   ];
   const readOnlyConfigCheck = [
-    "    const configPath=path.join(codexHome,\"config.toml\");",
+    "    const configPath=path.join(home,\".codex\",\"config.toml\");",
     "    const existingCodexConfig=fs.existsSync(configPath);",
     "    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?\"1\":\"0\";"
   ].join("\n");

@@ -22,7 +22,7 @@ const DEFAULT_FEATURES = {
 };
 
 function createRuizhiEnhanceService(options = {}) {
-  const codexHome = options.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+  const codexHome = options.codexHome || process.env.RUIZHI_HOME || path.join(os.homedir(), ".ruizhi");
   const config = normalizeConfig(options.config);
   const settingsPath = path.join(codexHome, "ruizhi-page-enhance-settings.json");
   const dbPath = path.join(codexHome, "state_5.sqlite");

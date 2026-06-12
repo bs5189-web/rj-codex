@@ -8,11 +8,10 @@
   const ruizhiHomeEnvName="RUIZHI_HOME";
   const ruizhiDefaultHomeDirName=".ruizhi";
   const electronUserDataDirName="锐智";
-  const codexHome=(process.env[ruizhiHomeEnvName]||process.env.CODEX_HOME||path.join(home,ruizhiDefaultHomeDirName)).trim();
+  const codexHome=(process.env[ruizhiHomeEnvName]||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
   const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
   process.env[ruizhiHomeEnvName]=codexHome;
-  process.env.CODEX_HOME=codexHome;
   process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
   fs.mkdirSync(codexHome,{recursive:true});
   fs.mkdirSync(userData,{recursive:true});
@@ -51,11 +50,9 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
       return path.join(process.env.XDG_CONFIG_HOME||path.join(home,".config"),electronUserDataDirName);
     }
     const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
-    const explicitCodexHome=(process.env.CODEX_HOME||"").trim();
-    const codexHome=explicitRuizhiHome||explicitCodexHome||path.join(home,ruizhiDefaultHomeDirName);
+    const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
     const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
     process.env[ruizhiHomeEnvName]=codexHome;
-    process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
     /* ruizhi-model-bridge:start */
     function stableModelBridgePort(basePort,seed){

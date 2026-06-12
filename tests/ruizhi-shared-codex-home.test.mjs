@@ -11,7 +11,7 @@ function readProjectFile(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
 }
 
-test("runtime defaults use Ruizhi home but isolate Electron user data", () => {
+test("runtime defaults initialize Ruizhi home and isolate Electron user data", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
   assert.equal(config.runtime.defaultHomeDirName, ".ruizhi");
   assert.equal(config.runtime.electronUserDataDirName, config.productName);
@@ -35,7 +35,11 @@ test("runtime defaults use Ruizhi home but isolate Electron user data", () => {
 
   for (const sourcePath of sources) {
     const source = readProjectFile(sourcePath);
-    assert.match(source, /["`]\.ruizhi["`]/, `${sourcePath} should default CODEX_HOME to .ruizhi`);
+    assert.match(source, /["`]\.ruizhi["`]/, `${sourcePath} should default RUIZHI_HOME to .ruizhi`);
+    assert.match(source, /process\.env\[ruizhiHomeEnvName\]=codexHome|process\.env\[authConfig\.ruizhiHomeEnvName\]/, `${sourcePath} should initialize RUIZHI_HOME`);
+    assert.doesNotMatch(source, /process\.env\.CODEX_HOME\s*=/, `${sourcePath} should not mutate CODEX_HOME`);
+    assert.doesNotMatch(source, /const codexHome=[^;]*process\.env\.CODEX_HOME[^;]*path\.join\(home,ruizhiDefaultHomeDirName\)/, `${sourcePath} should not default Ruizhi home from CODEX_HOME`);
+    assert.doesNotMatch(source, /p\.push\(["`]\.ruizhi["`]\)/, `${sourcePath} should not patch CLI default home to .ruizhi`);
     assert.match(source, /electronUserDataDirName/, `${sourcePath} should route Electron userData through the runtime setting`);
   }
 });

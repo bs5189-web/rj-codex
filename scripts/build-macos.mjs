@@ -829,6 +829,36 @@ function patchNativeProfileUsageFallback() {
   log(`已补丁 Codex 个人资料 Token 活动本地兜底与调用日志：${path.basename(profileQueriesFile)}`);
 }
 
+function patchNativeAppshotsAvailability() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const appshotsAvailabilityFile = findOneFileByContent(
+    assetsDir,
+    /^appshot-availability-.*\.js$/,
+    /requirements\?\.allowAppshots/,
+    "appshots availability bundle"
+  );
+  if (fs.readFileSync(appshotsAvailabilityFile, "utf8").includes("ruizhiAppshotsAvailable")) {
+    log(`已存在应用快照设置入口补丁：${path.basename(appshotsAvailabilityFile)}`);
+    return;
+  }
+
+  writePatchedFile(appshotsAvailabilityFile, (source) => {
+    let next = source.replace(
+      /if\([A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)!==`macOS`\|\|![A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,`1304276663`\)\)return!1;/,
+      ""
+    );
+    next = replaceRegex(
+      next,
+      /return ([A-Za-z_$][\w$]*)!=null&&\1\.requirements\?\.allowAppshots!==!1/,
+      "return ruizhiAppshotsAvailable($1)",
+      "显示应用快照设置入口"
+    );
+    return replaceRegex(next, /var ([A-Za-z_$][\w$]*)=/, "function ruizhiAppshotsAvailable(e){return !0}var $1=", "注入应用快照可用性函数");
+  });
+
+  log(`已显示应用快照设置入口：${path.basename(appshotsAvailabilityFile)}`);
+}
+
 function patchNativeProfileApiCallLogging() {
   const mainBuildDir = path.join(extractedDir, ".vite", "build");
   const mainFile = findOneFileByContent(
@@ -2261,6 +2291,7 @@ async function repackAppAsar() {
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeProfileUsageFallback();
+  patchNativeAppshotsAvailability();
   patchNativeProfileApiCallLogging();
   patchNativeBrowserDesktopFeatureAvailability();
   patchChatGptAuthExternalBrowser();

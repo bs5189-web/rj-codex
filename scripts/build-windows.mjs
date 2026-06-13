@@ -996,7 +996,16 @@ function bootstrapInitCode() {
     resourcePath: splitConfigPath(marketplace.resourcePath),
     installPath: splitConfigPath(marketplace.installPath),
     versionManifestPath: splitConfigPath(marketplace.versionManifestPath),
-    sourceToken: marketplaceSourceToken(marketplace.name)
+    sourceToken: marketplaceSourceToken(marketplace.name),
+    online: marketplace.online && marketplace.online.enabled !== false
+      ? {
+          name: marketplace.online.name || `${marketplace.name}-online`,
+          source: marketplace.online.source,
+          ref: marketplace.online.ref,
+          sparse: Array.isArray(marketplace.online.sparse) ? marketplace.online.sparse : [],
+          autoUpgrade: marketplace.online.autoUpgrade === true
+        }
+      : null
   }));
   marketplaceSpecs.push({
     name: "openai-bundled",
@@ -1024,6 +1033,7 @@ function ruizhiInit(){
     const ruizhiHomeEnvName=${jsonLiteral(ruizhiHomeEnvName)};
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
+    const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
     const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
@@ -1327,13 +1337,25 @@ function ruizhiInit(){
     function managedMarketplaceSpecs(){
       return marketplaceSpecs.filter(spec=>spec.hardcodedPlugins!==true&&spec.alwaysCopy!==true);
     }
-    function managedMarketplaceBlock(spec,source){
+    function marketplaceConfigBlock(spec,source){
+      const online=spec.online;
+      if(online&&online.source){
+        const lines=[
+          "[marketplaces."+spec.name+"]",
+          "source_type = "+tomlString("git"),
+          "source = "+tomlString(online.source)
+        ];
+        if(online.ref)lines.push("ref = "+tomlString(online.ref));
+        if(Array.isArray(online.sparse)&&online.sparse.length>0)lines.push("sparse = "+JSON.stringify(online.sparse.map(item=>String(item))));
+        lines.push("");
+        return lines.join("\n");
+      }
       return [
         "[marketplaces."+spec.name+"]",
-        "source_type = \\\"local\\\"",
+        "source_type = "+tomlString("local"),
         "source = "+tomlString(source),
         ""
-      ].join("\\n");
+      ].join("\n");
     }
     function upsertTomlTable(source,tableName,block){
       const header="["+tableName+"]";
@@ -1364,7 +1386,7 @@ function ruizhiInit(){
         const source=marketplaceSources[spec.sourceToken];
         if(!source||!fs.existsSync(path.join(source,".agents","plugins","marketplace.json")))continue;
         const tableName="marketplaces."+spec.name;
-        const block=managedMarketplaceBlock(spec,source);
+        const block=marketplaceConfigBlock(spec,source);
         const updated=upsertTomlTable(next,tableName,block);
         if(updated!==next){next=updated;changed=true;}
       }
@@ -1372,6 +1394,36 @@ function ruizhiInit(){
         fs.mkdirSync(path.dirname(configPath),{recursive:true});
         fs.writeFileSync(configPath,next,"utf8");
       }
+    }
+    function addRuijieProviderChatModelPrefixes(source){
+      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return source;
+      const header="[model_providers.ruijie-uniapi]";
+      const lines=String(source??"").split("\n");
+      let start=-1;
+      for(let index=0;index<lines.length;index+=1){
+        if(lines[index].trim()===header){start=index;break;}
+      }
+      if(start<0)return source;
+      let end=lines.length;
+      for(let index=start+1;index<lines.length;index+=1){
+        if(/^\s*\[[^\]]+\]\s*$/.test(lines[index])){end=index;break;}
+      }
+      for(let index=start+1;index<end;index+=1){
+        if(/^\s*chat_model_prefixes\s*=/.test(lines[index]))return source;
+      }
+      let insertAt=end;
+      for(let index=start+1;index<end;index+=1){
+        if(/^\s*wire_api\s*=/.test(lines[index])){insertAt=index;break;}
+      }
+      lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
+      return lines.join("\n").replace(/\n*$/,"\n");
+    }
+    function syncRuijieProviderChatModelPrefixes(){
+      const configPath=path.join(home,".codex","config.toml");
+      if(!fs.existsSync(configPath))return;
+      const existing=fs.readFileSync(configPath,"utf8");
+      const next=addRuijieProviderChatModelPrefixes(existing);
+      if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){
       const manifestPath=path.join(root,".codex-plugin","plugin.json");
@@ -1482,6 +1534,7 @@ function ruizhiInit(){
     const existingCodexConfig=fs.existsSync(configPath);
     const marketplaceSources=syncMarketplaces();
     syncManagedMarketplaceConfig(marketplaceSources);
+    syncRuijieProviderChatModelPrefixes();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
 

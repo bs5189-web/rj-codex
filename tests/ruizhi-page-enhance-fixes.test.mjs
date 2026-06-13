@@ -154,11 +154,11 @@ test("first launch auth status remains available without patching the native log
     "scripts/build-macos.mjs",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /function hasExistingCodexConfig\(/, `${scriptPath} should detect existing ~/.codex configuration`);
+    assert.match(source, /function hasExisting(?:Codex|Ruizhi)Config\(/, `${scriptPath} should detect existing runtime configuration`);
     assert.match(source, /function readAuthJson\(/, `${scriptPath} should parse auth.json instead of inferring auth mode from API key presence`);
     assert.match(source, /authMode=auth&&typeof auth\.auth_mode==="string"\?auth\.auth_mode:null/, `${scriptPath} should expose auth_mode from auth.json`);
     assert.match(source, /config\.toml/, `${scriptPath} should treat config.toml as an existing Codex configuration marker`);
-    assert.match(source, /RUIZHI_EXISTING_CODEX_CONFIG/, `${scriptPath} should preserve whether config.toml exists without mutating it`);
+    assert.match(source, /RUIZHI_EXISTING(?:_CODEX)?_CONFIG/, `${scriptPath} should preserve whether config.toml exists without mutating it`);
     assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from auth.json or Codex config`);
     assert.match(source, /configured:authConfigured\|\|existingConfig/, `${scriptPath} should keep reporting existing auth state`);
     assert.doesNotMatch(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} must not treat API key presence as the only auth.json signal`);
@@ -221,7 +221,7 @@ test("packaging patches onboarding continue button and build date badge", () => 
   }
 });
 
-test("bootstrap treats config.toml as fully user-owned and read-only", () => {
+test("bootstrap only applies narrow managed config.toml updates", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -233,7 +233,6 @@ test("bootstrap treats config.toml as fully user-owned and read-only", () => {
     assert.doesNotMatch(source, /mergeManagedConfig|stripManagedConfigConflicts|managedConfigSectionNames/, `${scriptPath} should not merge or rewrite config.toml`);
     assert.doesNotMatch(source, /configTemplateLines/, `${scriptPath} should not template config.toml defaults`);
     assert.doesNotMatch(source, /fs\.writeFileSync\(target,\s*next,\s*"utf8"\)/, `${scriptPath} should not patch sandbox settings into config.toml`);
-    assert.doesNotMatch(source, /fs\.writeFileSync\(configPath/, `${scriptPath} should not write config.toml`);
     assert.doesNotMatch(source, /fs\.copyFileSync\(configPath/, `${scriptPath} should not back up config.toml for mutation`);
     assert.doesNotMatch(source, /syncRuntimeModelProviderConfig|setTomlProviderBaseUrl|bak-provider/, `${scriptPath} should not repair provider URLs in config.toml`);
   }
@@ -244,8 +243,9 @@ test("bootstrap treats config.toml as fully user-owned and read-only", () => {
     "overrides/windows-app/asar/.vite/build/bootstrap.js",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /path\.join\(home,["`]\.codex["`],["`]config\.toml["`]\)/, `${scriptPath} should read only ~/.codex/config.toml`);
-    assert.doesNotMatch(source, /path\.join\(authHome\(\),["`]config\.toml["`]\)|path\.join\(codexHome,["`]config\.toml["`]\)/, `${scriptPath} should not resolve config.toml through RUIZHI_HOME`);
+    assert.match(source, /function syncRuijieProviderChatModelPrefixes\(\)/, `${scriptPath} should only patch missing Ruizhi provider chat model prefixes`);
+    assert.match(source, /chat_model_prefixes = /, `${scriptPath} should write chat model prefixes when missing`);
+    assert.match(source, /\[model_providers\.ruijie-uniapi\]/, `${scriptPath} should target only the Ruizhi UniAPI provider`);
   }
 });
 

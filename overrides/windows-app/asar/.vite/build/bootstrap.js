@@ -30,6 +30,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     const ruizhiHomeEnvName="RUIZHI_HOME";
     const ruizhiDefaultHomeDirName=".ruizhi";
     const openaiBaseUrl="https://uniapi.ruijie.com.cn/v1";
+    const ruijieChatModelPrefixes=["glm-","deepseek-","kimi-"];
     const modelProviderBaseUrl="http://127.0.0.1:17888/v1";
     const modelBridgeConfig={"enabled":true,"host":"127.0.0.1","port":17888,"scriptResourcePath":["bridge","ruizhi-responses-bridge.cjs"],"routes":{"gpt-5.5":"responses","gpt-5.4":"responses","gpt-5.4-mini":"responses","gpt-5.3-codex":"responses","qwen3.6-plus":"responses","qwen3.6-flash":"responses","qwen3-coder-plus":"responses","qwen3-coder-480b-a35b-instruct":"responses","qwen3-coder-30b-a3b-instruct":"responses","claude-opus-4-7":{"protocol":"chat","reasoningEffort":true},"claude-sonnet-4-6":{"protocol":"chat","reasoningEffort":true},"glm-5.1":{"protocol":"chat","reasoningEffort":true},"kimi-k2.6":{"protocol":"chat","reasoningEffort":true},"MiniMax/MiniMax-M2.7":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-pro":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash-maxthink":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash":{"protocol":"chat","reasoningEffort":true}}};
     const imageGenHelper="ruizhi-imagegen.exe";
@@ -38,7 +39,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     const systemSkillsRoot=["skills",".system"];
     const hiddenSystemSkillNames=["openai-docs"];
     const managedRulesFileName="ruizhi-managed.rules";
-    const allowPrefixRules=[{"prefix":["C:\\Program Files\\PowerShell\\7\\pwsh.exe","-Command","mkdir -p"]},{"prefix":["pwsh.exe","-Command","mkdir -p"]},{"prefix":["powershell.exe","-Command","mkdir -p"]},{"prefix":["C:\\Program Files\\PowerShell\\7\\pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate"]},{"prefix":["C:\\Program Files\\PowerShell\\7\\pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate-batch"]},{"prefix":["pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate"]},{"prefix":["pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate-batch"]},{"prefix":["powershell.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate"]},{"prefix":["powershell.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate-batch"]},{"marketplace":"ruijie-skills","prefix":["node"],"path":"plugins/rj-skills-hbr-finder/skills/rj-skills-hbr-finder/scripts/search-hbr.mjs"},{"prefix":["node"],"homePath":".agents/skills/rj-skills-hbr-finder/scripts/search-hbr.mjs"},{"marketplace":"ruijie-skills","prefix":["node"],"path":"plugins/rj-skills-hundun-finder/skills/rj-skills-hundun-finder/scripts/search-hundun.mjs"},{"prefix":["node"],"homePath":".agents/skills/rj-skills-hundun-finder/scripts/search-hundun.mjs"},{"marketplace":"ruijie-skills","prefix":["node"],"path":"plugins/ruijie-volcengine-video-generation/skills/ruijie-volcengine-video-generation/scripts/generate-video.mjs"},{"prefix":["node"],"homePath":".agents/skills/ruijie-volcengine-video-generation/scripts/generate-video.mjs"},{"marketplace":"ruijie-skills","prefix":["node"],"path":"plugins/ruijie-notebooklm/skills/ruijie-notebooklm/scripts/book-reader.mjs"},{"prefix":["node"],"homePath":".agents/skills/ruijie-notebooklm/scripts/book-reader.mjs"},{"marketplace":"ruijie-skills","prefix":["node"],"path":"plugins/ruijie-notebooklm/skills/ruijie-notebooklm/scripts/notebooklm.mjs"},{"prefix":["node"],"homePath":".agents/skills/ruijie-notebooklm/scripts/notebooklm.mjs"},{"marketplace":"ruijie-skills","prefix":["bash"],"path":"plugins/ruijie-seedance-prompt/skills/ruijie-seedance-prompt/SKILL.sh"},{"prefix":["bash"],"homePath":".agents/skills/ruijie-seedance-prompt/SKILL.sh"},{"marketplace":"ruijie-skills","prefix":["bash"],"path":"plugins/ruijie-seedance-prompt/skills/ruijie-seedance-prompt/scripts/setup_seedance_prompt_workspace.sh"},{"prefix":["bash"],"homePath":".agents/skills/ruijie-seedance-prompt/scripts/setup_seedance_prompt_workspace.sh"},{"commandResourcePath":"bin/ruizhi-imagegen.exe","prefix":["generate"]},{"commandResourcePath":"bin/ruizhi-imagegen.exe","prefix":["generate-batch"]}];
+    const allowPrefixRules=[{"prefix":["C:\\Program Files\\PowerShell\\7\\pwsh.exe","-Command","mkdir -p"]},{"prefix":["pwsh.exe","-Command","mkdir -p"]},{"prefix":["powershell.exe","-Command","mkdir -p"]},{"prefix":["C:\\Program Files\\PowerShell\\7\\pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate"]},{"prefix":["C:\\Program Files\\PowerShell\\7\\pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate-batch"]},{"prefix":["pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate"]},{"prefix":["pwsh.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate-batch"]},{"prefix":["powershell.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate"]},{"prefix":["powershell.exe","-Command","& $env:RUIZHI_IMAGEGEN_EXE generate-batch"]},{"marketplace":"ruijie-marketplace","prefix":["node"],"path":"plugins/rj-skills-hbr-finder/skills/rj-skills-hbr-finder/scripts/search-hbr.mjs"},{"prefix":["node"],"homePath":".agents/skills/rj-skills-hbr-finder/scripts/search-hbr.mjs"},{"marketplace":"ruijie-marketplace","prefix":["node"],"path":"plugins/rj-skills-hundun-finder/skills/rj-skills-hundun-finder/scripts/search-hundun.mjs"},{"prefix":["node"],"homePath":".agents/skills/rj-skills-hundun-finder/scripts/search-hundun.mjs"},{"marketplace":"ruijie-marketplace","prefix":["node"],"path":"plugins/ruijie-volcengine-video-generation/skills/ruijie-volcengine-video-generation/scripts/generate-video.mjs"},{"prefix":["node"],"homePath":".agents/skills/ruijie-volcengine-video-generation/scripts/generate-video.mjs"},{"marketplace":"ruijie-marketplace","prefix":["node"],"path":"plugins/ruijie-notebooklm/skills/ruijie-notebooklm/scripts/book-reader.mjs"},{"prefix":["node"],"homePath":".agents/skills/ruijie-notebooklm/scripts/book-reader.mjs"},{"marketplace":"ruijie-marketplace","prefix":["node"],"path":"plugins/ruijie-notebooklm/skills/ruijie-notebooklm/scripts/notebooklm.mjs"},{"prefix":["node"],"homePath":".agents/skills/ruijie-notebooklm/scripts/notebooklm.mjs"},{"marketplace":"ruijie-marketplace","prefix":["bash"],"path":"plugins/ruijie-seedance-prompt/skills/ruijie-seedance-prompt/SKILL.sh"},{"prefix":["bash"],"homePath":".agents/skills/ruijie-seedance-prompt/SKILL.sh"},{"marketplace":"ruijie-marketplace","prefix":["bash"],"path":"plugins/ruijie-seedance-prompt/skills/ruijie-seedance-prompt/scripts/setup_seedance_prompt_workspace.sh"},{"prefix":["bash"],"homePath":".agents/skills/ruijie-seedance-prompt/scripts/setup_seedance_prompt_workspace.sh"},{"commandResourcePath":"bin/ruizhi-imagegen.exe","prefix":["generate"]},{"commandResourcePath":"bin/ruizhi-imagegen.exe","prefix":["generate-batch"]}];
     const home=os.homedir();
     const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
     function defaultUserDataPath(){
@@ -202,7 +203,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     syncSystemSkills();
     syncLegacyCodexGlobalSkills();
 
-    const marketplaceSpecs=[{"name":"ruijie-skills","resourcePath":["plugins","ruijie-skills"],"installPath":[".tmp","marketplaces","ruijie-skills"],"versionManifestPath":[".codex-plugin","plugin.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_RUIJIE_SKILLS__"},{"name":"openai-bundled","resourcePath":["plugins","openai-bundled"],"installPath":[".tmp","bundled-marketplaces","openai-bundled"],"versionManifestPath":[".agents","plugins","marketplace.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","alwaysCopy":true,"hardcodedPlugins":true}];
+    const marketplaceSpecs=[{"name":"ruijie-marketplace","resourcePath":["plugins","ruijie-marketplace"],"installPath":[".tmp","marketplaces","ruijie-marketplace"],"versionManifestPath":[".codex-plugin","plugin.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_RUIJIE_MARKETPLACE__","online":{"name":"ruijie-marketplace","source":"https://github.com/bs5189-web/ruijie-marketplace.git","ref":"main","sparse":[],"autoUpgrade":false}},{"name":"openai-bundled","resourcePath":["plugins","openai-bundled"],"installPath":[".tmp","bundled-marketplaces","openai-bundled"],"versionManifestPath":[".agents","plugins","marketplace.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","alwaysCopy":true,"hardcodedPlugins":true}];
     const hardcodedOpenAIBundledPlugins=[{"name":"browser","path":"./plugins/browser","category":"Engineering"},{"name":"chrome","path":"./plugins/chrome","category":"Productivity"},{"name":"latex","path":"./plugins/latex","category":"Research"}];
     function assertInside(base,target){
       const relative=path.relative(path.resolve(base),path.resolve(target));
@@ -285,10 +286,22 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     function managedMarketplaceSpecs(){
       return marketplaceSpecs.filter(spec=>spec.hardcodedPlugins!==true&&spec.alwaysCopy!==true);
     }
-    function managedMarketplaceBlock(spec,source){
+    function marketplaceConfigBlock(spec,source){
+      const online=spec.online;
+      if(online&&online.source){
+        const lines=[
+          "[marketplaces."+spec.name+"]",
+          "source_type = "+tomlString("git"),
+          "source = "+tomlString(online.source)
+        ];
+        if(online.ref)lines.push("ref = "+tomlString(online.ref));
+        if(Array.isArray(online.sparse)&&online.sparse.length>0)lines.push("sparse = "+JSON.stringify(online.sparse.map(item=>String(item))));
+        lines.push("");
+        return lines.join("\n");
+      }
       return [
         "[marketplaces."+spec.name+"]",
-        "source_type = \"local\"",
+        "source_type = "+tomlString("local"),
         "source = "+tomlString(source),
         ""
       ].join("\n");
@@ -322,7 +335,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
         const source=marketplaceSources[spec.sourceToken];
         if(!source||!fs.existsSync(path.join(source,".agents","plugins","marketplace.json")))continue;
         const tableName="marketplaces."+spec.name;
-        const block=managedMarketplaceBlock(spec,source);
+        const block=marketplaceConfigBlock(spec,source);
         const updated=upsertTomlTable(next,tableName,block);
         if(updated!==next){next=updated;changed=true;}
       }
@@ -330,6 +343,36 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
         fs.mkdirSync(path.dirname(configPath),{recursive:true});
         fs.writeFileSync(configPath,next,"utf8");
       }
+    }
+    function addRuijieProviderChatModelPrefixes(source){
+      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return source;
+      const header="[model_providers.ruijie-uniapi]";
+      const lines=String(source??"").split("\n");
+      let start=-1;
+      for(let index=0;index<lines.length;index+=1){
+        if(lines[index].trim()===header){start=index;break;}
+      }
+      if(start<0)return source;
+      let end=lines.length;
+      for(let index=start+1;index<lines.length;index+=1){
+        if(/^\s*\[[^\]]+\]\s*$/.test(lines[index])){end=index;break;}
+      }
+      for(let index=start+1;index<end;index+=1){
+        if(/^\s*chat_model_prefixes\s*=/.test(lines[index]))return source;
+      }
+      let insertAt=end;
+      for(let index=start+1;index<end;index+=1){
+        if(/^\s*wire_api\s*=/.test(lines[index])){insertAt=index;break;}
+      }
+      lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
+      return lines.join("\n").replace(/\n*$/,"\n");
+    }
+    function syncRuijieProviderChatModelPrefixes(){
+      const configPath=path.join(home,".codex","config.toml");
+      if(!fs.existsSync(configPath))return;
+      const existing=fs.readFileSync(configPath,"utf8");
+      const next=addRuijieProviderChatModelPrefixes(existing);
+      if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){
       const manifestPath=path.join(root,".codex-plugin","plugin.json");
@@ -440,6 +483,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     const existingCodexConfig=fs.existsSync(configPath);
     const marketplaceSources=syncMarketplaces();
     syncManagedMarketplaceConfig(marketplaceSources);
+    syncRuijieProviderChatModelPrefixes();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
     process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";

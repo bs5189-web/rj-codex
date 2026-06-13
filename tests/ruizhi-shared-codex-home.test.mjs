@@ -48,7 +48,8 @@ test("bootstrap auto-registers bundled Ruizhi marketplaces for first launch", ()
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
   assert.ok(config.pluginMarketplaces.length > 0, "test expects a bundled Ruizhi marketplace");
-  assert.equal(config.pluginMarketplaces[0].name, "ruijie-skills");
+  assert.equal(config.pluginMarketplaces[0].name, "ruijie-marketplace");
+  assert.equal(config.pluginMarketplaces[0].online.source, "https://github.com/bs5189-web/ruijie-marketplace.git");
 
   for (const sourcePath of [
     "scripts/build-windows.mjs",
@@ -64,10 +65,13 @@ test("bootstrap auto-registers bundled Ruizhi marketplaces for first launch", ()
     assert.match(source, /fs\.existsSync\(configPath\)\?fs\.readFileSync\(configPath,"utf8"\):""/, `${sourcePath} should handle missing config.toml`);
     assert.match(source, /fs\.mkdirSync\(path\.dirname\(configPath\),\{recursive:true\}\)/, `${sourcePath} should create the config directory`);
     assert.match(source, /"\[marketplaces\."\+spec\.name\+"\]"/, `${sourcePath} should emit marketplace TOML tables`);
-    assert.match(source, /"source_type = \\\\\\\"local\\\\\\\""|"source_type = \\"local\\""/, `${sourcePath} should register local marketplace sources`);
-    assert.match(source, /source=marketplaceSources\[spec\.sourceToken\]/, `${sourcePath} should register the synced marketplace root`);
+    assert.match(source, /tomlString\("local"\)/, `${sourcePath} should register local marketplace sources`);
+    assert.match(source, /function marketplaceConfigBlock\(spec,source\)/, `${sourcePath} should register each marketplace once`);
+    assert.match(source, /tomlString\("git"\)/, `${sourcePath} should emit Git marketplace sources`);
+    assert.match(source, /"ref = "\+tomlString\(online\.ref\)/, `${sourcePath} should preserve the configured Git ref`);
+    assert.match(source, /source=marketplaceSources\[spec\.sourceToken\]/, `${sourcePath} should require a synced offline snapshot before registration`);
     assert.match(source, /fs\.existsSync\(path\.join\(source,"\.agents","plugins","marketplace\.json"\)\)/, `${sourcePath} should only register valid synced marketplaces`);
     assert.match(source, /const existing(?:Ruizhi|Codex)Config=fs\.existsSync\(configPath\);\s*const marketplaceSources=syncMarketplaces\(\);/, `${sourcePath} should preserve first-launch detection before creating config.toml`);
-    assert.match(source, /syncManagedMarketplaceConfig\(marketplaceSources\);\s*syncInstalledOpenAIBundledPluginCache\(\);/, `${sourcePath} should register marketplaces before plugin UI reads them`);
+    assert.match(source, /syncManagedMarketplaceConfig\(marketplaceSources\);\s*syncRuijieProviderChatModelPrefixes\(\);\s*syncInstalledOpenAIBundledPluginCache\(\);/, `${sourcePath} should patch provider prefixes before plugin UI reads config`);
   }
 });

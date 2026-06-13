@@ -40,7 +40,12 @@
     "defaultModel": "DeepSeek-V4-Flash",
     "defaultReasoningEffort": "medium",
     "requestMaxRetries": 0,
-    "streamMaxRetries": 0
+    "streamMaxRetries": 0,
+    "chatModelPrefixes": [
+      "glm-",
+      "deepseek-",
+      "kimi-"
+    ]
   },
   "apiKeyTest": {
     "model": "qwen3.6-flash",
@@ -205,7 +210,7 @@
         ]
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "node"
         ],
@@ -218,7 +223,7 @@
         "homePath": ".agents/skills/rj-skills-hbr-finder/scripts/search-hbr.mjs"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "node"
         ],
@@ -231,7 +236,7 @@
         "homePath": ".agents/skills/rj-skills-hundun-finder/scripts/search-hundun.mjs"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "node"
         ],
@@ -244,7 +249,7 @@
         "homePath": ".agents/skills/ruijie-volcengine-video-generation/scripts/generate-video.mjs"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "node"
         ],
@@ -257,7 +262,7 @@
         "homePath": ".agents/skills/ruijie-notebooklm/scripts/book-reader.mjs"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "node"
         ],
@@ -270,7 +275,7 @@
         "homePath": ".agents/skills/ruijie-notebooklm/scripts/notebooklm.mjs"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "bash"
         ],
@@ -283,7 +288,7 @@
         "homePath": ".agents/skills/ruijie-seedance-prompt/SKILL.sh"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "bash"
         ],
@@ -296,14 +301,14 @@
         "homePath": ".agents/skills/ruijie-seedance-prompt/scripts/setup_seedance_prompt_workspace.sh"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "python3"
         ],
         "path": "plugins/ruijie-km/scripts/ruijie_km_mcp.py"
       },
       {
-        "marketplace": "ruijie-skills",
+        "marketplace": "ruijie-marketplace",
         "prefix": [
           "python"
         ],
@@ -313,12 +318,21 @@
   },
   "pluginMarketplaces": [
     {
-      "name": "ruijie-skills",
+      "name": "ruijie-marketplace",
       "displayName": "锐捷插件",
-      "sourcePath": "marketplaces/ruijie-skills",
-      "resourcePath": "plugins/ruijie-skills",
-      "installPath": ".tmp/marketplaces/ruijie-skills",
-      "versionManifestPath": ".codex-plugin/plugin.json"
+      "sourcePath": "marketplaces/ruijie-marketplace",
+      "resourcePath": "plugins/ruijie-marketplace",
+      "installPath": ".tmp/marketplaces/ruijie-marketplace",
+      "versionManifestPath": ".codex-plugin/plugin.json",
+      "online": {
+        "enabled": true,
+        "name": "ruijie-marketplace",
+        "displayName": "锐捷在线插件",
+        "source": "https://github.com/bs5189-web/ruijie-marketplace.git",
+        "ref": "main",
+        "fallbackToLocal": true,
+        "autoUpgrade": false
+      }
     }
   ],
   "codexCli": {

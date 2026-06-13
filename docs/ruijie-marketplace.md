@@ -3,7 +3,7 @@
 锐智使用单一市场名 `ruijie-marketplace`，同时支持离线初始化和在线升级：
 
 - 离线快照：`marketplaces/ruijie-marketplace`，随安装包内置，首次启动同步到运行态 home 的 `.tmp/marketplaces/ruijie-marketplace`。
-- 在线来源：通过 `config/rj-codex.json` 的 `pluginMarketplaces[].online` 配置，当前地址为 `https://github.com/bs5189-web/ruijie-marketplace.git`。
+- 在线来源：通过 `config/rj-codex.json` 的 `pluginMarketplaces[].online` 配置，当前地址为 `http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git`。
 - 运行态注册：`[marketplaces.ruijie-marketplace]` 写为 `source_type = "git"`，因此插件管理里的市场升级按钮可用。
 - 离线兜底：Git 不可访问时，Codex 仍读取已经预置的本地快照，不会导致市场为空。
 
@@ -17,7 +17,7 @@ cd /tmp/ruijie-marketplace-init
 git init -b main
 git add .
 git commit -m "Initialize ruijie plugin marketplace"
-git remote add origin https://github.com/bs5189-web/ruijie-marketplace.git
+git remote add origin http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git
 git push -u origin main
 ```
 

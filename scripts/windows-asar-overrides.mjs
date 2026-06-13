@@ -2520,6 +2520,7 @@ function pageEnhanceBootstrapBlock(config) {
 function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}) {
   const log = options.log ?? (() => {});
   const openaiBaseUrl = config.openai?.baseUrl ?? "https://uniapi.ruijie.com.cn/v1";
+  const ruijieProviderBaseUrl = config.openai?.providerBaseUrl ?? openaiBaseUrl;
   const chatModelPrefixes = config.openai?.chatModelPrefixes ?? [];
   const providerBaseUrl = modelProviderBaseUrl(config);
   const bridgeConfig = modelBridgeBootstrapConfig(config);
@@ -2536,6 +2537,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     [
       `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
       `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};`,
+      `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
       `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
       `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
       `const modelBridgeConfig=${jsonLiteral(bridgeConfig)};`

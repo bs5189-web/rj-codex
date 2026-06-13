@@ -154,12 +154,13 @@ test("first launch auth status remains available without patching the native log
     "scripts/build-macos.mjs",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /function hasExisting(?:Codex|Ruizhi)Config\(/, `${scriptPath} should detect existing runtime configuration`);
+    assert.match(source, /function hasExistingRuizhiConfig\(/, `${scriptPath} should detect existing Ruizhi runtime configuration`);
     assert.match(source, /function readAuthJson\(/, `${scriptPath} should parse auth.json instead of inferring auth mode from API key presence`);
     assert.match(source, /authMode=auth&&typeof auth\.auth_mode==="string"\?auth\.auth_mode:null/, `${scriptPath} should expose auth_mode from auth.json`);
-    assert.match(source, /config\.toml/, `${scriptPath} should treat config.toml as an existing Codex configuration marker`);
-    assert.match(source, /RUIZHI_EXISTING(?:_CODEX)?_CONFIG/, `${scriptPath} should preserve whether config.toml exists without mutating it`);
-    assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from auth.json or Codex config`);
+    assert.match(source, /config\.toml/, `${scriptPath} should treat config.toml as an existing Ruizhi configuration marker`);
+    assert.match(source, /RUIZHI_EXISTING_CONFIG/, `${scriptPath} should preserve whether Ruizhi config.toml exists without mutating it`);
+    assert.doesNotMatch(source, /RUIZHI_EXISTING_CODEX_CONFIG|codexConfigPath|hasExistingCodexConfig|codex-config/, `${scriptPath} should not use Codex config state for Ruizhi auth status`);
+    assert.match(source, /configuredBy/, `${scriptPath} should report whether auth came from auth.json or Ruizhi config`);
     assert.match(source, /configured:authConfigured\|\|existingConfig/, `${scriptPath} should keep reporting existing auth state`);
     assert.doesNotMatch(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} must not treat API key presence as the only auth.json signal`);
     assert.doesNotMatch(source, /function patchLoginRoute\(/, `${scriptPath} should not patch Codex's login route`);
@@ -235,6 +236,7 @@ test("bootstrap only applies narrow managed config.toml updates", () => {
     assert.doesNotMatch(source, /fs\.writeFileSync\(target,\s*next,\s*"utf8"\)/, `${scriptPath} should not patch sandbox settings into config.toml`);
     assert.doesNotMatch(source, /fs\.copyFileSync\(configPath/, `${scriptPath} should not back up config.toml for mutation`);
     assert.doesNotMatch(source, /syncRuntimeModelProviderConfig|setTomlProviderBaseUrl|bak-provider/, `${scriptPath} should not repair provider URLs in config.toml`);
+    assert.doesNotMatch(source, /path\.join\(home,"\.codex","config\.toml"\)/, `${scriptPath} should not write Ruizhi runtime config into ~/.codex`);
   }
 
   for (const scriptPath of [
@@ -243,7 +245,9 @@ test("bootstrap only applies narrow managed config.toml updates", () => {
     "overrides/windows-app/asar/.vite/build/bootstrap.js",
   ]) {
     const source = read(scriptPath);
-    assert.match(source, /function syncRuijieProviderChatModelPrefixes\(\)/, `${scriptPath} should only patch missing Ruizhi provider chat model prefixes`);
+    assert.match(source, /function syncRuijieProviderConfig\(\)/, `${scriptPath} should only patch missing Ruizhi provider config`);
+    assert.match(source, /base_url = /, `${scriptPath} should write the provider base URL`);
+    assert.match(source, /ruijieProviderBaseUrl/, `${scriptPath} should use the configured provider base URL`);
     assert.match(source, /chat_model_prefixes = /, `${scriptPath} should write chat model prefixes when missing`);
     assert.match(source, /\[model_providers\.ruijie-uniapi\]/, `${scriptPath} should target only the Ruizhi UniAPI provider`);
   }

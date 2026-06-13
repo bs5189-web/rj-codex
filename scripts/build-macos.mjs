@@ -1474,6 +1474,7 @@ function ruizhiInit(){
     const ruizhiHomeEnvName=${jsonLiteral(ruizhiHomeEnvName)};
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
+    const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
     const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
@@ -1777,14 +1778,14 @@ function ruizhiInit(){
         if(online.ref)lines.push("ref = "+tomlString(online.ref));
         if(Array.isArray(online.sparse)&&online.sparse.length>0)lines.push("sparse = "+JSON.stringify(online.sparse.map(item=>String(item))));
         lines.push("");
-        return lines.join("\n");
+        return lines.join("\\n");
       }
       return [
         "[marketplaces."+spec.name+"]",
         "source_type = "+tomlString("local"),
         "source = "+tomlString(source),
         ""
-      ].join("\n");
+      ].join("\\n");
     }
     function upsertTomlTable(source,tableName,block){
       const header="["+tableName+"]";
@@ -1824,34 +1825,77 @@ function ruizhiInit(){
         fs.writeFileSync(configPath,next,"utf8");
       }
     }
-    function addRuijieProviderChatModelPrefixes(source){
-      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return source;
+    function patchRuijieProviderConfig(source){
       const header="[model_providers.ruijie-uniapi]";
-      const lines=String(source??"").split("\n");
+      const lines=String(source??"").split("\\n");
       let start=-1;
       for(let index=0;index<lines.length;index+=1){
         if(lines[index].trim()===header){start=index;break;}
       }
-      if(start<0)return source;
+      if(start<0){
+        const block=[
+          header,
+          "name = \\\"ruijie-uniapi\\\"",
+          "env_key = \\\"RUIJIE_UNIAPI_KEY\\\"",
+          "base_url = "+JSON.stringify(String(ruijieProviderBaseUrl)),
+          "wire_api = \\\"responses\\\"",
+          "requires_openai_auth = true",
+          "chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))),
+          ""
+        ].join("\\n");
+        const prefix=String(source??"").replace(/\\n*$/,"\\n");
+        return prefix+(prefix.trim().length>0?"\\n":"")+block;
+      }
       let end=lines.length;
       for(let index=start+1;index<lines.length;index+=1){
-        if(/^\s*\[[^\]]+\]\s*$/.test(lines[index])){end=index;break;}
+        if(/^\\s*\\[[^\\]]+\\]\\s*$/.test(lines[index])){end=index;break;}
       }
+      const requiredFields={
+        name:"name = \\\"ruijie-uniapi\\\"",
+        env_key:"env_key = \\\"RUIJIE_UNIAPI_KEY\\\"",
+        wire_api:"wire_api = \\\"responses\\\"",
+        requires_openai_auth:"requires_openai_auth = true"
+      };
+      for(const [key,line] of Object.entries(requiredFields)){
+        let found=false;
+        for(let index=start+1;index<end;index+=1){
+          if(new RegExp("^\\\\s*"+key+"\\\\s*=").test(lines[index])){found=true;break;}
+        }
+        if(!found){lines.splice(end,0,line);end+=1;}
+      }
+      let baseUrlPatched=false;
       for(let index=start+1;index<end;index+=1){
-        if(/^\s*chat_model_prefixes\s*=/.test(lines[index]))return source;
+        if(/^\\s*base_url\\s*=/.test(lines[index])){
+          const replacement="base_url = "+JSON.stringify(String(ruijieProviderBaseUrl));
+          if(lines[index]!==replacement)lines[index]=replacement;
+          baseUrlPatched=true;
+          break;
+        }
+      }
+      if(!baseUrlPatched){
+        let insertAt=end;
+        for(let index=start+1;index<end;index+=1){
+          if(/^\\s*(api_key|env_key)\\s*=/.test(lines[index])){insertAt=index+1;}
+        }
+        lines.splice(insertAt,0,"base_url = "+JSON.stringify(String(ruijieProviderBaseUrl)));
+        end+=1;
+      }
+      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return lines.join("\\n").replace(/\\n*$/,"\\n");
+      for(let index=start+1;index<end;index+=1){
+        if(/^\\s*chat_model_prefixes\\s*=/.test(lines[index]))return lines.join("\\n").replace(/\\n*$/,"\\n");
       }
       let insertAt=end;
       for(let index=start+1;index<end;index+=1){
-        if(/^\s*wire_api\s*=/.test(lines[index])){insertAt=index;break;}
+        if(/^\\s*wire_api\\s*=/.test(lines[index])){insertAt=index;break;}
       }
       lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
-      return lines.join("\n").replace(/\n*$/,"\n");
+      return lines.join("\\n").replace(/\\n*$/,"\\n");
     }
-    function syncRuijieProviderChatModelPrefixes(){
+    function syncRuijieProviderConfig(){
       const configPath=path.join(codexHome,"config.toml");
       if(!fs.existsSync(configPath))return;
       const existing=fs.readFileSync(configPath,"utf8");
-      const next=addRuijieProviderChatModelPrefixes(existing);
+      const next=patchRuijieProviderConfig(existing);
       if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){
@@ -1963,7 +2007,7 @@ function ruizhiInit(){
     const existingRuizhiConfig=fs.existsSync(configPath);
     const marketplaceSources=syncMarketplaces();
     syncManagedMarketplaceConfig(marketplaceSources);
-    syncRuijieProviderChatModelPrefixes();
+    syncRuijieProviderConfig();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
     process.env.RUIZHI_EXISTING_CONFIG=existingRuizhiConfig?"1":"0";

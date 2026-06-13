@@ -30,6 +30,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     const ruizhiHomeEnvName="RUIZHI_HOME";
     const ruizhiDefaultHomeDirName=".ruizhi";
     const openaiBaseUrl="https://uniapi.ruijie.com.cn/v1";
+    const ruijieProviderBaseUrl="https://gptauth.rjagi.cn/v1";
     const ruijieChatModelPrefixes=["glm-","deepseek-","kimi-"];
     const modelProviderBaseUrl="http://127.0.0.1:17888/v1";
     const modelBridgeConfig={"enabled":true,"host":"127.0.0.1","port":17888,"scriptResourcePath":["bridge","ruizhi-responses-bridge.cjs"],"routes":{"gpt-5.5":"responses","gpt-5.4":"responses","gpt-5.4-mini":"responses","gpt-5.3-codex":"responses","qwen3.6-plus":"responses","qwen3.6-flash":"responses","qwen3-coder-plus":"responses","qwen3-coder-480b-a35b-instruct":"responses","qwen3-coder-30b-a3b-instruct":"responses","claude-opus-4-7":{"protocol":"chat","reasoningEffort":true},"claude-sonnet-4-6":{"protocol":"chat","reasoningEffort":true},"glm-5.1":{"protocol":"chat","reasoningEffort":true},"kimi-k2.6":{"protocol":"chat","reasoningEffort":true},"MiniMax/MiniMax-M2.7":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-pro":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash-maxthink":{"protocol":"chat","reasoningEffort":true},"deepseek-v4-flash":{"protocol":"chat","reasoningEffort":true}}};
@@ -203,7 +204,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     syncSystemSkills();
     syncLegacyCodexGlobalSkills();
 
-    const marketplaceSpecs=[{"name":"ruijie-marketplace","resourcePath":["plugins","ruijie-marketplace"],"installPath":[".tmp","marketplaces","ruijie-marketplace"],"versionManifestPath":[".codex-plugin","plugin.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_RUIJIE_MARKETPLACE__","online":{"name":"ruijie-marketplace","source":"https://github.com/bs5189-web/ruijie-marketplace.git","ref":"main","sparse":[],"autoUpgrade":false}},{"name":"openai-bundled","resourcePath":["plugins","openai-bundled"],"installPath":[".tmp","bundled-marketplaces","openai-bundled"],"versionManifestPath":[".agents","plugins","marketplace.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","alwaysCopy":true,"hardcodedPlugins":true}];
+    const marketplaceSpecs=[{"name":"ruijie-marketplace","resourcePath":["plugins","ruijie-marketplace"],"installPath":[".tmp","marketplaces","ruijie-marketplace"],"versionManifestPath":[".codex-plugin","plugin.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_RUIJIE_MARKETPLACE__","online":{"name":"ruijie-marketplace","source":"http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git","ref":"main","sparse":[],"autoUpgrade":false}},{"name":"openai-bundled","resourcePath":["plugins","openai-bundled"],"installPath":[".tmp","bundled-marketplaces","openai-bundled"],"versionManifestPath":[".agents","plugins","marketplace.json"],"sourceToken":"__RUIZHI_MARKETPLACE_SOURCE_OPENAI_BUNDLED__","alwaysCopy":true,"hardcodedPlugins":true}];
     const hardcodedOpenAIBundledPlugins=[{"name":"browser","path":"./plugins/browser","category":"Engineering"},{"name":"chrome","path":"./plugins/chrome","category":"Productivity"},{"name":"latex","path":"./plugins/latex","category":"Research"}];
     function assertInside(base,target){
       const relative=path.relative(path.resolve(base),path.resolve(target));
@@ -328,7 +329,7 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
     function syncManagedMarketplaceConfig(marketplaceSources){
       const specs=managedMarketplaceSpecs();
       if(specs.length===0)return;
-      const configPath=path.join(home,".codex","config.toml");
+      const configPath=path.join(codexHome,"config.toml");
       let next=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
       let changed=false;
       for(const spec of specs){
@@ -344,34 +345,77 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
         fs.writeFileSync(configPath,next,"utf8");
       }
     }
-    function addRuijieProviderChatModelPrefixes(source){
-      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return source;
+    function patchRuijieProviderConfig(source){
       const header="[model_providers.ruijie-uniapi]";
       const lines=String(source??"").split("\n");
       let start=-1;
       for(let index=0;index<lines.length;index+=1){
         if(lines[index].trim()===header){start=index;break;}
       }
-      if(start<0)return source;
+      if(start<0){
+        const block=[
+          header,
+          "name = \\\"ruijie-uniapi\\\"",
+          "env_key = \\\"RUIJIE_UNIAPI_KEY\\\"",
+          "base_url = "+JSON.stringify(String(ruijieProviderBaseUrl)),
+          "wire_api = \\\"responses\\\"",
+          "requires_openai_auth = true",
+          "chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))),
+          ""
+        ].join("\n");
+        const prefix=String(source??"").replace(/\n*$/,"\n");
+        return prefix+(prefix.trim().length>0?"\n":"")+block;
+      }
       let end=lines.length;
       for(let index=start+1;index<lines.length;index+=1){
-        if(/^\s*\[[^\]]+\]\s*$/.test(lines[index])){end=index;break;}
+        if(/^\\s*\\[[^\\]]+\\]\\s*$/.test(lines[index])){end=index;break;}
       }
+      const requiredFields={
+        name:"name = \\\"ruijie-uniapi\\\"",
+        env_key:"env_key = \\\"RUIJIE_UNIAPI_KEY\\\"",
+        wire_api:"wire_api = \\\"responses\\\"",
+        requires_openai_auth:"requires_openai_auth = true"
+      };
+      for(const [key,line] of Object.entries(requiredFields)){
+        let found=false;
+        for(let index=start+1;index<end;index+=1){
+          if(new RegExp("^\\s*"+key+"\\s*=").test(lines[index])){found=true;break;}
+        }
+        if(!found){lines.splice(end,0,line);end+=1;}
+      }
+      let baseUrlPatched=false;
       for(let index=start+1;index<end;index+=1){
-        if(/^\s*chat_model_prefixes\s*=/.test(lines[index]))return source;
+        if(/^\\s*base_url\\s*=/.test(lines[index])){
+          const replacement="base_url = "+JSON.stringify(String(ruijieProviderBaseUrl));
+          if(lines[index]!==replacement)lines[index]=replacement;
+          baseUrlPatched=true;
+          break;
+        }
+      }
+      if(!baseUrlPatched){
+        let insertAt=end;
+        for(let index=start+1;index<end;index+=1){
+          if(/^\\s*(api_key|env_key)\\s*=/.test(lines[index])){insertAt=index+1;}
+        }
+        lines.splice(insertAt,0,"base_url = "+JSON.stringify(String(ruijieProviderBaseUrl)));
+        end+=1;
+      }
+      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return lines.join("\n").replace(/\n*$/,"\n");
+      for(let index=start+1;index<end;index+=1){
+        if(/^\\s*chat_model_prefixes\\s*=/.test(lines[index]))return lines.join("\n").replace(/\n*$/,"\n");
       }
       let insertAt=end;
       for(let index=start+1;index<end;index+=1){
-        if(/^\s*wire_api\s*=/.test(lines[index])){insertAt=index;break;}
+        if(/^\\s*wire_api\\s*=/.test(lines[index])){insertAt=index;break;}
       }
       lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
       return lines.join("\n").replace(/\n*$/,"\n");
     }
-    function syncRuijieProviderChatModelPrefixes(){
-      const configPath=path.join(home,".codex","config.toml");
+    function syncRuijieProviderConfig(){
+      const configPath=path.join(codexHome,"config.toml");
       if(!fs.existsSync(configPath))return;
       const existing=fs.readFileSync(configPath,"utf8");
-      const next=addRuijieProviderChatModelPrefixes(existing);
+      const next=patchRuijieProviderConfig(existing);
       if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){
@@ -479,14 +523,14 @@ const e=require(`./app-session-O7kcZj7R.js`),t=require(`./workspace-root-drop-ha
       }
     }
 
-    const configPath=path.join(home,".codex","config.toml");
-    const existingCodexConfig=fs.existsSync(configPath);
+    const configPath=path.join(codexHome,"config.toml");
+    const existingRuizhiConfig=fs.existsSync(configPath);
     const marketplaceSources=syncMarketplaces();
     syncManagedMarketplaceConfig(marketplaceSources);
-    syncRuijieProviderChatModelPrefixes();
+    syncRuijieProviderConfig();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
-    process.env.RUIZHI_EXISTING_CODEX_CONFIG=existingCodexConfig?"1":"0";
+    process.env.RUIZHI_EXISTING_CONFIG=existingRuizhiConfig?"1":"0";
   }catch(e){
     console.error("ruizhi bootstrap init failed",e);
   }

@@ -36,6 +36,7 @@
   },
   "openai": {
     "baseUrl": "https://uniapi.ruijie.com.cn/v1",
+    "providerBaseUrl": "https://gptauth.rjagi.cn/v1",
     "tokenUrl": "https://uniapi.ruijie.com.cn/console/token",
     "defaultModel": "DeepSeek-V4-Flash",
     "defaultReasoningEffort": "medium",
@@ -328,7 +329,7 @@
         "enabled": true,
         "name": "ruijie-marketplace",
         "displayName": "锐捷在线插件",
-        "source": "https://github.com/bs5189-web/ruijie-marketplace.git",
+        "source": "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git",
         "ref": "main",
         "fallbackToLocal": true,
         "autoUpgrade": false

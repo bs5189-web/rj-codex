@@ -246,7 +246,9 @@ test("bootstrap only applies narrow managed config.toml updates", () => {
   ]) {
     const source = read(scriptPath);
     assert.match(source, /function syncRuijieProviderConfig\(\)/, `${scriptPath} should only patch missing Ruizhi provider config`);
-    assert.match(source, /base_url = /, `${scriptPath} should write the provider base URL`);
+    assert.match(source, /chatgpt_login_base_url/, `${scriptPath} should write the ChatGPT login base URL`);
+    assert.match(source, /ruijieChatGptLoginBaseUrl/, `${scriptPath} should use the configured login base URL`);
+    assert.match(source, /tomlKeyLine\("base_url",ruijieProviderBaseUrl\)|base_url = /, `${scriptPath} should write the provider base URL`);
     assert.match(source, /ruijieProviderBaseUrl/, `${scriptPath} should use the configured provider base URL`);
     assert.match(source, /chat_model_prefixes = /, `${scriptPath} should write chat model prefixes when missing`);
     assert.match(source, /\[model_providers\.ruijie-uniapi\]/, `${scriptPath} should target only the Ruizhi UniAPI provider`);

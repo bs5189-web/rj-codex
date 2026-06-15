@@ -791,11 +791,11 @@ function patchNativeProfileVisibility() {
     return;
   }
   let patched = source.replace(
-    /function l\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:r,isLoading:s\}=i\(\),c=t\(\),l=n\(o\),u=s\|\|r===`chatgpt`&&c,d=r===`chatgpt`&&l,f;return e\[0\]!==u\|\|e\[1\]!==d\?\(f=\{isProfileVisibilityLoading:u,isProfileVisible:d\},e\[0\]=u,e\[1\]=d,e\[2\]=f\):f=e\[2\],f\}/,
+    /function l\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*),isLoading:([A-Za-z_$][\w$]*)\}=i\(\),c=[A-Za-z_$][\w$]*\(\),l=n\(o\),u=\2\|\|\1===`chatgpt`&&c,d=\1===`chatgpt`&&l,f;return e\[0\]!==u\|\|e\[1\]!==d\?\(f=\{isProfileVisibilityLoading:u,isProfileVisible:d\},e\[0\]=u,e\[1\]=d,e\[2\]=f\):f=e\[2\],f\}/,
     "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function l(){return ruizhiProfileVisibility()}"
   );
   patched = patched.replace(
-    /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:t\}=i\(\),l=n\(o\),u=r\(s\);if\(t!==`chatgpt`\)return!1;let d;return e\[0\]!==l\|\|e\[1\]!==u\?\(d=l&&u\.get\(c,!1\),e\[0\]=l,e\[1\]=u,e\[2\]=d\):d=e\[2\],d\}/,
+    /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*)\}=i\(\),l=n\(o\),u=[A-Za-z_$][\w$]*\(s\);if\(\1!==`chatgpt`\)return!1;let d;return e\[0\]!==l\|\|e\[1\]!==u\?\(d=l&&u\.get\(c,!1\),e\[0\]=l,e\[1\]=u,e\[2\]=d\):d=e\[2\],d\}/,
     "function ruizhiProfileDropdownEntryPoint(){return true}function u(){return ruizhiProfileDropdownEntryPoint()}"
   );
   if (!patched.includes("ruizhiProfileVisibility()") || !patched.includes("ruizhiProfileDropdownEntryPoint()")) {

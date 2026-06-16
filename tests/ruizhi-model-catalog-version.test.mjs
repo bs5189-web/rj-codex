@@ -33,10 +33,10 @@ test("DeepSeek V4 chat models only advertise UniAPI-compatible options", () => {
   }
 });
 
-test("Ruizhi startup default model is DeepSeek V4 Flash", () => {
+test("Ruizhi startup default model is ray", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
   const catalog = JSON.parse(readProjectFile("resources/ruizhi-model-catalog.json"));
-  const defaultModel = "DeepSeek-V4-Flash";
+  const defaultModel = "ray";
 
   assert.equal(config.openai.defaultModel, defaultModel);
   assert.equal(catalog.default_model, defaultModel);
@@ -44,7 +44,7 @@ test("Ruizhi startup default model is DeepSeek V4 Flash", () => {
   assert.ok(catalog.models.some((model) => model.slug === defaultModel), "default model should exist in catalog");
 
   const serviceSource = readProjectFile("resources/bridge/ruizhi-enhance-service.cjs");
-  assert.match(serviceSource, /: "DeepSeek-V4-Flash"/);
+  assert.match(serviceSource, /: "ray"/);
   assert.match(serviceSource, /isDefault: model === defaultModel/);
 });
 

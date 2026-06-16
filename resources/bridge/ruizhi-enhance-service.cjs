@@ -102,7 +102,7 @@ function listModelsFromUserCache(codexHome, payload = {}) {
   applyRuizhiModelCatalogCompatibilityPatches(catalog);
   const defaultModel = typeof catalog.default_model === "string" && catalog.default_model.trim()
     ? catalog.default_model.trim()
-    : "DeepSeek-V4-Flash";
+    : "ray";
   const includeHidden = payload?.includeHidden === true;
   const limit = Number.isInteger(payload?.limit) && payload.limit > 0 ? payload.limit : 100;
   const models = (Array.isArray(catalog.models) ? catalog.models : [])

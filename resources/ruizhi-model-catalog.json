@@ -4,6 +4,52 @@
   "client_version": "0.133.0",
   "models": [
     {
+      "slug": "ray",
+      "display_name": "ray",
+      "description": "ray；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "default_reasoning_level": "medium",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "响应更快，推理更轻量"
+        },
+        {
+          "effort": "medium",
+          "description": "兼顾速度和推理深度，适合日常任务"
+        },
+        {
+          "effort": "high",
+          "description": "更强推理深度，适合复杂问题"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 13,
+      "additional_speed_tiers": [],
+      "availability_nux": null,
+      "upgrade": null,
+      "supports_reasoning_summaries": false,
+      "default_reasoning_summary": "none",
+      "support_verbosity": true,
+      "default_verbosity": "medium",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": false,
+      "supports_image_detail_original": false,
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000,
+      "effective_context_window_percent": 95,
+      "experimental_supported_tools": [],
+      "input_modalities": [
+        "text"
+      ],
+      "supports_search_tool": false
+    },
+    {
       "slug": "DeepSeek-V4-Flash",
       "display_name": "DeepSeek V4 Flash",
       "description": "DeepSeek V4 Flash；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
@@ -992,5 +1038,5 @@
       "supports_search_tool": false
     }
   ],
-  "default_model": "DeepSeek-V4-Flash"
+  "default_model": "ray"
 }

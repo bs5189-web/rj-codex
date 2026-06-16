@@ -39,14 +39,15 @@
     "providerBaseUrl": "http://gptauth.dokploy.ruijie.com.cn/v1",
     "chatGptLoginBaseUrl": "http://gptauth.dokploy.ruijie.com.cn",
     "tokenUrl": "https://uniapi.ruijie.com.cn/console/token",
-    "defaultModel": "DeepSeek-V4-Flash",
+    "defaultModel": "ray",
     "defaultReasoningEffort": "medium",
     "requestMaxRetries": 0,
     "streamMaxRetries": 0,
     "chatModelPrefixes": [
       "glm-",
       "deepseek-",
-      "kimi-"
+      "kimi-",
+      "ray"
     ]
   },
   "apiKeyTest": {
@@ -110,6 +111,10 @@
         "reasoningEffort": true
       },
       "DeepSeek-V4-Flash": {
+        "protocol": "chat",
+        "reasoningEffort": true
+      },
+      "ray": {
         "protocol": "chat",
         "reasoningEffort": true
       }

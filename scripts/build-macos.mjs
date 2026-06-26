@@ -687,17 +687,39 @@ function findSourceAppRoot() {
 
 function patchPluginAccountGate() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const pluginAccountGatePattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e!==`chatgpt`\}/;
-  const gateFile = findOneFileByContent(
-    assetsDir,
-    /\.js$/,
-    pluginAccountGatePattern,
-    "插件账号模式 gate bundle"
-  );
-  writePatchedFile(gateFile, (source) =>
-    replaceRegex(source, pluginAccountGatePattern, "function $1(e){return !1}", "APIKey 模式插件置灰判断")
-  );
-  log(`已补丁插件账号模式 gate：${path.basename(gateFile)}`);
+
+  // 旧模式: function NAME(e){return e!==`chatgpt`}
+  const legacyPattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e!==`chatgpt`\}/;
+  const legacyFiles = walkFiles(assetsDir)
+    .filter((filePath) => /\.js$/.test(filePath))
+    .filter((filePath) => legacyPattern.test(fs.readFileSync(filePath, "utf8")));
+
+  if (legacyFiles.length > 0) {
+    for (const gateFile of legacyFiles) {
+      writePatchedFile(gateFile, (source) =>
+        replaceRegex(source, legacyPattern, "function $1(e){return !1}", "APIKey 模式插件置灰判断")
+      );
+      log(`已补丁插件账号模式 gate (legacy)：${path.basename(gateFile)}`);
+    }
+    return;
+  }
+
+  // 新模式: authMethod===`chatgpt` 替换为 !1
+  const authCheckPattern = /authMethod===`chatgpt`/g;
+  const jsFiles = walkFiles(assetsDir).filter((filePath) => /\.js$/.test(filePath));
+  let patchedCount = 0;
+  for (const filePath of jsFiles) {
+    const source = fs.readFileSync(filePath, "utf8");
+    if (authCheckPattern.test(source)) {
+      authCheckPattern.lastIndex = 0;
+      const patched = source.replace(authCheckPattern, "!1");
+      if (patched !== source) {
+        fs.writeFileSync(filePath, patched, "utf8");
+        patchedCount++;
+      }
+    }
+  }
+  log(`已补丁插件/功能账号模式 gate (authMethod)：${patchedCount} 个文件`);
 }
 
 function patchNativeWebviewFeatureGates() {
@@ -707,7 +729,8 @@ function patchNativeWebviewFeatureGates() {
     .filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)))
     .find((filePath) => statsigGateSourcePattern.test(fs.readFileSync(filePath, "utf8")));
   if (!statsigFile) {
-    throw new Error("Statsig webview gate 补丁目标不存在");
+    log("跳过补丁点：Statsig webview gate（模块已变更）");
+    return;
   }
   const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`,`3903563814`,`410065390`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const source = fs.readFileSync(statsigFile, "utf8");
@@ -744,23 +767,24 @@ function patchNativeStatsigBootstrap() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const statsigBootstrapPattern = /async function ([A-Za-z_$][\w$]*)\(\{appSessionId:([A-Za-z_$][\w$]*),appVersion:([A-Za-z_$][\w$]*),buildFlavor:([A-Za-z_$][\w$]*),locale:([A-Za-z_$][\w$]*),stableId:([A-Za-z_$][\w$]*),systemName:([A-Za-z_$][\w$]*),systemVersion:([A-Za-z_$][\w$]*),windowType:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=null;try\{let\{statsigPayload:([A-Za-z_$][\w$]*)\}=await Promise\.race\(\[[\s\S]*?Timed out while fetching post-login Statsig bootstrap[\s\S]*?\]\),\{user:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\.parse\(JSON\.parse\(([A-Za-z_$][\w$]*)\)\);return\{statsigPayload:([A-Za-z_$][\w$]*),user:([A-Za-z_$][\w$]*)\}\}finally\{([A-Za-z_$][\w$]*)!=null&&globalThis\.clearTimeout\(([A-Za-z_$][\w$]*)\)\}\}/;
   const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /Timed out while fetching post-login Statsig bootstrap/, "Statsig bootstrap bundle");
-  writePatchedFile(statsigFile, (source) => {
-    const match = source.match(statsigBootstrapPattern);
-    if (!match) {
-      throw new Error("补丁点不存在：Statsig post-login bootstrap 等待禁用");
-    }
-    const functionName = match[1];
-    const appSessionId = match[2];
-    const appVersion = match[3];
-    const locale = match[5];
-    const stableId = match[6];
-    const validator = match[13];
-    const localBootstrapCode = "function ruizhiCreateStatsigBootstrapPayload(e){return JSON.stringify({has_updates:!0,response_format:`init-v2`,time:Date.now(),feature_gates:{},dynamic_configs:{},layer_configs:{},param_stores:{},values:{},exposures:{},sdk_flags:{},user:{userID:e.stableId||e.appSessionId||`ruizhi-local`,customIDs:{stableID:e.stableId},locale:e.locale,appVersion:e.appVersion}})}";
-    return source.replace(
-      statsigBootstrapPattern,
-      `${localBootstrapCode}async function ${functionName}({appSessionId:${appSessionId},appVersion:${appVersion},buildFlavor:${match[4]},locale:${locale},stableId:${stableId},systemName:${match[7]},systemVersion:${match[8]},windowType:${match[9]}}){let ${match[11]}=ruizhiCreateStatsigBootstrapPayload({appSessionId:${appSessionId},appVersion:${appVersion},locale:${locale},stableId:${stableId}}),{user:${match[12]}}=${validator}.parse(JSON.parse(${match[11]}));return{statsigPayload:${match[11]},user:${match[12]}}}`
-    );
-  });
+  const source = fs.readFileSync(statsigFile, "utf8");
+  const match = source.match(statsigBootstrapPattern);
+  if (!match) {
+    log("跳过补丁点：Statsig post-login bootstrap（结构已变更）");
+    return;
+  }
+  const functionName = match[1];
+  const appSessionId = match[2];
+  const appVersion = match[3];
+  const locale = match[5];
+  const stableId = match[6];
+  const validator = match[13];
+  const localBootstrapCode = "function ruizhiCreateStatsigBootstrapPayload(e){return JSON.stringify({has_updates:!0,response_format:`init-v2`,time:Date.now(),feature_gates:{},dynamic_configs:{},layer_configs:{},param_stores:{},values:{},exposures:{},sdk_flags:{},user:{userID:e.stableId||e.appSessionId||`ruizhi-local`,customIDs:{stableID:e.stableId},locale:e.locale,appVersion:e.appVersion}})}";
+  const patched = source.replace(
+    statsigBootstrapPattern,
+    `${localBootstrapCode}async function ${functionName}({appSessionId:${appSessionId},appVersion:${appVersion},buildFlavor:${match[4]},locale:${locale},stableId:${stableId},systemName:${match[7]},systemVersion:${match[8]},windowType:${match[9]}}){let ${match[11]}=ruizhiCreateStatsigBootstrapPayload({appSessionId:${appSessionId},appVersion:${appVersion},locale:${locale},stableId:${stableId}}),{user:${match[12]}}=${validator}.parse(JSON.parse(${match[11]}));return{statsigPayload:${match[11]},user:${match[12]}}}`
+  );
+  fs.writeFileSync(statsigFile, patched, "utf8");
   log(`已禁用 Codex 原生 Statsig post-login bootstrap 等待：${path.basename(statsigFile)}`);
 }
 
@@ -779,6 +803,11 @@ function patchNativeCesAnalyticsNetwork() {
 
 function patchNativeProfileVisibility() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
+  const profileFiles = fs.readdirSync(assetsDir).filter((name) => /^profile-visibility-.*\.js$/.test(name));
+  if (profileFiles.length === 0) {
+    log("跳过补丁点：profile visibility（模块已变更）");
+    return;
+  }
   const profileVisibilityFile = findOneFileByContent(
     assetsDir,
     /^profile-visibility-.*\.js$/,
@@ -909,13 +938,13 @@ function patchChatGptAuthExternalBrowserSource(source) {
   }
 
   const helper = "function ruizhiIsChatGptAuthUrl(e){try{if(typeof e!==`string`)return!1;let t=new URL(e);return(t.protocol===`https:`||t.protocol===`http:`)&&t.pathname===`/oauth/authorize`&&t.searchParams.get(`client_id`)===`app_EMoamEEZ73f0CkXaXp7hrann`}catch{return!1}}";
-  const openInBrowserPattern = /case`open-in-browser`:\{let\{url:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*);if\(typeof \1==`string`&&this\.windowManager\.queueCodexDeepLinkUrl\(\1,\2\.originHostId\)\)break;if\(\2\.useExternalBrowser===!0\)\{/;
+  const openInBrowserPattern = /case`open-in-browser`:\{let\{url:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*);if\(typeof \1==`string`&&this\.windowManager\.queueCodexDeepLinkUrl\(\1,\2\.originHostId\)\)break;if\(\2\.useExternalBrowser===!0(\|\|\2\.openTarget===`external-browser`)?\)\{/;
   if (!openInBrowserPattern.test(source)) {
-    throw new Error("补丁点不存在：ChatGPT 认证链接外部浏览器打开");
+    return null; // 结构已变更，无法补丁
   }
 
-  return source.replace(openInBrowserPattern, (match, urlName, messageName) => {
-    return `${helper}case\`open-in-browser\`:{let{url:${urlName}}=${messageName};if(ruizhiIsChatGptAuthUrl(${urlName}))${messageName}={...${messageName},useExternalBrowser:!0};if(typeof ${urlName}==\`string\`&&this.windowManager.queueCodexDeepLinkUrl(${urlName},${messageName}.originHostId))break;if(${messageName}.useExternalBrowser===!0){`;
+  return source.replace(openInBrowserPattern, (match, urlName, messageName, openTargetSuffix = "") => {
+    return `${helper}case\`open-in-browser\`:{let{url:${urlName}}=${messageName};if(ruizhiIsChatGptAuthUrl(${urlName}))${messageName}={...${messageName},useExternalBrowser:!0};if(typeof ${urlName}==\`string\`&&this.windowManager.queueCodexDeepLinkUrl(${urlName},${messageName}.originHostId))break;if(${messageName}.useExternalBrowser===!0${openTargetSuffix}){`;
   });
 }
 
@@ -924,6 +953,10 @@ function patchChatGptAuthExternalBrowser() {
   const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
   const source = fs.readFileSync(mainFile, "utf8");
   const patched = patchChatGptAuthExternalBrowserSource(source);
+  if (patched === null) {
+    log("跳过补丁点：ChatGPT 认证链接外部浏览器（结构已变更）");
+    return;
+  }
   if (patched === source) {
     log(`已存在 ChatGPT 认证链接外部浏览器补丁：${path.basename(mainFile)}`);
     return;
@@ -1083,7 +1116,8 @@ function patchTrustedBrowserClientHashes() {
 function replaceLocaleMessage(source, key, value) {
   const pattern = new RegExp(`("${escapeRegExp(key)}":)\`[^\`]*\``);
   if (!pattern.test(source)) {
-    throw new Error(`找不到中文翻译键：${key}`);
+    log(`跳过中文翻译键（不存在）：${key}`);
+    return null;
   }
   return source.replace(pattern, `$1\`${value}\``);
 }
@@ -1110,30 +1144,34 @@ function patchWebviewLocales() {
     throw new Error("找不到中文 webview locale bundle");
   }
   if (allLocaleFiles.length === 0) {
-    throw new Error("找不到 webview locale bundle");
+    log("跳过补丁点：webview locale 全局替换（key 已变更）");
+    // 仍然继续处理 localeFiles 的中文翻译
   }
-
-  const replacements = new Map([
-    ["electron.onboarding.login.chatgpt.continue", "使用锐擎继续"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"]
-  ]);
 
   for (const localeFile of allLocaleFiles) {
     writePatchedFile(localeFile, (source) => {
       let next = source;
       for (const [key, value] of globalReplacements) {
-        next = replaceLocaleMessage(next, key, value);
+        const r = replaceLocaleMessage(next, key, value);
+        if (r !== null) next = r;
       }
       return next;
     });
     log(`已补丁通用翻译：${path.basename(localeFile)}`);
   }
 
+  const replacements = new Map([
+    ["electron.onboarding.login.chatgpt.continue", "使用锐擎继续"],
+    ["electron.onboarding.login.chatgpt.signIn", "使用锐擎继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"]
+  ]);
+
   for (const localeFile of localeFiles) {
     writePatchedFile(localeFile, (source) => {
       let next = source;
       for (const [key, value] of replacements) {
-        next = replaceLocaleMessage(next, key, value);
+        const r = replaceLocaleMessage(next, key, value);
+        if (r !== null) next = r;
       }
       return next;
     });
@@ -1162,6 +1200,11 @@ function patchWebviewHtml() {
 
 function patchDefaultLocale() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
+  const resolverFiles = fs.readdirSync(assetsDir).filter((name) => /^locale-resolver-.*\.js$/.test(name));
+  if (resolverFiles.length === 0) {
+    log("跳过补丁点：locale-resolver（模块已变更）");
+    return;
+  }
   const localeResolverFile = findOneFile(assetsDir, /^locale-resolver-.*\.js$/, "locale resolver bundle");
   writePatchedFile(localeResolverFile, (source) =>
     replaceExact(source, "var t=`en-US`", `var t=\`${config.locale}\``, "默认语言")
@@ -1301,6 +1344,13 @@ function patchModelAvailabilityAllowlist() {
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
+  const modelFileNames = fs.readdirSync(assetsDir).filter((name) =>
+    /^(use-model-settings|model-queries|models-and-reasoning-efforts)-.*\.js$/.test(name)
+  );
+  if (modelFileNames.length === 0) {
+    log("跳过补丁点：模型白名单过滤（模块已变更）");
+    return;
+  }
   const modelAvailabilityAllowlistPattern = /&&[A-Za-z_$][\w$]*!==`amazonBedrock`/;
   const modelSettingsFile = findOneFileByContent(
     assetsDir,
@@ -1328,6 +1378,11 @@ function patchListModelsForHostFromUserCache() {
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
+  const modelQueryNames = fs.readdirSync(assetsDir).filter((name) => /^model-queries-.*\.js$/.test(name));
+  if (modelQueryNames.length === 0) {
+    log("跳过补丁点：模型缓存列表（模块已变更）");
+    return;
+  }
   const modelQueriesFile = findOneFileByContent(
     assetsDir,
     /^model-queries-.*\.js$/,
@@ -1475,9 +1530,9 @@ function ruizhiInit(){
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
     const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
-    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "https://gptauth.dokploy.ruijie.com.cn")};
+    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "http://gptauth.riilservice.cn")};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
-    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};
+    const chatGptBackendApiBaseUrl=${jsonLiteral("http://gptauth.riilservice.cn")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),

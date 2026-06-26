@@ -1034,9 +1034,9 @@ function ruizhiInit(){
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
     const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
-    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "https://gptauth.dokploy.ruijie.com.cn")};
+    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "http://gptauth.riilservice.cn")};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
-    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};
+    const chatGptBackendApiBaseUrl=${jsonLiteral("http://gptauth.riilservice.cn")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),

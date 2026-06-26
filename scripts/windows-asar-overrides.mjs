@@ -2316,7 +2316,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
   const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
   const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
-  const chatGptBackendApiBaseUrl = "https://gptauth.rjagi.cn";
+  const chatGptBackendApiBaseUrl = "http://gptauth.riilservice.cn";
   const preludeStart = "/* ruizhi-early-env:start */";
   const preludeEnd = "/* ruizhi-early-env:end */";
   const prelude = `${preludeStart}
@@ -2536,7 +2536,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     constantsPattern,
     [
       `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
-      `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.rjagi.cn")};`,
+      `const chatGptBackendApiBaseUrl=${jsonLiteral("http://gptauth.riilservice.cn")};`,
       `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
       `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
       `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,

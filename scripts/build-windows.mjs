@@ -1050,9 +1050,9 @@ function ruizhiInit(){
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
     const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
-    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "http://gptauth.riilservice.cn")};
+    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "https://gptauth.riilservice.cn")};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
-    const chatGptBackendApiBaseUrl=${jsonLiteral("http://gptauth.riilservice.cn")};
+    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.riilservice.cn")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),
@@ -1527,7 +1527,8 @@ function ruizhiInit(){
       if(!fs.existsSync(configPath))return;
       const existing=fs.readFileSync(configPath,"utf8");
       const withLoginBase=upsertTopLevelTomlKey(existing,"chatgpt_login_base_url",ruijieChatGptLoginBaseUrl);
-      const next=patchRuijieProviderConfig(withLoginBase);
+      const withProvider=upsertTopLevelTomlKey(withLoginBase,"model_provider","ruijie-uniapi");
+      const next=patchRuijieProviderConfig(withProvider);
       if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){
@@ -2966,7 +2967,7 @@ async function repackAppAsar() {
     applyLegacyAsarPatches();
   } else {
     applyWindowsAsarOverrides(extractedDir, { log });
-    refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log, resourcesDir });
+    refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log, resourcesDir, bootstrapInitCode: bootstrapInitCode() });
     patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
   }
 

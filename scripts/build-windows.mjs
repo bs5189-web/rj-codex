@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import fsExtra from "fs-extra";
 import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
-import { rcedit } from "rcedit";
+import rcedit from "rcedit";
 import {
   applyWindowsAsarOverrides,
   codexClientVersionFromExe,
@@ -99,14 +99,30 @@ function electronBuilderCliPath() {
 
 function electronRuntimeVersion() {
   const versionPath = path.join(appOutRoot, "version");
-  if (!fs.existsSync(versionPath)) {
-    throw new Error(`缺少 Electron runtime version 文件：${versionPath}`);
+  if (fs.existsSync(versionPath)) {
+    const version = fs.readFileSync(versionPath, "utf8").trim();
+    if (/^\d+\.\d+\.\d+/.test(version)) {
+      return version;
+    }
   }
-  const version = fs.readFileSync(versionPath, "utf8").trim();
-  if (!/^\d+\.\d+\.\d+/.test(version)) {
-    throw new Error(`Electron runtime version 格式异常：${version}`);
+  // Codex Desktop v26+ 使用 Chromium 架构，没有标准 Electron version 文件
+  // 尝试从 manifest 文件提取 Chromium 版本，回退到默认值
+  const manifestFiles = fs.existsSync(appOutRoot)
+    ? fs.readdirSync(appOutRoot).filter((n) => /^\d+\.\d+\.\d+\.\d+\.manifest$/.test(n))
+    : [];
+  if (manifestFiles.length > 0) {
+    const chromeVersion = manifestFiles[0].replace(/\.manifest$/, "");
+    // 将 Chromium 版本映射到 Electron 版本（近似）
+    // Chrome 149 ≈ Electron 33
+    const major = parseInt(chromeVersion.split(".")[0], 10);
+    const electronMajor = Math.max(1, major - 116);
+    const electronVersion = `${electronMajor}.0.0`;
+    log(`未找到 Electron version 文件，根据 Chromium ${chromeVersion} 推断 Electron ${electronVersion}`);
+    return electronVersion;
   }
-  return version;
+  // 最终回退
+  log("未找到 Electron version 文件，使用默认值 33.0.0");
+  return "33.0.0";
 }
 
 function modelCatalogPath() {
@@ -2966,6 +2982,14 @@ async function repackAppAsar() {
 async function patchFuses() {
   const exePath = path.join(appOutRoot, config.windows.sourceExeName);
   fs.chmodSync(exePath, 0o755);
+
+  // 检查二进制文件中是否包含 Electron fuse sentinel
+  const sentinel = "dL7pKGdnNz796PbbjQWNKmHXBZAhSUZ8Bd";
+  const exeBuf = fs.readFileSync(exePath);
+  if (!exeBuf.includes(Buffer.from(sentinel, "utf8"))) {
+    log("跳过 fuse 关闭（Codex.exe 不包含 Electron fuse sentinel，可能是 Chromium 架构）");
+    return;
+  }
 
   log("关闭 app.asar 完整性校验 fuse");
   await flipFuses(exePath, {

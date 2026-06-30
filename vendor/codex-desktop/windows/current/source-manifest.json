@@ -1,17 +1,18 @@
 {
   "source": "OpenAI Codex Desktop",
-  "packageVersion": "42.0.1",
-  "importedAt": "2026-05-27T02:20:46.049Z",
-  "sourceAppRoot": "C:\\Users\\ruijie\\AppData\\Local\\Codex",
-  "targetAppRoot": "vendor/codex-desktop/windows/current/app",
+  "packageVersion": "26.616.10790.0",
+  "importedAt": "2026-06-30T01:14:18.904Z",
+  "sourceAppRoot": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.616.10790.0_x64__2p2nqsd0c76g0\\app",
+  "targetAppRoot": "C:/codex-desktop-source/app",
+  "externalCopy": true,
   "files": {
     "resources/app.asar": {
-      "size": 147655241,
-      "sha256": "5aec779d87ae8b83bba31619a40057ecedc0c2be041a82ed73b4ccdb43ec55f3"
+      "size": 159592222,
+      "sha256": "b1445de6388cab35b3c1662646fc4231e63dbb1a9b08668260145b1baa367c26"
     },
     "Codex.exe": {
-      "size": 226683392,
-      "sha256": "0ddd13a469ed51e3468099f8e08fc2407c878bf6adc3a9b4333f67c601a9b33a"
+      "size": 4512256,
+      "sha256": "9fa3c69cba3dacc3bf70e5a824014f2899dfb6778dbe14724a1b815dbd94e32d"
     }
   }
 }

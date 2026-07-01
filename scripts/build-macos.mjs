@@ -838,7 +838,7 @@ function patchNativeProfileUsageFallback() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileQueriesFile = findOneFileByContent(
     assetsDir,
-    /^profile-queries-.*\.js$/,
+    /^.+\.js$/,
     /\/wham\/profiles\/me/,
     "profile queries bundle"
   );
@@ -1530,9 +1530,9 @@ function ruizhiInit(){
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
     const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
-    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "https://gptauth.riilservice.cn")};
+    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "http://115.191.65.206:13000")};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
-    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.riilservice.cn")};
+    const chatGptBackendApiBaseUrl=${jsonLiteral("http://115.191.65.206:13000")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),
@@ -1995,8 +1995,7 @@ function ruizhiInit(){
       if(!fs.existsSync(configPath))return;
       const existing=fs.readFileSync(configPath,"utf8");
       const withLoginBase=upsertTopLevelTomlKey(existing,"chatgpt_login_base_url",ruijieChatGptLoginBaseUrl);
-      const withProvider=upsertTopLevelTomlKey(withLoginBase,"model_provider","ruijie-uniapi");
-      const next=patchRuijieProviderConfig(withProvider);
+      const next=patchRuijieProviderConfig(withLoginBase);
       if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){

@@ -36,8 +36,8 @@
   },
   "openai": {
     "baseUrl": "https://uniapi.ruijie.com.cn/v1",
-    "providerBaseUrl": "https://gptauth.riilservice.cn/v1",
-    "chatGptLoginBaseUrl": "https://gptauth.riilservice.cn",
+    "providerBaseUrl": "http://115.191.65.206:13000/v1",
+    "chatGptLoginBaseUrl": "http://115.191.65.206:13000",
     "tokenUrl": "https://uniapi.ruijie.com.cn/console/token",
     "defaultModel": "ray",
     "defaultReasoningEffort": "medium",

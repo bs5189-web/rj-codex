@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import fsExtra from "fs-extra";
 import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
-import rcedit from "rcedit";
+import { rcedit } from "rcedit";
 import {
   applyWindowsAsarOverrides,
   codexClientVersionFromExe,
@@ -99,30 +99,14 @@ function electronBuilderCliPath() {
 
 function electronRuntimeVersion() {
   const versionPath = path.join(appOutRoot, "version");
-  if (fs.existsSync(versionPath)) {
-    const version = fs.readFileSync(versionPath, "utf8").trim();
-    if (/^\d+\.\d+\.\d+/.test(version)) {
-      return version;
-    }
+  if (!fs.existsSync(versionPath)) {
+    throw new Error(`缺少 Electron runtime version 文件：${versionPath}`);
   }
-  // Codex Desktop v26+ 使用 Chromium 架构，没有标准 Electron version 文件
-  // 尝试从 manifest 文件提取 Chromium 版本，回退到默认值
-  const manifestFiles = fs.existsSync(appOutRoot)
-    ? fs.readdirSync(appOutRoot).filter((n) => /^\d+\.\d+\.\d+\.\d+\.manifest$/.test(n))
-    : [];
-  if (manifestFiles.length > 0) {
-    const chromeVersion = manifestFiles[0].replace(/\.manifest$/, "");
-    // 将 Chromium 版本映射到 Electron 版本（近似）
-    // Chrome 149 ≈ Electron 33
-    const major = parseInt(chromeVersion.split(".")[0], 10);
-    const electronMajor = Math.max(1, major - 116);
-    const electronVersion = `${electronMajor}.0.0`;
-    log(`未找到 Electron version 文件，根据 Chromium ${chromeVersion} 推断 Electron ${electronVersion}`);
-    return electronVersion;
+  const version = fs.readFileSync(versionPath, "utf8").trim();
+  if (!/^\d+\.\d+\.\d+/.test(version)) {
+    throw new Error(`Electron runtime version 格式异常：${version}`);
   }
-  // 最终回退
-  log("未找到 Electron version 文件，使用默认值 33.0.0");
-  return "33.0.0";
+  return version;
 }
 
 function modelCatalogPath() {
@@ -581,7 +565,7 @@ function patchNativeProfileUsageFallback() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileQueriesFile = findOneFileByContent(
     assetsDir,
-    /^profile-queries-.*\.js$/,
+    /^.+\.js$/,
     /\/wham\/profiles\/me/,
     "profile queries bundle"
   );
@@ -1050,9 +1034,9 @@ function ruizhiInit(){
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
     const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
-    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "https://gptauth.riilservice.cn")};
+    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "http://115.191.65.206:13000")};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
-    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.riilservice.cn")};
+    const chatGptBackendApiBaseUrl=${jsonLiteral("http://115.191.65.206:13000")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),
@@ -1527,8 +1511,7 @@ function ruizhiInit(){
       if(!fs.existsSync(configPath))return;
       const existing=fs.readFileSync(configPath,"utf8");
       const withLoginBase=upsertTopLevelTomlKey(existing,"chatgpt_login_base_url",ruijieChatGptLoginBaseUrl);
-      const withProvider=upsertTopLevelTomlKey(withLoginBase,"model_provider","ruijie-uniapi");
-      const next=patchRuijieProviderConfig(withProvider);
+      const next=patchRuijieProviderConfig(withLoginBase);
       if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){
@@ -2967,7 +2950,7 @@ async function repackAppAsar() {
     applyLegacyAsarPatches();
   } else {
     applyWindowsAsarOverrides(extractedDir, { log });
-    refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log, resourcesDir, bootstrapInitCode: bootstrapInitCode() });
+    refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log, resourcesDir });
     patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
   }
 
@@ -2983,14 +2966,6 @@ async function repackAppAsar() {
 async function patchFuses() {
   const exePath = path.join(appOutRoot, config.windows.sourceExeName);
   fs.chmodSync(exePath, 0o755);
-
-  // 检查二进制文件中是否包含 Electron fuse sentinel
-  const sentinel = "dL7pKGdnNz796PbbjQWNKmHXBZAhSUZ8Bd";
-  const exeBuf = fs.readFileSync(exePath);
-  if (!exeBuf.includes(Buffer.from(sentinel, "utf8"))) {
-    log("跳过 fuse 关闭（Codex.exe 不包含 Electron fuse sentinel，可能是 Chromium 架构）");
-    return;
-  }
 
   log("关闭 app.asar 完整性校验 fuse");
   await flipFuses(exePath, {

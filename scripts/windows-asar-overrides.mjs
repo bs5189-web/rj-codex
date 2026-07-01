@@ -316,14 +316,6 @@ function patchNativeStatsigBootstrap(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const statsigBootstrapPattern = /async function ([A-Za-z_$][\w$]*)\(\{appSessionId:([A-Za-z_$][\w$]*),appVersion:([A-Za-z_$][\w$]*),buildFlavor:([A-Za-z_$][\w$]*),locale:([A-Za-z_$][\w$]*),stableId:([A-Za-z_$][\w$]*),systemName:([A-Za-z_$][\w$]*),systemVersion:([A-Za-z_$][\w$]*),windowType:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=null;try\{let\{statsigPayload:([A-Za-z_$][\w$]*)\}=await Promise\.race\(\[[\s\S]*?Timed out while fetching post-login Statsig bootstrap[\s\S]*?\]\),\{user:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\.parse\(JSON\.parse\(([A-Za-z_$][\w$]*)\)\);return\{statsigPayload:([A-Za-z_$][\w$]*),user:([A-Za-z_$][\w$]*)\}\}finally\{([A-Za-z_$][\w$]*)!=null&&globalThis\.clearTimeout\(([A-Za-z_$][\w$]*)\)\}\}/;
-  const candidates = walkFiles(assetsDir).filter((filePath) => filePath.endsWith(".js") && statsigBootstrapPattern.test(fs.readFileSync(filePath, "utf8")));
-  if (candidates.length === 0) {
-    log("已跳过 Codex 原生 Statsig post-login bootstrap 等待禁用（补丁点不存在）");
-    return;
-  }
-  if (candidates.length !== 1) {
-    throw new Error(`Statsig post-login bootstrap bundle 匹配数量异常：${candidates.length}`);
-  }
   const statsigFile = candidates[0];
   const original = fs.readFileSync(statsigFile, "utf8");
   if (original.includes("ruizhiCreateStatsigBootstrapPayload")) {
@@ -395,13 +387,12 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
     log("已存在 Codex 个人资料入口补丁");
     return;
   }
-  // 兼容新旧版本：变量名 r/t 可能在不同版本中互换
   source = source.replace(
-    /function l\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:(\w+),isLoading:(\w+)\}=i\(\),(\w+)=(\w+)\(\),(\w+)=n\(o\),(\w+)=(\w+)\|\|\1===`chatgpt`&&\3,(\w+)=\1===`chatgpt`&&\5,(\w+);return e\[0\]!==\6\|\|e\[1\]!==\8\?\((\w+)=\{isProfileVisibilityLoading:\6,isProfileVisible:\8\},e\[0\]=\6,e\[1\]=\8,e\[2\]=\10\):\10=e\[2\],\10\}/,
+    /function l\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:r,isLoading:s\}=i\(\),c=t\(\),l=n\(o\),u=s\|\|r===`chatgpt`&&c,d=r===`chatgpt`&&l,f;return e\[0\]!==u\|\|e\[1\]!==d\?\(f=\{isProfileVisibilityLoading:u,isProfileVisible:d\},e\[0\]=u,e\[1\]=d,e\[2\]=f\):f=e\[2\],f\}/,
     "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function l(){return ruizhiProfileVisibility()}"
   );
   source = source.replace(
-    /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:(\w+)\}=i\(\),(\w+)=n\(o\),(\w+)=(\w+)\((\w+)\);if\(\1!==`chatgpt`\)return!1;let (\w+);return e\[0\]!==\2\|\|e\[1\]!==\3\?\((\w+)=\2&&\3\.get\((\w+),!1\),e\[0\]=\2,e\[1\]=\3,e\[2\]=\7\):\7=e\[2\],\7\}/,
+    /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:t\}=i\(\),l=n\(o\),u=r\(s\);if\(t!==`chatgpt`\)return!1;let d;return e\[0\]!==l\|\|e\[1\]!==u\?\(d=l&&u\.get\(c,!1\),e\[0\]=l,e\[1\]=u,e\[2\]=d\):d=e\[2\],d\}/,
     "function ruizhiProfileDropdownEntryPoint(){return true}function u(){return ruizhiProfileDropdownEntryPoint()}"
   );
   if (!source.includes("ruizhiProfileVisibility()") || !source.includes("ruizhiProfileDropdownEntryPoint()")) {
@@ -416,7 +407,7 @@ function patchNativeProfileUsageFallback(extractedAppDir, options = {}) {
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const profileQueriesFile = findOneFileByContent(
     assetsDir,
-    /^profile-queries-.*\.js$/,
+    /^.+\.js$/,
     /\/wham\/profiles\/me/,
     "profile queries bundle"
   );
@@ -616,7 +607,7 @@ export function patchChatGptAuthExternalBrowserSource(source) {
   }
 
   const helper = "function ruizhiIsChatGptAuthUrl(e){try{if(typeof e!==`string`)return!1;let t=new URL(e);return(t.protocol===`https:`||t.protocol===`http:`)&&t.pathname===`/oauth/authorize`&&t.searchParams.get(`client_id`)===`app_EMoamEEZ73f0CkXaXp7hrann`}catch{return!1}}";
-  const openInBrowserPattern = /case`open-in-browser`:\{let\{url:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*);if\(typeof \1==`string`&&this\.windowManager\.queueCodexDeepLinkUrl\(\1,\2\.originHostId\)\)break;if\(\2\.useExternalBrowser===!0(?:\|\|\2\.openTarget===`external-browser`)?\)\{/;
+  const openInBrowserPattern = /case`open-in-browser`:\{let\{url:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*);if\(typeof \1==`string`&&this\.windowManager\.queueCodexDeepLinkUrl\(\1,\2\.originHostId\)\)break;if\(\2\.useExternalBrowser===!0\)\{/;
   if (!openInBrowserPattern.test(source)) {
     throw new Error("补丁点不存在：ChatGPT 认证链接外部浏览器打开");
   }
@@ -758,20 +749,6 @@ export function walkFiles(root) {
 
   visit(root);
   return result;
-}
-
-function findOneFileByContent(dir, namePattern, contentPattern, description = "bundle") {
-  const candidates = walkFiles(dir).filter((filePath) => {
-    if (!namePattern.test(path.basename(filePath))) return false;
-    return contentPattern.test(fs.readFileSync(filePath, "utf8"));
-  });
-  if (candidates.length === 0) {
-    throw new Error(`未找到${description}补丁目标`);
-  }
-  if (candidates.length !== 1) {
-    throw new Error(`${description}匹配数量异常：${candidates.length}`);
-  }
-  return candidates[0];
 }
 
 export function asarRelativePath(root, filePath) {
@@ -1418,10 +1395,10 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
   });
 
   writeTranslatedOpenAIPluginSkill(
-    path.join(pluginsRoot, "chrome", "skills", "control-chrome", "SKILL.md"),
+    path.join(pluginsRoot, "chrome", "skills", "chrome", "SKILL.md"),
     "Chrome",
     "用户 Chrome 浏览器自动化。适用于需要 cookies、登录态、已有标签页、扩展，或远程认证网站的浏览器任务。",
-    "/openai-bundled/plugins/chrome/skills/control-chrome/SKILL.md"
+    "/openai-bundled/plugins/chrome/skills/chrome/SKILL.md"
   );
   patchSkillDescription(
     path.join(pluginsRoot, "latex", "skills", "latex-compile", "SKILL.md"),
@@ -1896,7 +1873,7 @@ node scripts/tectonic-path.mjs
 
 优先把生成的 PDF 和辅助文件写入明确的输出目录。除非用户要求回退方案，否则不要安装系统级 TeX 发行版。`;
 
-  return `function ruizhiSkillPreviewMarkdown(e,t){let n=String(t??\`\`).replace(/\\\\/g,\`/\`).toLowerCase();if(n.includes(\`/openai-bundled/plugins/chrome/skills/control-chrome/skill.md\`)||n.includes(\`/openai-bundled/chrome/\`)&&n.includes(\`/skills/control-chrome/skill.md\`))return ${JSON.stringify(chromeSkill)};if(n.includes(\`/openai-bundled/plugins/latex/skills/\`)||n.includes(\`/openai-bundled/plugins/latex-tectonic/skills/latex-tectonic/skill.md\`)||n.includes(\`/openai-bundled/latex/\`)&&n.includes(\`/skills/\`)||n.includes(\`/openai-bundled/latex-tectonic/\`)&&n.includes(\`/skills/latex-tectonic/skill.md\`))return ${JSON.stringify(latexSkill)};return e}`;
+  return `function ruizhiSkillPreviewMarkdown(e,t){let n=String(t??\`\`).replace(/\\\\/g,\`/\`).toLowerCase();if(n.includes(\`/openai-bundled/plugins/chrome/skills/chrome/skill.md\`)||n.includes(\`/openai-bundled/chrome/\`)&&n.includes(\`/skills/chrome/skill.md\`))return ${JSON.stringify(chromeSkill)};if(n.includes(\`/openai-bundled/plugins/latex/skills/\`)||n.includes(\`/openai-bundled/plugins/latex-tectonic/skills/latex-tectonic/skill.md\`)||n.includes(\`/openai-bundled/latex/\`)&&n.includes(\`/skills/\`)||n.includes(\`/openai-bundled/latex-tectonic/\`)&&n.includes(\`/skills/latex-tectonic/skill.md\`))return ${JSON.stringify(latexSkill)};return e}`;
 }
 
 function translatedOpenAIPluginSkillMarkdown(previewPath) {
@@ -2283,17 +2260,11 @@ function ensurePreloadPageEnhanceIntegration(preloadPath, config, options = {}) 
   if (next.includes("enhance:{") || next.includes("enhance={")) {
     return;
   }
-  // 兼容新旧版本 preload 结构
-  const oldExposeAnchor = '  try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}';
-  const newExposeAnchor = 'e.contextBridge.exposeInMainWorld(`electronBridge`';
-  if (next.includes(oldExposeAnchor)) {
-    next = next.replace(oldExposeAnchor, `${preloadPageEnhanceIntegrationSnippet(config)}${oldExposeAnchor}`);
-  } else if (next.includes(newExposeAnchor)) {
-    // 新版：在最后一个 exposeInMainWorld 之后注入
-    next = next.replace(newExposeAnchor, `${newExposeAnchor}${preloadPageEnhanceIntegrationSnippet(config)}`);
-  } else {
+  const exposeAnchor = '  try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}';
+  if (!next.includes(exposeAnchor)) {
     throw new Error("preload 增强 bridge 注入点不存在");
   }
+  next = next.replace(exposeAnchor, `${preloadPageEnhanceIntegrationSnippet(config)}${exposeAnchor}`);
   if (next !== source) {
     fs.writeFileSync(preloadPath, next, "utf8");
     log("已注入页面增强 preload bridge");
@@ -2304,71 +2275,35 @@ export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const candidates = walkFiles(assetsDir).filter((filePath) => filePath.endsWith(".js"));
-
-  // 兼容新旧版本：旧版 function _j(e){，新版 function IL(e){
   const targetPath = candidates.find((filePath) => {
     const source = fs.readFileSync(filePath, "utf8");
-    return source.includes("loadingPage.openConfigToml") && source.includes("fatalError") &&
-           (source.includes("function _j(e){") || /function \w+\(e\)\{let \w+=\(0,\w+\.c\)\(27\),\{fatalError:\w+,onReset:\w+\}/.test(source));
+    return source.includes("function _j(e){") && source.includes("loadingPage.openConfigToml");
   });
 
   if (!targetPath) {
     throw new Error("未找到启动错误页补丁目标");
   }
 
+  const originalStart = "function _j(e){let n=(0,Z.c)(27),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,u;";
+  const patchedStart = "function _j(e){let n=(0,Z.c)(30),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,ruizhiVcErrorText=[c,l].filter(Boolean).join(`\\n`),ruizhiIsVcRuntimeMissing=s&&/(3221225781|0xC0000135|STATUS_DLL_NOT_FOUND|VCRUNTIME140|VCRUNTIME140_1|MSVCP140)/i.test(ruizhiVcErrorText);if(ruizhiIsVcRuntimeMissing)return (0,$.jsx)(`div`,{className:`flex size-full items-center justify-center p-6`,children:(0,$.jsxs)(`div`,{className:`flex w-full max-w-md flex-col gap-4`,children:[(0,$.jsx)(`h2`,{className:`text-2xl font-medium`,children:`缺少运行依赖`}),(0,$.jsx)(`p`,{className:`text-token-description-foreground`,children:`锐智需要安装 Microsoft Visual C++ 运行库才能启动。`}),(0,$.jsx)(`p`,{id:`ruizhi-vc-runtime-status`,className:`min-h-5 text-sm text-token-description-foreground`,children:`点击“安装并重启锐智”打开安装程序。安装完成后锐智会自动重启。`}),(0,$.jsxs)(`div`,{className:`flex flex-wrap gap-2`,children:[(0,$.jsx)(uc,{id:`ruizhi-vc-runtime-install-button`,onClick:ruizhiInstallVcRuntime,children:`安装并重启锐智`}),(0,$.jsx)(uc,{onClick:ruizhiOpenVcRedistManualDownload,color:`outline`,children:`手动下载`})]})]})});let u;";
+  const originalHelpers = "function yj(){G.dispatchMessage(`open-in-browser`,{url:Up})}";
+  const patchedHelpers = `${originalHelpers}function ruizhiSetVcRuntimeStatus(e){let t=document.getElementById(\`ruizhi-vc-runtime-status\`);t&&(t.textContent=e)}function ruizhiVcRuntimeFailureMessage(e,t){let n=e?.message||String(e||\`未知错误\`),r=t?.launchLogPath?\` 日志：\`+t.launchLogPath:\`\`;return\`安装失败：\`+n+\`。请点击“手动下载”安装后重启锐智。\`+r}async function ruizhiInstallVcRuntime(e){if(window.__ruizhiVcRuntimeInstallStarted)return;let t=e?.currentTarget||document.getElementById(\`ruizhi-vc-runtime-install-button\`),n=null;try{window.__ruizhiVcRuntimeInstallStarted=!0,t&&(t.disabled=!0,t.textContent=\`正在打开安装程序...\`),ruizhiSetVcRuntimeStatus(\`正在打开安装程序。如系统弹出权限确认，请选择“是”；如果没有看到弹窗，请检查任务栏。\`);n=await window.ruizhiDesktop?.runtime?.installVcRedist?.();if(n?.ok){ruizhiSetVcRuntimeStatus(\`安装完成，正在重启锐智。\`),t&&(t.textContent=\`正在重启...\`);return}throw new Error(n?.error||\`install failed\`)}catch(e){window.__ruizhiVcRuntimeInstallStarted=!1,console.error(\`ruizhi vc runtime install failed\`,e,n),ruizhiSetVcRuntimeStatus(ruizhiVcRuntimeFailureMessage(e,n)),t&&(t.disabled=!1,t.textContent=\`安装并重启锐智\`)}}function ruizhiOpenVcRedistManualDownload(){G.dispatchMessage(\`open-in-browser\`,{url:\`https://aka.ms/vc14/vc_redist.x64.exe\`})}`;
+
   let source = fs.readFileSync(targetPath, "utf8");
   if (source.includes("ruizhiInstallVcRuntime")) {
     log("已存在 VC++ 运行库错误页补丁");
     return { file: targetPath, changed: false };
   }
-
-  // 检测版本并选择对应模式
-  const isOldVersion = source.includes("function _j(e){");
-  const isNewVersion = /function \w+\(e\)\{let \w+=\(0,Q\.c\)\(27\),\{fatalError:\w+,onReset:\w+\}/.test(source);
-
-  if (isOldVersion) {
-    const originalStart = "function _j(e){let n=(0,Z.c)(27),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,u;";
-    const patchedStart = "function _j(e){let n=(0,Z.c)(30),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,ruizhiVcErrorText=[c,l].filter(Boolean).join(`\\n`),ruizhiIsVcRuntimeMissing=s&&/(3221225781|0xC0000135|STATUS_DLL_NOT_FOUND|VCRUNTIME140|VCRUNTIME140_1|MSVCP140)/i.test(ruizhiVcErrorText);if(ruizhiIsVcRuntimeMissing)return (0,$.jsx)(`div`,{className:`flex size-full items-center justify-center p-6`,children:(0,$.jsxs)(`div`,{className:`flex w-full max-w-md flex-col gap-4`,children:[(0,$.jsx)(`h2`,{className:`text-2xl font-medium`,children:`缺少运行依赖`}),(0,$.jsx)(`p`,{className:`text-token-description-foreground`,children:`锐智需要安装 Microsoft Visual C++ 运行库才能启动。`}),(0,$.jsx)(`p`,{id:`ruizhi-vc-runtime-status`,className:`min-h-5 text-sm text-token-description-foreground`,children:`点击\"安装并重启锐智\"打开安装程序。安装完成后锐智会自动重启。`}),(0,$.jsxs)(`div`,{className:`flex flex-wrap gap-2`,children:[(0,$.jsx)(uc,{id:`ruizhi-vc-runtime-install-button`,onClick:ruizhiInstallVcRuntime,children:`安装并重启锐智`}),(0,$.jsx)(uc,{onClick:ruizhiOpenVcRedistManualDownload,color:`outline`,children:`手动下载`})]})]})});let u;";
-    const originalHelpers = "function yj(){G.dispatchMessage(`open-in-browser`,{url:Up})}";
-    const patchedHelpers = `${originalHelpers}function ruizhiSetVcRuntimeStatus(e){let t=document.getElementById(\`ruizhi-vc-runtime-status\`);t&&(t.textContent=e)}function ruizhiVcRuntimeFailureMessage(e,t){let n=e?.message||String(e||\`未知错误\`),r=t?.launchLogPath?\` 日志：\`+t.launchLogPath:\`\`;return\`安装失败：\`+n+\`。请点击\"手动下载\"安装后重启锐智。\`+r}async function ruizhiInstallVcRuntime(e){if(window.__ruizhiVcRuntimeInstallStarted)return;let t=e?.currentTarget||document.getElementById(\`ruizhi-vc-runtime-install-button\`),n=null;try{window.__ruizhiVcRuntimeInstallStarted=!0,t&&(t.disabled=!0,t.textContent=\`正在打开安装程序...\`),ruizhiSetVcRuntimeStatus(\`正在打开安装程序。如系统弹出权限确认，请选择\"是\"；如果没有看到弹窗，请检查任务栏。\`);n=await window.ruizhiDesktop?.runtime?.installVcRedist?.();if(n?.ok){ruizhiSetVcRuntimeStatus(\`安装完成，正在重启锐智。\`),t&&(t.textContent=\`正在重启...\`);return}throw new Error(n?.error||\`install failed\`)}catch(e){window.__ruizhiVcRuntimeInstallStarted=!1,console.error(\`ruizhi vc runtime install failed\`,e,n),ruizhiSetVcRuntimeStatus(ruizhiVcRuntimeFailureMessage(e,n)),t&&(t.disabled=!1,t.textContent=\`安装并重启锐智\`)}}function ruizhiOpenVcRedistManualDownload(){G.dispatchMessage(\`open-in-browser\`,{url:\`https://aka.ms/vc14/vc_redist.x64.exe\`})}`;
-
-    if (!source.includes(originalStart)) {
-      log("已跳过 VC++ 运行库错误页补丁（启动错误页结构已变化）");
-      return { file: targetPath, changed: false };
-    }
-    if (!source.includes(originalHelpers)) {
-      log("已跳过 VC++ 运行库错误页补丁（浏览器打开函数不存在）");
-      return { file: targetPath, changed: false };
-    }
-    source = source.replace(originalStart, patchedStart).replace(originalHelpers, patchedHelpers);
-  } else if (isNewVersion) {
-    // 新版 v26+: 函数名和变量名已变化
-    // 提取实际的函数签名
-    const funcMatch = source.match(/function (\w+)\(e\)\{let (\w+)=\(0,Q\.c\)\(27\),\{fatalError:(\w+),onReset:(\w+)\}=e,(\w+)=(\w+)\(\),\{data:(\w+)\}=(\w+)\(\),(\w+)=\w+\?\.platform===`win32`,\{errorMessage:(\w+),cliErrorMessage:(\w+)\}=\w+,(\w+);/);
-    if (!funcMatch) {
-      log("已跳过 VC++ 运行库错误页补丁（新版启动错误页结构不匹配）");
-      return { file: targetPath, changed: false };
-    }
-    const [, fnName, cacheVar, fatalErrorVar, onResetVar, hookVar, hookFn, dataVar, dataFn, platformVar, errMsgVar, cliErrMsgVar, lastVar] = funcMatch;
-    const originalStart = funcMatch[0];
-    const patchedStart = `function ${fnName}(e){let ${cacheVar}=(0,Q.c)(30),{fatalError:${fatalErrorVar},onReset:${onResetVar}}=e,${hookVar}=${hookFn}(),{data:${dataVar}}=${dataFn}(),${platformVar}=${dataVar}?.platform===\`win32\`,{errorMessage:${errMsgVar},cliErrorMessage:${cliErrMsgVar}}=${fatalErrorVar},ruizhiVcErrorText=[${errMsgVar},${cliErrMsgVar}].filter(Boolean).join(\`\\n\`),ruizhiIsVcRuntimeMissing=${platformVar}&&/(3221225781|0xC0000135|STATUS_DLL_NOT_FOUND|VCRUNTIME140|VCRUNTIME140_1|MSVCP140)/i.test(ruizhiVcErrorText);if(ruizhiIsVcRuntimeMissing)return (0,Z.jsx)(\`div\`,{className:\`flex size-full items-center justify-center p-6\`,children:(0,Z.jsxs)(\`div\`,{className:\`flex w-full max-w-md flex-col gap-4\`,children:[(0,Z.jsx)(\`h2\`,{className:\`text-2xl font-medium\`,children:\`缺少运行依赖\`}),(0,Z.jsx)(\`p\`,{className:\`text-token-description-foreground\`,children:\`锐智需要安装 Microsoft Visual C++ 运行库才能启动。\`}),(0,Z.jsx)(\`p\`,{id:\`ruizhi-vc-runtime-status\`,className:\`min-h-5 text-sm text-token-description-foreground\`,children:\`点击"安装并重启锐智"打开安装程序。安装完成后锐智会自动重启。\`}),(0,Z.jsxs)(\`div\`,{className:\`flex flex-wrap gap-2\`,children:[(0,Z.jsx)(aa,{id:\`ruizhi-vc-runtime-install-button\`,onClick:ruizhiInstallVcRuntime,children:\`安装并重启锐智\`}),(0,Z.jsx)(aa,{onClick:ruizhiOpenVcRedistManualDownload,color:\`outline\`,children:\`手动下载\`})]})]})});let ${lastVar};`;
-
-    // 查找新版 helper: function RL(){J.dispatchMessage(`open-in-browser`,{url:m_})}
-    const helperMatch = source.match(/function (\w+)\(\)\{(\w+)\.dispatchMessage\(\`open-in-browser\`,\{url:(\w+)\}\)/);
-    if (!helperMatch) {
-      log("已跳过 VC++ 运行库错误页补丁（新版浏览器打开函数不匹配）");
-      return { file: targetPath, changed: false };
-    }
-    const [, helperFn, dispatchNs, urlVar] = helperMatch;
-    const originalHelpers = helperMatch[0];
-    const patchedHelpers = `${originalHelpers}function ruizhiSetVcRuntimeStatus(e){let t=document.getElementById(\`ruizhi-vc-runtime-status\`);t&&(t.textContent=e)}function ruizhiVcRuntimeFailureMessage(e,t){let n=e?.message||String(e||\`未知错误\`),r=t?.launchLogPath?\` 日志：\`+t.launchLogPath:\`\`;return\`安装失败：\`+n+\`。请点击"手动下载"安装后重启锐智。\`+r}async function ruizhiInstallVcRuntime(e){if(window.__ruizhiVcRuntimeInstallStarted)return;let t=e?.currentTarget||document.getElementById(\`ruizhi-vc-runtime-install-button\`),n=null;try{window.__ruizhiVcRuntimeInstallStarted=!0,t&&(t.disabled=!0,t.textContent=\`正在打开安装程序...\`),ruizhiSetVcRuntimeStatus(\`正在打开安装程序。如系统弹出权限确认，请选择"是"；如果没有看到弹窗，请检查任务栏。\`);n=await window.ruizhiDesktop?.runtime?.installVcRedist?.();if(n?.ok){ruizhiSetVcRuntimeStatus(\`安装完成，正在重启锐智。\`),t&&(t.textContent=\`正在重启...\`);return}throw new Error(n?.error||\`install failed\`)}catch(e){window.__ruizhiVcRuntimeInstallStarted=!1,console.error(\`ruizhi vc runtime install failed\`,e,n),ruizhiSetVcRuntimeStatus(ruizhiVcRuntimeFailureMessage(e,n)),t&&(t.disabled=!1,t.textContent=\`安装并重启锐智\`)}}function ruizhiOpenVcRedistManualDownload(){${dispatchNs}.dispatchMessage(\`open-in-browser\`,{url:\`https://aka.ms/vc14/vc_redist.x64.exe\`})}`;
-
-    source = source.replace(originalStart, patchedStart).replace(originalHelpers, patchedHelpers);
-  } else {
-    log("已跳过 VC++ 运行库错误页补丁（无法识别的版本）");
+  if (!source.includes(originalStart)) {
+    log("已跳过 VC++ 运行库错误页补丁（启动错误页结构已变化）");
+    return { file: targetPath, changed: false };
+  }
+  if (!source.includes(originalHelpers)) {
+    log("已跳过 VC++ 运行库错误页补丁（浏览器打开函数不存在）");
     return { file: targetPath, changed: false };
   }
 
+  source = source.replace(originalStart, patchedStart).replace(originalHelpers, patchedHelpers);
   fs.writeFileSync(targetPath, source, "utf8");
   log(`已补丁 VC++ 运行库错误页：${path.basename(targetPath)}`);
   return { file: targetPath, changed: true };
@@ -2381,7 +2316,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
   const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
   const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
-  const chatGptBackendApiBaseUrl = "https://gptauth.riilservice.cn";
+  const chatGptBackendApiBaseUrl = "http://115.191.65.206:13000";
   const preludeStart = "/* ruizhi-early-env:start */";
   const preludeEnd = "/* ruizhi-early-env:end */";
   const prelude = `${preludeStart}
@@ -2420,7 +2355,6 @@ ${preludeEnd}
 
 function bridgeBootstrapBlock(config) {
   return `/* ruizhi-model-bridge:start */
-    const modelCatalogFile="ruizhi-model-catalog.json";
     const userModelCatalogFile="models_cache.json";
     function stableModelBridgePort(basePort,seed){
       let hash=0;
@@ -2568,10 +2502,10 @@ function pageEnhanceBootstrapBlock(config) {
           resourcesRoot,
           config:{pageEnhance:pageEnhanceConfig}
         });
-        require("electron").ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
+        n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
       }catch(error){
         console.error("ruizhi enhance ipc register failed",error);
-        require("electron").ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>({
+        n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>({
           status:"failed",
           session_id:String(payload?.session_id||""),
           message:String(error?.message||error)
@@ -2585,7 +2519,6 @@ function pageEnhanceBootstrapBlock(config) {
 
 function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}) {
   const log = options.log ?? (() => {});
-  const bootstrapInitCode = options.bootstrapInitCode ?? null;
   const openaiBaseUrl = config.openai?.baseUrl ?? "https://uniapi.ruijie.com.cn/v1";
   const ruijieProviderBaseUrl = config.openai?.providerBaseUrl ?? openaiBaseUrl;
   const chatModelPrefixes = config.openai?.chatModelPrefixes ?? [];
@@ -2595,64 +2528,42 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   let source = fs.readFileSync(bootstrapPath, "utf8");
   let next = source;
 
-  const constantsPattern = /const openaiBaseUrl="[^"]*";/;
-  const hasExistingConstants = constantsPattern.test(next);
-
-  // 先清理所有可能残留的旧 ruizhi 注入常量（兼容源 bootstrap 已打过旧补丁的场景）
-  // 注意：JSON 对象值可能跨行含嵌套，使用行级清理避免正则匹配嵌套括号问题
-  const staleLinePatterns = [
-    /^    const chatGptBackendApiBaseUrl="[^"]*";\s*$/gm,
-    /^    const ruijieProviderBaseUrl="[^"]*";\s*$/gm,
-    /^    const ruijieChatModelPrefixes=\[[^\]]*\];\s*$/gm,
-    /^    const ruijieChatGptLoginBaseUrl="[^"]*";\s*$/gm,
-    /^    const modelProviderBaseUrl="[^"]*";\s*$/gm,
-    /^    const pageEnhanceConfig=\{[\s\S]*?\};?\s*$/gm,
-    /^    const modelCatalogEnabled=(?:true|false);\s*$/gm,
-  ];
-  for (const pattern of staleLinePatterns) {
-    next = next.replace(pattern, "");
+  const constantsPattern = /const openaiBaseUrl="[^"]*";(?:\s*const chatGptBackendApiBaseUrl=[^;]+;)?(?:\s*const modelProviderBaseUrl=[^;]+;)?(?:\s*const modelBridgeConfig=\{[\s\S]*?\};)?(?:\s*const pageEnhanceConfig=\{[\s\S]*?\};)?/;
+  if (!constantsPattern.test(next)) {
+    throw new Error("Windows bootstrap openaiBaseUrl 补丁点不存在");
   }
-  // 清理跨行的 modelBridgeConfig（含嵌套 JSON，用行范围匹配）
-  next = next.replace(/^    const modelBridgeConfig=\{[\s\S]*?\n    \};?\s*$/gm, "");
-  // 清理上一步可能残留的 orphan JSON 续行
-  next = next.replace(/^    ,"[a-zA-Z][\w-]*":\{[^\}]*\}[^\n]*\n/gm, "");
-  next = next.replace(/^    ,"[a-zA-Z][\w-]*":"[^"]*"[^\n]*\n/gm, "");
+  next = next.replace(
+    constantsPattern,
+    [
+      `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
+      `const chatGptBackendApiBaseUrl=${jsonLiteral("http://115.191.65.206:13000")};`,
+      `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
+      `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
+      `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
+      `const modelBridgeConfig=${jsonLiteral(bridgeConfig)};`
+    ].join("\n    ")
+  );
 
-  const constantsBlock = [
-    `const path=require("node:path");`,
-    `const fs=require("node:fs");`,
-    `const os=require("node:os");`,
-    `const codexHome=(process.env.RUIZHI_HOME||path.join(os.homedir(),".ruizhi")).trim();`,
-    `const resourcesRoot=process.resourcesPath;`,
-    `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
-    `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.riilservice.cn")};`,
-    `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
-    `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
-    `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
-    `const modelBridgeConfig=${jsonLiteral(bridgeConfig)};`,
-    `const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabledValue)};`
-  ].join("\n    ");
-
-  if (hasExistingConstants) {
-    // 旧版：替换已存在的常量块
-    next = next.replace(constantsPattern, constantsBlock);
+  const modelCatalogEnabledPattern = /const modelCatalogEnabled=(?:true|false);/;
+  if (modelCatalogEnabledPattern.test(next)) {
+    next = next.replace(
+      modelCatalogEnabledPattern,
+      `const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabledValue)};`
+    );
   } else {
-    // 新版：在 ruizhi-early-env:end 之后、第一个 require 之前插入
-    const earlyEnvEndMarker = "/* ruizhi-early-env:end */";
-    const envEndIndex = next.indexOf(earlyEnvEndMarker);
-    if (envEndIndex < 0) {
-      throw new Error("Windows bootstrap ruizhi-early-env:end 标记不存在");
+    const modelCatalogFileDeclaration = 'const modelCatalogFile="ruizhi-model-catalog.json";';
+    if (next.includes(modelCatalogFileDeclaration)) {
+      next = next.replace(
+        modelCatalogFileDeclaration,
+        `const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabledValue)};\n    ${modelCatalogFileDeclaration}`
+      );
     }
-    const insertAt = envEndIndex + earlyEnvEndMarker.length;
-    next = next.slice(0, insertAt) + "\n" + constantsBlock + "\n" + next.slice(insertAt);
   }
 
   const bridgeMarkerPattern = /\/\* ruizhi-model-bridge:start \*\/[\s\S]*?\/\* ruizhi-model-bridge:end \*\/\r?\n?/g;
   next = next.replace(bridgeMarkerPattern, "");
   const pageEnhanceMarkerPattern = /\/\* ruizhi-page-enhance:start \*\/[\s\S]*?\/\* ruizhi-page-enhance:end \*\/\r?\n?/g;
   next = next.replace(pageEnhanceMarkerPattern, "");
-  // 注入 bridge 与 page-enhance 块
-  // 优先使用旧版锚点（旧版 override），新版注在 constants 之后
   const oldEnvAnchor = "process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;\n    process.env.RUIZHI_IMAGEGEN_EXE=";
   const imageEnvAnchor = "    process.env.RUIZHI_IMAGEGEN_EXE=";
   if (next.includes(oldEnvAnchor)) {
@@ -2660,15 +2571,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   } else if (next.includes(imageEnvAnchor)) {
     next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config)}${imageEnvAnchor}`);
   } else {
-    // 新版：在 constants 块之后、第一个 require 之前注入
-    const constEndMarker = `const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabledValue)};`;
-    const constEndIdx = next.indexOf(constEndMarker);
-    if (constEndIdx >= 0) {
-      const insertAfter = constEndIdx + constEndMarker.length;
-      next = next.slice(0, insertAfter) + "\n" + bridgeBootstrapBlock(config) + pageEnhanceBootstrapBlock(config) + next.slice(insertAfter);
-    } else {
-      throw new Error("Windows bootstrap bridge/page-enhance 注入点不存在（找不到常量块末尾）");
-    }
+    throw new Error("Windows bootstrap RUIZHI_IMAGEGEN_EXE 补丁点不存在");
   }
 
   const sandboxConfigMarkerPattern = /\/\* ruizhi-windows-sandbox-config:start \*\/[\s\S]*?\/\* ruizhi-windows-sandbox-config:end \*\/\r?\n?/g;
@@ -2676,45 +2579,25 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   const managedConfigPattern = /    const managedBegin=[\s\S]*?    function \w+\(existing\)\{[\s\S]*?\n    \}\n\n/;
   next = next.replace(managedConfigPattern, "");
 
-  // 注入完整的 ruizhiInit() config.toml 写入逻辑（参考 macOS bootstrapInitCode）
-  const ruizhiInitMarker = "/* ruizhi-config-sync:start */";
-  const ruizhiInitMarkerEnd = "/* ruizhi-config-sync:end */";
-  const existingInitPattern = /\/\* ruizhi-config-sync:start \*\/[\s\S]*?\/\* ruizhi-config-sync:end \*\/\r?\n?/g;
-  next = next.replace(existingInitPattern, "");
-
-  if (bootstrapInitCode && !next.includes("function ruizhiInit()")) {
-    // 在 bridge 块之后注入完整的 ruizhiInit() 代码
-    const bridgeEndMarker = "/* ruizhi-model-bridge:end */";
-    const bridgeEndIdx = next.indexOf(bridgeEndMarker);
-    if (bridgeEndIdx >= 0) {
-      const insertAfter = bridgeEndIdx + bridgeEndMarker.length;
-      const wrappedCode = `${ruizhiInitMarker}\n${bootstrapInitCode}\n${ruizhiInitMarkerEnd}\n`;
-      next = next.slice(0, insertAfter) + "\n" + wrappedCode + next.slice(insertAfter);
-      log("已注入 Windows bootstrap ruizhiInit() config.toml 写入逻辑");
-    } else {
-      // 如果没有 bridge 块标记，在常量块之后注入
-      const constEndMarker = `const modelCatalogEnabled=${jsonLiteral(modelCatalogEnabledValue)};`;
-      const constEndIdx = next.indexOf(constEndMarker);
-      if (constEndIdx >= 0) {
-        const insertAfter = constEndIdx + constEndMarker.length;
-        const wrappedCode = `${ruizhiInitMarker}\n${bootstrapInitCode}\n${ruizhiInitMarkerEnd}\n`;
-        next = next.slice(0, insertAfter) + "\n" + wrappedCode + next.slice(insertAfter);
-        log("已注入 Windows bootstrap ruizhiInit() config.toml 写入逻辑（常量块后）");
-      }
+  const oldConfigWritePatterns = [
+    /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existingCodexConfig=fs\.existsSync\(configPath\);[\s\S]*?syncFallback\w+\([^\n]*\);\n/,
+    /    const configPath=path\.join\(codexHome,"config\.toml"\);\n    const existing=fs\.existsSync\(configPath\)[\s\S]*?if\(next!==existing\)fs\.writeFileSync\(configPath,next,"utf8"\);\n/
+  ];
+  const readOnlyConfigCheck = [
+    "    const configPath=path.join(codexHome,\"config.toml\");",
+    "    const existingRuizhiConfig=fs.existsSync(configPath);",
+    "    process.env.RUIZHI_EXISTING_CONFIG=existingRuizhiConfig?\"1\":\"0\";"
+  ].join("\n");
+  let replacedConfigWrite = false;
+  for (const pattern of oldConfigWritePatterns) {
+    if (pattern.test(next)) {
+      next = next.replace(pattern, `${readOnlyConfigCheck}\n`);
+      replacedConfigWrite = true;
+      break;
     }
-  } else if (bootstrapInitCode && next.includes("function ruizhiInit()")) {
-    log("已存在 ruizhiInit() 函数，跳过注入");
-  } else {
-    // 没有传入 bootstrapInitCode，回退到只读检查
-    const readOnlyConfigCheck = [
-      "    const configPath=path.join(codexHome,\"config.toml\");",
-      "    const existingRuizhiConfig=fs.existsSync(configPath);",
-      "    process.env.RUIZHI_EXISTING_CONFIG=existingRuizhiConfig?\"1\":\"0\";"
-    ];
-    const hasRuizhiConfigCheck = readOnlyConfigCheck.every(line => next.includes(line));
-    if (!hasRuizhiConfigCheck) {
-      log("已跳过 config.toml 写入逻辑注入（无 bootstrapInitCode 参数）");
-    }
+  }
+  if (!replacedConfigWrite && !next.includes(readOnlyConfigCheck)) {
+    throw new Error("Windows bootstrap 锐智 config.toml 只读检查补丁点不存在");
   }
 
   if (next !== source) {
@@ -2730,7 +2613,7 @@ function findWindowsNativeMenuBundle(extractedAppDir) {
       return false;
     }
     const source = fs.readFileSync(filePath, "utf8");
-    return source.includes("Menu.setApplicationMenu") && (source.includes("let Xe=[],Ze=[") || source.includes("a.Menu.buildFromTemplate") || source.includes("function ruizhiEnsureNativeMenuItems("));
+    return source.includes("Menu.setApplicationMenu") && (source.includes("let Xe=[],Ze=[") || source.includes("function ruizhiEnsureNativeMenuItems("));
   });
 
   if (candidates.length !== 1) {
@@ -2745,30 +2628,19 @@ function windowsNativeMenuPatchSource() {
 }
 
 function patchWindowsBrowserWindowNativeMenuVisibility(source) {
-  // 兼容新旧版本 autoHideMenuBar 模式
-  // 旧版: process.platform===`win32`?{autoHideMenuBar:!0}:{}
-  // 新版: ...process.platform===`win32`||process.platform===`linux`?{autoHideMenuBar:!0}:{}
-  const hiddenMenuBarRe = /autoHideMenuBar:!0/g;
-  const visibleMenuBar = "autoHideMenuBar:!1";
+  const hiddenMenuBar = "process.platform===`win32`?{autoHideMenuBar:!0}:{}";
+  const visibleMenuBar = "process.platform===`win32`?{autoHideMenuBar:!1}:{}";
   let next = source;
-  let menuBarReplaced = false;
 
-  next = next.replace(hiddenMenuBarRe, () => {
-    menuBarReplaced = true;
-    return visibleMenuBar;
-  });
-
-  if (!menuBarReplaced && !next.includes("autoHideMenuBar:!1")) {
+  if (next.includes(hiddenMenuBar)) {
+    next = next.replaceAll(hiddenMenuBar, visibleMenuBar);
+  } else if (!next.includes(visibleMenuBar)) {
     throw new Error("顶部菜单窗口可见性补丁点不存在：autoHideMenuBar");
   }
 
-  // 兼容新旧版本 removeMenu 模式
-  // 旧版: process.platform===`win32`&&X.removeMenu(),
-  // 新版: (process.platform===`win32`||process.platform===`linux`)&&X.removeMenu(),
-  //       process.platform!==`darwin`&&X.removeMenu(),
-  const removeMenuRe = /(?:\(?process\.platform===`win32`(?:\|\|process\.platform===`linux`)?\)?|process\.platform!==`darwin`)&&([A-Za-z_$][\w$]*)\.removeMenu\(\),/g;
+  const removeMenuPattern = /process\.platform===`win32`&&([A-Za-z_$][\w$]*)\.removeMenu\(\),/g;
   let removeMenuReplacements = 0;
-  next = next.replace(removeMenuRe, (_match, windowVar) => {
+  next = next.replace(removeMenuPattern, (_match, windowVar) => {
     removeMenuReplacements += 1;
     return `process.platform===\`win32\`&&${windowVar}.setMenuBarVisibility(!0),`;
   });
@@ -2785,13 +2657,8 @@ function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
   const original = fs.readFileSync(mainBundlePath, "utf8");
   let source = original;
 
-  // 兼容新旧版本 Codex Desktop 的菜单模板入口
-  let insertionPoint = "let Xe=[],Ze=[";
-  let insertionIndex = source.indexOf(insertionPoint);
-  if (insertionIndex < 0) {
-    insertionPoint = "let ut={label:`File`,id:";
-    insertionIndex = source.indexOf(insertionPoint);
-  }
+  const insertionPoint = "let Xe=[],Ze=[";
+  const insertionIndex = source.indexOf(insertionPoint);
   if (insertionIndex < 0) {
     throw new Error("顶部菜单原生入口补丁点不存在：菜单模板入口");
   }
@@ -2812,25 +2679,11 @@ function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
   }
 
   if (!source.includes("try{ruizhiEnsureNativeMenuItems({menu:")) {
-    // 兼容新旧版本：新版 Codex Desktop (v26+) 使用 "a" 作为 electron 导入变量
-    const electronVar = source.includes("a.Menu.setApplicationMenu") ? "a" : "n";
-    const menuCallPattern = new RegExp(
-      `([)\\}][)\\}])` +
-      `${electronVar}\\.Menu\\.setApplicationMenu\\(` +
-      `([A-Za-z_$][\\w$]*)` +
-      `\\),` +
-      `([A-Za-z_$][\\w$]*)` +
-      `\\(([A-Za-z_$][\\w$]*)\\)` +
-      `\\}`,
-    );
-    if (!menuCallPattern.test(source)) {
+    const menuSetPattern = /\}\}n\.Menu\.setApplicationMenu\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\}/;
+    if (!menuSetPattern.test(source)) {
       throw new Error("顶部菜单中文补丁点不存在：setApplicationMenu");
     }
-    source = source.replace(
-      menuCallPattern,
-      (_full, prefix, menu, trailFunc, trailArg) =>
-        `${prefix}try{ruizhiEnsureNativeMenuItems({menu:${menu},MenuItem:${electronVar}.MenuItem,ensureWindow:d,navigate:m,settingsRoute:${settingsRouteVar}});ruizhiTranslateApplicationMenu(${menu})}catch(e){console.error(\`锐智菜单修复失败\`,e)}${electronVar}.Menu.setApplicationMenu(${menu}),${trailFunc}(${trailArg})}`,
-    );
+    source = source.replace(menuSetPattern, `}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:${settingsRouteVar}});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(\`锐智菜单修复失败\`,e)}n.Menu.setApplicationMenu($1),$2($3)}`);
   }
 
   source = patchWindowsBrowserWindowNativeMenuVisibility(source);
@@ -2989,7 +2842,6 @@ export function patchWindowsHelpDocumentationLinks(extractedAppDir, config, opti
 
 export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVersion, options = {}) {
   const log = options.log ?? (() => {});
-  const bootstrapInitCode = options.bootstrapInitCode ?? null;
   const packageJsonPath = path.join(extractedAppDir, "package.json");
   const preloadPath = path.join(extractedAppDir, ".vite", "build", "preload.js");
   const bootstrapPath = path.join(extractedAppDir, ".vite", "build", "bootstrap.js");
@@ -3003,48 +2855,24 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   }
 
   if (fs.existsSync(preloadPath)) {
-    const preloadSource = fs.readFileSync(preloadPath, "utf8");
-    const appVersionPattern = /const appVersion="[^"]*";/;
-    if (appVersionPattern.test(preloadSource)) {
-      replaceInFile(
-        preloadPath,
-        appVersionPattern,
-        `const appVersion=${JSON.stringify(appVersion)};`,
-        "preload appVersion"
-      );
-    }
+    replaceInFile(
+      preloadPath,
+      /const appVersion="[^"]*";/,
+      `const appVersion=${JSON.stringify(appVersion)};`,
+      "preload appVersion"
+    );
     ensurePreloadPageEnhanceIntegration(preloadPath, config, { log });
   }
 
   if (fs.existsSync(bootstrapPath)) {
     ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, { log });
-    ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, { log, bootstrapInitCode });
-    // 兼容新旧版本 app.setName 变量命名，使用括号匹配而非正则避免嵌套问题
-    const bsSource = fs.readFileSync(bootstrapPath, "utf8");
-    const setNameMarker = ".app.setName(";
-    let setNameIdx = bsSource.indexOf(setNameMarker);
-    if (setNameIdx >= 0) {
-      // 回溯到变量名起始位置
-      let varStart = setNameIdx - 1;
-      while (varStart >= 0 && /\w/.test(bsSource[varStart])) varStart--;
-      varStart++; // 回到第一个单字字符
-      const originalVarName = bsSource.slice(varStart, setNameIdx); // 如 i, n, app 等
-      // 找到 setName(...) 的完整调用（手动匹配括号）
-      let depth = 0;
-      let endIdx = setNameIdx + setNameMarker.length;
-      for (; endIdx < bsSource.length; endIdx++) {
-        if (bsSource[endIdx] === "(") depth++;
-        else if (bsSource[endIdx] === ")") {
-          if (depth === 0) break;
-          depth--;
-        }
-      }
-      const fullCall = bsSource.slice(varStart, endIdx + 1);
-      // 保留原始变量名，只替换 setName 的参数
-      const replacement = `${originalVarName}.app.setName(${JSON.stringify(windowsTaskManagerName(config))})`;
-      fs.writeFileSync(bootstrapPath, bsSource.replace(fullCall, replacement), "utf8");
-      log("已设置 bootstrap app 名称为" + JSON.stringify(windowsTaskManagerName(config)));
-    }
+    ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, { log });
+    replaceInFile(
+      bootstrapPath,
+      /n\.app\.setName\("[^"]*"\)/,
+      `n.app.setName(${JSON.stringify(windowsTaskManagerName(config))})`,
+      "bootstrap app name"
+    );
   }
 
   patchWindowsNativeMenuItems(extractedAppDir, config, { log });

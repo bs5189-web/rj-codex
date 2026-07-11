@@ -74,6 +74,21 @@ function windowsTaskManagerName(config) {
   return config.windows?.taskManagerName ?? config.productName ?? "锐智";
 }
 
+function ruizhiBuildDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function ruizhiShortBuildDate() {
+  return ruizhiBuildDate().replaceAll("-", "").slice(2);
+}
+
+function ruizhiBuildVersionLabel(appVersion) {
+  return `${appVersion}-${ruizhiShortBuildDate()}`;
+}
+
 function jsonLiteral(value) {
   return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (char) => {
     switch (char) {
@@ -168,7 +183,7 @@ function pageEnhanceEnabled(config) {
 
 function pageEnhanceFeatures(config) {
   return {
-    menu: true,
+    menu: false,
     pluginEntryUnlock: true,
     forcePluginInstall: true,
     sessionDelete: false,
@@ -185,11 +200,12 @@ function pageEnhanceFeatures(config) {
   };
 }
 
-function pageEnhanceBootstrapConfig(config) {
+function pageEnhanceBootstrapConfig(config, appVersion = config.version) {
   return {
     enabled: pageEnhanceEnabled(config),
     features: pageEnhanceFeatures(config),
-    appVersion: config.version,
+    appVersion,
+    appDisplayVersion: ruizhiBuildVersionLabel(appVersion),
     rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
     serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
   };
@@ -242,7 +258,8 @@ function patchListModelsForHostFromUserCache(extractedAppDir, config, options = 
   }
 
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const candidates = walkFiles(assetsDir).filter((filePath) => /^model-queries-.*\.js$/.test(path.basename(filePath)) && /list-models-for-host/.test(fs.readFileSync(filePath, "utf8")));
+  const modelListQueryFnPattern = /queryFn:\(\)=>([A-Za-z_$][\w$]*)\(`list-models-for-host`,\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
+  const candidates = walkFiles(assetsDir).filter((filePath) => filePath.endsWith(".js") && modelListQueryFnPattern.test(fs.readFileSync(filePath, "utf8")));
   if (candidates.length !== 1) {
     throw new Error(`model queries bundle 匹配数量异常：${candidates.length}`);
   }
@@ -270,7 +287,6 @@ function patchListModelsForHostFromUserCache(extractedAppDir, config, options = 
     throw new Error("model queries 用户模型缓存旧补丁形态未知，无法安全迁移");
   }
 
-  const modelListQueryFnPattern = /queryFn:\(\)=>([A-Za-z_$][\w$]*)\(`list-models-for-host`,\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
   const match = source.match(modelListQueryFnPattern);
   if (!match) {
     throw new Error("model queries 用户模型缓存补丁点不存在");
@@ -2225,8 +2241,8 @@ function replaceInFile(filePath, pattern, replacement, label) {
   fs.writeFileSync(filePath, source.replace(pattern, replacement), "utf8");
 }
 
-function preloadPageEnhanceIntegrationSnippet(config) {
-  const enhanceConfig = pageEnhanceBootstrapConfig(config);
+function preloadPageEnhanceIntegrationSnippet(config, appVersion = config.version) {
+  const enhanceConfig = pageEnhanceBootstrapConfig(config, appVersion);
   return `
   /* ruizhi-page-enhance-preload:start */
 ${pageEnhanceRendererInstallerSource()}
@@ -2255,6 +2271,7 @@ ${pageEnhanceRendererInstallerSource()}
 
 function ensurePreloadPageEnhanceIntegration(preloadPath, config, options = {}) {
   const log = options.log ?? (() => {});
+  const appVersion = options.appVersion ?? config.version;
   let source = fs.readFileSync(preloadPath, "utf8");
   let next = source.replace(/\/\* ruizhi-page-enhance-preload:start \*\/[\s\S]*?\/\* ruizhi-page-enhance-preload:end \*\/\r?\n?/g, "");
   if (next.includes("enhance:{") || next.includes("enhance={")) {
@@ -2264,7 +2281,7 @@ function ensurePreloadPageEnhanceIntegration(preloadPath, config, options = {}) 
   if (!next.includes(exposeAnchor)) {
     throw new Error("preload 增强 bridge 注入点不存在");
   }
-  next = next.replace(exposeAnchor, `${preloadPageEnhanceIntegrationSnippet(config)}${exposeAnchor}`);
+  next = next.replace(exposeAnchor, `${preloadPageEnhanceIntegrationSnippet(config, appVersion)}${exposeAnchor}`);
   if (next !== source) {
     fs.writeFileSync(preloadPath, next, "utf8");
     log("已注入页面增强 preload bridge");
@@ -2316,7 +2333,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
   const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
   const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
-  const chatGptBackendApiBaseUrl = "http://115.191.65.206:13000";
+  const chatGptBackendApiBaseUrl = "https://gptauth.ruijie.com.cn";
   const preludeStart = "/* ruizhi-early-env:start */";
   const preludeEnd = "/* ruizhi-early-env:end */";
   const prelude = `${preludeStart}
@@ -2487,8 +2504,8 @@ function bridgeBootstrapBlock(config) {
 `;
 }
 
-function pageEnhanceBootstrapBlock(config) {
-  const enhanceConfig = pageEnhanceBootstrapConfig(config);
+function pageEnhanceBootstrapBlock(config, appVersion = config.version) {
+  const enhanceConfig = pageEnhanceBootstrapConfig(config, appVersion);
   return `/* ruizhi-page-enhance:start */
     const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
     function registerRuizhiEnhanceIpc(){
@@ -2519,6 +2536,7 @@ function pageEnhanceBootstrapBlock(config) {
 
 function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}) {
   const log = options.log ?? (() => {});
+  const appVersion = options.appVersion ?? config.version;
   const openaiBaseUrl = config.openai?.baseUrl ?? "https://uniapi.ruijie.com.cn/v1";
   const ruijieProviderBaseUrl = config.openai?.providerBaseUrl ?? openaiBaseUrl;
   const chatModelPrefixes = config.openai?.chatModelPrefixes ?? [];
@@ -2536,7 +2554,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     constantsPattern,
     [
       `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
-      `const chatGptBackendApiBaseUrl=${jsonLiteral("http://115.191.65.206:13000")};`,
+      `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.ruijie.com.cn")};`,
       `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
       `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
       `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
@@ -2567,9 +2585,9 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   const oldEnvAnchor = "process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;\n    process.env.RUIZHI_IMAGEGEN_EXE=";
   const imageEnvAnchor = "    process.env.RUIZHI_IMAGEGEN_EXE=";
   if (next.includes(oldEnvAnchor)) {
-    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
+    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config, appVersion)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
   } else if (next.includes(imageEnvAnchor)) {
-    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config)}${imageEnvAnchor}`);
+    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config, appVersion)}${imageEnvAnchor}`);
   } else {
     throw new Error("Windows bootstrap RUIZHI_IMAGEGEN_EXE 补丁点不存在");
   }
@@ -2861,12 +2879,12 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
       `const appVersion=${JSON.stringify(appVersion)};`,
       "preload appVersion"
     );
-    ensurePreloadPageEnhanceIntegration(preloadPath, config, { log });
+    ensurePreloadPageEnhanceIntegration(preloadPath, config, { log, appVersion });
   }
 
   if (fs.existsSync(bootstrapPath)) {
     ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, { log });
-    ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, { log });
+    ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, { log, appVersion });
     replaceInFile(
       bootstrapPath,
       /n\.app\.setName\("[^"]*"\)/,

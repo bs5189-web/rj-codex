@@ -254,8 +254,8 @@ test("macOS build forces current model picker allowlist patch", () => {
   const source = readProjectFile("scripts/build-macos.mjs");
 
   assert.match(source, /function findOneFileByContent\(/);
-  assert.match(source, /\/\^\(use-model-settings\|model-queries\|models-and-reasoning-efforts\)-\.\*\\\.js\$\/,/);
-  assert.match(source, /const modelAvailabilityAllowlistPattern = \/&&\[A-Za-z_\$\]\[\\w\$\]\*!==`amazonBedrock`\//);
+  assert.match(source, /findOneFileByContent\(\s*assetsDir,\s*\/\\\.js\$\/,\s*modelAvailabilityAllowlistPattern/s);
+  assert.match(source, /const modelAvailabilityAllowlistPattern = \/\[A-Za-z_\$\]\[\\w\$\]\*\(\?:\\\.useHiddenModels\)\?\&&\[A-Za-z_\$\]\[\\w\$\]\*!==`amazonBedrock`\//);
   assert.ok(source.includes('"!1"'), "macOS build should disable the available_models allowlist condition");
   assert.match(source, /\(\?:\\\.useHiddenModels\)\?/);
   assert.doesNotMatch(

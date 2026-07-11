@@ -6,7 +6,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const DEFAULT_FEATURES = {
-  menu: true,
+  menu: false,
   pluginEntryUnlock: true,
   forcePluginInstall: true,
   sessionDelete: false,
@@ -181,6 +181,7 @@ function readSettings(settingsPath, config) {
     features: {
       ...config.features,
       ...(isRecord(stored.features) ? stored.features : {}),
+      menu: false,
       sessionDelete: false,
       projectMove: false
     }

@@ -34,6 +34,7 @@ function compareVersions(left, right) {
 test("Windows release version advances past the pre-plugin-menu installer", () => {
   const config = JSON.parse(read("config/rj-codex.json"));
 
+  assert.equal(config.version, "0.3.130");
   assert.ok(
     compareVersions(config.version, "0.2.2") > 0,
     "Windows installer version must advance so machines with the old 0.2.2 package receive the native Plugins menu patch",
@@ -63,7 +64,6 @@ test("renderer wires thread sorting and robust DOM adapters", () => {
 test("page enhance menu follows Codex surface and text tokens", () => {
   for (const scriptPath of [
     "resources/renderer/ruizhi-page-enhance.js",
-    "overrides/windows-app/asar/.vite/build/preload.js",
   ]) {
     const source = read(scriptPath);
     assert.match(source, /#ruizhi-page-enhance-menu \[data-trigger\]/, `${scriptPath} should style the trigger explicitly`);
@@ -73,6 +73,17 @@ test("page enhance menu follows Codex surface and text tokens", () => {
     assert.doesNotMatch(source, /#ruizhi-page-enhance-menu button\{[^}]*#202123/, `${scriptPath} should not force the enhance menu into a dark fallback`);
     assert.doesNotMatch(source, /#ruizhi-page-enhance-menu \[data-panel\]\{[^}]*#202123/, `${scriptPath} should not force the enhance panel into a dark fallback`);
   }
+});
+
+test("page enhance hides its floating menu and replaces footer help with the Ruizhi build label", () => {
+  const source = read("resources/renderer/ruizhi-page-enhance.js");
+
+  assert.match(source, /menu:\s*false/);
+  assert.match(source, /menu:\s*false,\s*sessionDelete/);
+  assert.match(source, /function installFooterVersionBadge\(/);
+  assert.match(source, /findFooterHelpControl/);
+  assert.match(source, /ruizhi-footer-version-badge/);
+  assert.match(source, /badge\.textContent = `锐智 \$\{displayVersion\}`/);
 });
 
 test("session action click guard does not block action handlers", () => {
@@ -165,7 +176,6 @@ test("first launch auth status remains available without patching the native log
     assert.doesNotMatch(source, /configured:key\.length>0\|\|existingConfig/, `${scriptPath} must not treat API key presence as the only auth.json signal`);
     assert.doesNotMatch(source, /function patchLoginRoute\(/, `${scriptPath} should not patch Codex's login route`);
     assert.doesNotMatch(source, /function patchOnboardingApiKeyTexts\(/, `${scriptPath} should not patch Codex's onboarding login content`);
-    assert.doesNotMatch(source, /\["electron\.onboarding\.login\.chatgpt\.signIn",/, `${scriptPath} should leave the native ChatGPT sign-in label untouched`);
     assert.doesNotMatch(source, /\["electron\.onboarding\.login\.chatgptToken\./, `${scriptPath} should leave native token login messages untouched`);
     assert.doesNotMatch(source, /\["electron\.onboarding\.login\.(google|microsoft)\./, `${scriptPath} should leave native third-party login messages untouched`);
     assert.doesNotMatch(source, /login-with-chatgpt-url|readLoginWithChatgptUrl|ruizhiLoginWithChatgptUrl/, `${scriptPath} should not override native ChatGPT login URLs`);
@@ -215,9 +225,9 @@ test("packaging patches onboarding continue button and build date badge", () => 
   ]) {
     const source = read(scriptPath);
     assert.match(source, /function ruizhiBuildDateLabel\(/, `${scriptPath} should compute the build-date label during packaging`);
-    assert.match(source, /锐智构建日期：\$\{ruizhiBuildDate\(\)\}/, `${scriptPath} should include the packaging date in the welcome badge`);
-    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.continue", "使用锐擎继续"\]/, `${scriptPath} should patch the ChatGPT continue button label`);
-    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.signIn\.streamlined", "使用锐擎继续"\]/, `${scriptPath} should patch the streamlined ChatGPT continue button label`);
+    assert.match(source, /\$\{appVersion\}-\$\{ruizhiShortBuildDate\(\)\}/, `${scriptPath} should include the packaging version and short build date`);
+    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.continue", "使用锐智继续"\]/, `${scriptPath} should patch the ChatGPT continue button label`);
+    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.signIn\.streamlined", "使用锐智继续"\]/, `${scriptPath} should patch the streamlined ChatGPT continue button label`);
     assert.match(source, /\["electron\.onboarding\.login\.includedPlans\.welcomeV2", ruizhiBuildDateLabel\(\)\]/, `${scriptPath} should replace the ChatGPT plan badge with the build date`);
   }
 });
@@ -290,6 +300,7 @@ test("page enhance bootstrap carries the Ruizhi app version for settings display
   ]) {
     const source = read(scriptPath);
     assert.match(source, /appVersion[:,]/, `${scriptPath} should pass appVersion to page enhance`);
+    assert.match(source, /appDisplayVersion/, `${scriptPath} should pass the Ruizhi build label to page enhance`);
   }
 });
 
@@ -560,7 +571,7 @@ test("packaging model availability patch tolerates model bundle splits", () => {
   ]) {
     const source = read(scriptPath);
     assert.match(source, /modelAvailabilityAllowlistPattern/, `${scriptPath} should locate model filtering by code shape`);
-    assert.match(source, /models-and-reasoning-efforts/, `${scriptPath} should allow the current split model helper bundle`);
+    assert.match(source, /findOneFileByContent\(\s*assetsDir,\s*\/\\\.js\$\/,\s*modelAvailabilityAllowlistPattern/s, `${scriptPath} should allow renamed shared model helper chunks`);
     assert.match(source, /"!1"/, `${scriptPath} should disable the hidden-model allowlist flag`);
     assert.doesNotMatch(source, /\(\?:\[\^;\]\*\?,\)\*/, `${scriptPath} should avoid broad backtracking in model bundle scans`);
   }

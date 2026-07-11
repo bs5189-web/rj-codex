@@ -43,7 +43,7 @@
   window.__RUIZHI_PAGE_ENHANCE_MARKERS__ = markers;
 
   const defaultFeatures = {
-    menu: true,
+    menu: false,
     pluginEntryUnlock: true,
     forcePluginInstall: true,
     sessionDelete: false,
@@ -78,8 +78,9 @@
     const features = value && typeof value === "object" && value.features && typeof value.features === "object" ? value.features : {};
     return {
       enabled: value?.enabled !== false,
-      features: { ...defaultFeatures, ...features, sessionDelete: false, projectMove: false },
-      appVersion: typeof value?.appVersion === "string" ? value.appVersion.trim() : ""
+      features: { ...defaultFeatures, ...features, menu: false, sessionDelete: false, projectMove: false },
+      appVersion: typeof value?.appVersion === "string" ? value.appVersion.trim() : "",
+      appDisplayVersion: typeof value?.appDisplayVersion === "string" ? value.appDisplayVersion.trim() : ""
     };
   }
 
@@ -142,6 +143,7 @@
       .ruizhi-conversation-timeline-marker span{display:none;position:absolute;right:18px;top:-8px;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:6px;background:#111827;color:#fff;padding:6px 8px;font:12px system-ui,sans-serif}
       .ruizhi-conversation-timeline-marker:hover span{display:block}
       .ruizhi-timeline-target{outline:2px solid rgba(16,163,127,.7);outline-offset:4px;border-radius:6px}
+      .ruizhi-footer-version-badge{display:inline-flex;align-items:center;min-height:28px;padding:0 8px;color:var(--token-text-tertiary,var(--token-text-secondary,#6b7280));font:12px system-ui,sans-serif;white-space:nowrap}
     `;
     document.head.appendChild(style);
   }
@@ -613,9 +615,9 @@
   }
 
   function installSettingsVersionFix() {
-    const appVersion = state.settings.appVersion;
+    const appVersion = state.settings.appDisplayVersion || state.settings.appVersion;
     if (!appVersion) return;
-    const displayVersion = appVersion.startsWith("v") ? appVersion : `v${appVersion}`;
+    const displayVersion = appVersion;
     const labelPattern = /(当前版本|应用版本|App Version|Current Version|Current version)/;
     const versionPattern = /\b(?:Codex\s*)?v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?\b/;
     const nodes = Array.from(document.querySelectorAll("span,div,p,code"));
@@ -636,6 +638,58 @@
       node.textContent = text.replace(versionPattern, displayVersion);
       node.dataset.ruizhiSettingsVersionFix = markers.settingsVersion;
     }
+  }
+
+  function controlText(element) {
+    return [
+      element.getAttribute?.("aria-label"),
+      element.getAttribute?.("title"),
+      element.textContent
+    ].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  function isFooterHelpControl(element) {
+    return /^(Help|帮助)(\s|$)/i.test(controlText(element));
+  }
+
+  function isFooterSettingsControl(element) {
+    return /^(Settings|设置|Preferences|偏好设置)(\s|$)/i.test(controlText(element));
+  }
+
+  function findFooterHelpControl() {
+    const controls = Array.from(document.querySelectorAll("button,a,[role='button']"));
+    const helpControls = controls.filter((control) => control instanceof HTMLElement && isFooterHelpControl(control));
+    for (const help of helpControls) {
+      let scope = help.parentElement;
+      for (let depth = 0; scope && depth < 6; depth += 1, scope = scope.parentElement) {
+        const scopeText = (scope.textContent || "").replace(/\s+/g, " ").trim();
+        if (scopeText.length > 700) continue;
+        const hasSettings = Array.from(scope.querySelectorAll("button,a,[role='button']"))
+          .some((control) => control !== help && control instanceof HTMLElement && isFooterSettingsControl(control));
+        if (hasSettings) return help;
+      }
+    }
+    return null;
+  }
+
+  function installFooterVersionBadge() {
+    const displayVersion = state.settings.appDisplayVersion || state.settings.appVersion;
+    if (!displayVersion) return;
+    const help = findFooterHelpControl();
+    if (!help) return;
+    help.style.display = "none";
+    help.setAttribute("aria-hidden", "true");
+    help.dataset.ruizhiFooterHelpHidden = "true";
+    const parent = help.parentElement;
+    if (!parent) return;
+    let badge = parent.querySelector(":scope > .ruizhi-footer-version-badge");
+    if (!badge) {
+      badge = document.createElement("span");
+      badge.className = "ruizhi-footer-version-badge";
+      parent.insertBefore(badge, help.nextSibling);
+    }
+    badge.textContent = `锐智 ${displayVersion}`;
+    badge.dataset.ruizhiFooterVersion = displayVersion;
   }
 
   function escapeHtml(value) {
@@ -662,6 +716,7 @@
       installThreadScrollRestore();
       installTimeline();
       installSettingsVersionFix();
+      installFooterVersionBadge();
     } catch (error) {
       bridgeCall("/diagnostics/log", { event: "scan_failed", message: String(error?.message || error) });
     }

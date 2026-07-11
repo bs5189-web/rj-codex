@@ -59,7 +59,15 @@ function ruizhiBuildDate(date = new Date()) {
 }
 
 function ruizhiBuildDateLabel() {
-  return `锐智构建日期：${ruizhiBuildDate()}`;
+  return ruizhiBuildVersionLabel();
+}
+
+function ruizhiShortBuildDate() {
+  return ruizhiBuildDate().replaceAll("-", "").slice(2);
+}
+
+function ruizhiBuildVersionLabel() {
+  return `${appVersion}-${ruizhiShortBuildDate()}`;
 }
 
 function assertInsideProject(targetPath) {
@@ -298,7 +306,7 @@ function pageEnhanceEnabled() {
 
 function pageEnhanceFeatures() {
   return {
-    menu: true,
+    menu: false,
     pluginEntryUnlock: true,
     forcePluginInstall: true,
     sessionDelete: false,
@@ -320,6 +328,7 @@ function pageEnhanceBootstrapConfig() {
     enabled: pageEnhanceEnabled(),
     features: pageEnhanceFeatures(),
     appVersion,
+    appDisplayVersion: ruizhiBuildVersionLabel(),
     rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
     serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
   };
@@ -704,7 +713,7 @@ function patchPluginAccountGate() {
     return;
   }
 
-  // 新模式: authMethod===`chatgpt` 替换为 !1
+  // 新模式: authMethod===`chatgpt` 替换为 `__ruizhi_never__`（保持 backtick 配对合法，语义上永远为 false）
   const authCheckPattern = /authMethod===`chatgpt`/g;
   const jsFiles = walkFiles(assetsDir).filter((filePath) => /\.js$/.test(filePath));
   let patchedCount = 0;
@@ -712,7 +721,7 @@ function patchPluginAccountGate() {
     const source = fs.readFileSync(filePath, "utf8");
     if (authCheckPattern.test(source)) {
       authCheckPattern.lastIndex = 0;
-      const patched = source.replace(authCheckPattern, "!1");
+      const patched = source.replace(authCheckPattern, "authMethod===`__ruizhi_never__`");
       if (patched !== source) {
         fs.writeFileSync(filePath, patched, "utf8");
         patchedCount++;
@@ -1161,9 +1170,9 @@ function patchWebviewLocales() {
   }
 
   const replacements = new Map([
-    ["electron.onboarding.login.chatgpt.continue", "使用锐擎继续"],
-    ["electron.onboarding.login.chatgpt.signIn", "使用锐擎继续"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"]
+    ["electron.onboarding.login.chatgpt.continue", "使用锐智继续"],
+    ["electron.onboarding.login.chatgpt.signIn", "使用锐智继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐智继续"]
   ]);
 
   for (const localeFile of localeFiles) {
@@ -1217,7 +1226,7 @@ function templateLiteralValuePattern() {
 }
 
 function replaceBrandInVisibleText(value) {
-  return value.replace(/Codex/g, (match, offset, source) => {
+  return value.replace(/ChatGPT/g, config.productName).replace(/Codex/g, (match, offset, source) => {
     const before = source.slice(Math.max(0, offset - 16), offset);
     if (/GPT-[0-9A-Za-z_. -]*$/i.test(before)) {
       return match;
@@ -1344,17 +1353,10 @@ function patchModelAvailabilityAllowlist() {
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const modelFileNames = fs.readdirSync(assetsDir).filter((name) =>
-    /^(use-model-settings|model-queries|models-and-reasoning-efforts)-.*\.js$/.test(name)
-  );
-  if (modelFileNames.length === 0) {
-    log("跳过补丁点：模型白名单过滤（模块已变更）");
-    return;
-  }
-  const modelAvailabilityAllowlistPattern = /&&[A-Za-z_$][\w$]*!==`amazonBedrock`/;
+  const modelAvailabilityAllowlistPattern = /[A-Za-z_$][\w$]*(?:\.useHiddenModels)?&&[A-Za-z_$][\w$]*!==`amazonBedrock`/;
   const modelSettingsFile = findOneFileByContent(
     assetsDir,
-    /^(use-model-settings|model-queries|models-and-reasoning-efforts)-.*\.js$/,
+    /\.js$/,
     modelAvailabilityAllowlistPattern,
     "model settings bundle"
   );
@@ -1362,7 +1364,7 @@ function patchModelAvailabilityAllowlist() {
   writePatchedFile(modelSettingsFile, (source) =>
     replaceRegex(
       source,
-      /[A-Za-z_$][\w$]*(?:\.useHiddenModels)?&&[A-Za-z_$][\w$]*!==`amazonBedrock`/,
+      modelAvailabilityAllowlistPattern,
       "!1",
       "禁用官方模型 available_models 白名单过滤"
     )
@@ -1378,17 +1380,8 @@ function patchListModelsForHostFromUserCache() {
   }
 
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const modelQueryNames = fs.readdirSync(assetsDir).filter((name) => /^model-queries-.*\.js$/.test(name));
-  if (modelQueryNames.length === 0) {
-    log("跳过补丁点：模型缓存列表（模块已变更）");
-    return;
-  }
-  const modelQueriesFile = findOneFileByContent(
-    assetsDir,
-    /^model-queries-.*\.js$/,
-    /list-models-for-host/,
-    "model queries bundle"
-  );
+  const modelListQueryFnPattern = /queryFn:\(\)=>([A-Za-z_$][\w$]*)\(`list-models-for-host`,\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
+  const modelQueriesFile = findOneFileByContent(assetsDir, /\.js$/, modelListQueryFnPattern, "model queries bundle");
 
   writePatchedFile(modelQueriesFile, (source) => {
     const modelListQueryFnReplacement = (rpcCall, hostId, limit) =>
@@ -1407,7 +1400,6 @@ function patchListModelsForHostFromUserCache() {
     if (source.includes("function ruizhiListModelsForHostFromUserCache(")) {
       throw new Error("补丁点未知：旧版用户 models_cache.json 模型列表补丁");
     }
-    const modelListQueryFnPattern = /queryFn:\(\)=>([A-Za-z_$][\w$]*)\(`list-models-for-host`,\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
     const match = source.match(modelListQueryFnPattern);
     if (!match) {
       throw new Error("补丁点不存在：改用用户 models_cache.json 作为模型列表数据源");
@@ -1530,9 +1522,9 @@ function ruizhiInit(){
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
     const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
     const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
-    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "http://115.191.65.206:13000")};
+    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "https://gptauth.ruijie.com.cn")};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
-    const chatGptBackendApiBaseUrl=${jsonLiteral("http://115.191.65.206:13000")};
+    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.ruijie.com.cn")};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),
@@ -2467,7 +2459,13 @@ function copyUpdaterRuntimeDependencies() {
 }
 
 function patchBootstrap() {
-  const bootstrapPath = path.join(extractedDir, ".vite", "build", "bootstrap.js");
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const bootstrapCandidates = fs.readdirSync(buildDir)
+    .filter(name => /^bootstrap.*\.js$/.test(name) && name !== "early-bootstrap.js");
+  if (bootstrapCandidates.length === 0) {
+    throw new Error("找不到 bootstrap 入口文件（新版 Codex.app 可能再次重命名）");
+  }
+  const bootstrapPath = path.join(buildDir, bootstrapCandidates[0]);
 
   writePatchedFile(bootstrapPath, (source) => {
     let next = source;

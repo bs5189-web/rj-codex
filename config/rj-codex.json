@@ -1,6 +1,6 @@
 {
   "productName": "锐智",
-  "version": "0.2.6",
+  "version": "0.3.130",
   "locale": "zh-CN",
   "windows": {
     "sourceAppRoot": "vendor/codex-desktop/windows/current/app",
@@ -36,8 +36,8 @@
   },
   "openai": {
     "baseUrl": "https://uniapi.ruijie.com.cn/v1",
-    "providerBaseUrl": "http://115.191.65.206:13000/v1",
-    "chatGptLoginBaseUrl": "http://115.191.65.206:13000",
+    "providerBaseUrl": "https://gptauth.ruijie.com.cn/v1",
+    "chatGptLoginBaseUrl": "https://gptauth.ruijie.com.cn",
     "tokenUrl": "https://uniapi.ruijie.com.cn/console/token",
     "defaultModel": "ray",
     "defaultReasoningEffort": "medium",
@@ -123,7 +123,7 @@
   "pageEnhance": {
     "enabled": true,
     "features": {
-      "menu": true,
+      "menu": false,
       "pluginEntryUnlock": true,
       "forcePluginInstall": true,
       "sessionDelete": false,

@@ -1433,7 +1433,7 @@ function patchOfficialUpdateLogic() {
 }
 
 function applicationMenuPatchSource() {
-  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{let e=await n();e&&r(e,i)},f=e?.items?.[0]?.submenu;if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}}`;
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{try{let e=await n();if(!e)return;try{await r(e,i)}catch(t){console.error(\`锐智设置菜单跳转失败\`,t);await r(e,\`/settings/general-settings\`)}}catch(e){console.error(\`锐智设置菜单打开失败\`,e)}},f=e?.items?.[0]?.submenu;if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}}`;
 }
 
 function patchApplicationMenu() {
@@ -1554,6 +1554,7 @@ function ruizhiInit(){
     const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
     const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
     const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
+    try{${electronName}.app.commandLine.appendSwitch("user-data-dir",userData)}catch{}
     function stableModelBridgePort(basePort,seed){
       let hash=0;
       for(const char of String(seed||"")){
@@ -2486,7 +2487,24 @@ function patchBootstrap() {
       "await ruizhiForceUpdateIfAvailable();try{let{runMainAppStartup:",
       "禁用 Codex 官方 updater 初始化，改为锐智启动逻辑"
     );
-    next = replaceExactIfPresent(next, "n.app.setName(e.H(x))", `n.app.setName(${jsonLiteral(config.productName)})`, "应用名称");
+    const setNameBeforeUserDataPattern = new RegExp(
+      `${escapeRegExp(electronName)}\\.app\\.setName\\([\\s\\S]*?\\)\\s*,\\s*${escapeRegExp(electronName)}\\.app\\.setPath\\(\\s*\`userData\``
+    );
+    next = replaceRegex(
+      next,
+      setNameBeforeUserDataPattern,
+      `${electronName}.app.setName(${jsonLiteral(config.productName)}),${electronName}.app.setPath(\`userData\``,
+      "应用名称和 userData 单实例隔离"
+    );
+    const singleInstanceExitPattern = new RegExp(
+      `if\\s*\\(!\\s*\\(!\\s*[A-Za-z_$][\\w$]*\\s*\\|\\|\\s*${escapeRegExp(electronName)}\\.app\\.requestSingleInstanceLock\\(\\)\\s*\\)\\s*\\)`
+    );
+    next = replaceRegex(
+      next,
+      singleInstanceExitPattern,
+      "if(false)",
+      "允许锐智与 ChatGPT/Codex 并行启动"
+    );
     next = replaceAllIfPresent(next, "process.platform===`win32`&&n.app.setAppUserModelId(t.v(x))", "process.platform===`win32`&&n.app.setAppUserModelId(`cn.ruizhi.desktop`)");
     return next;
   });
@@ -2610,6 +2628,36 @@ function assertAppBinaryArchMatchesHost() {
   assertMacosBuildArch(archs);
   log(`已确认 macOS app 主程序包含目标架构 ${macosBuildArch}：${archs.join(", ")}`);
   return archs;
+}
+
+function wrapMacosExecutableWithRuizhiUserData() {
+  const plist = path.join(appOutRoot, "Contents", "Info.plist");
+  const executableName = execOutput("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleExecutable", plist]).trim();
+  const macosDir = path.join(appOutRoot, "Contents", "MacOS");
+  const executablePath = path.join(macosDir, executableName);
+  const wrappedExecutableName = `${executableName}.bin`;
+  const wrappedExecutablePath = path.join(macosDir, wrappedExecutableName);
+  if (!fs.existsSync(wrappedExecutablePath)) {
+    fs.renameSync(executablePath, wrappedExecutablePath);
+  }
+  const wrapper = `#!/bin/sh
+APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+USER_DATA_DIR="\${CODEX_ELECTRON_USER_DATA_PATH:-$HOME/Library/Application Support/${electronUserDataDirName}}"
+HAS_USER_DATA_DIR=0
+for ARG in "$@"; do
+  case "$ARG" in
+    --user-data-dir|--user-data-dir=*) HAS_USER_DATA_DIR=1 ;;
+  esac
+done
+if [ "$HAS_USER_DATA_DIR" = "1" ]; then
+  exec "$APP_DIR/${wrappedExecutableName}" "$@"
+else
+  exec "$APP_DIR/${wrappedExecutableName}" --user-data-dir="$USER_DATA_DIR" "$@"
+fi
+`;
+  fs.writeFileSync(executablePath, wrapper, { mode: 0o755 });
+  fs.chmodSync(executablePath, 0o755);
+  log(`已包装 macOS 主程序以隔离原生 user-data-dir：${executableName} -> ${wrappedExecutableName}`);
 }
 
 function copyPluginMarketplaces() {
@@ -3133,6 +3181,7 @@ async function main() {
 
   patchInfoPlist();
   assertAppBinaryArchMatchesHost();
+  wrapMacosExecutableWithRuizhiUserData();
   buildImageGenHelper();
   copyRuntimeOverrides();
   copyPluginMarketplaces();

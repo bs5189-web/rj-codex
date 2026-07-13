@@ -733,15 +733,89 @@ function patchPluginAccountGate() {
 
 function patchNativeWebviewFeatureGates() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const statsigGateSourcePattern = /function Ue\(e\)\{return ([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),e\)\}/;
-  const statsigFile = walkFiles(assetsDir)
-    .filter((filePath) => /^statsig-.*\.js$/.test(path.basename(filePath)))
-    .find((filePath) => statsigGateSourcePattern.test(fs.readFileSync(filePath, "utf8")));
+  const statsigGateSourcePattern =
+    /function ([A-Za-z_$][\w$]*)\(e\)\{return ([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),e\)\}/;
+  const statsigGateIds = [
+    "614250066",
+    "2327881676",
+    "1823130936",
+    "3075919032",
+    "3789238711",
+    "3765605143",
+    "1404955983",
+    "567837310",
+    "3207467860",
+    "1823918333",
+    "410065390",
+    "824038554",
+    "3839945238",
+    "3909937021",
+    "2761268526",
+    "875176429",
+    "1378180112",
+    "1258561229",
+    "505458",
+    "3025044430",
+    "1907601843",
+    "2425897452",
+    "1857002365",
+    "12346831",
+    "262557526",
+    "663642302",
+    "2929582856",
+    "1488233300",
+    "1848317837",
+    "459748632",
+    "2171042036",
+    "1645387566",
+    "1244621283",
+    "1372061905",
+    "3264431617",
+    "4100906017",
+    "4080277432",
+    "2423536643",
+    "1304276663",
+    "2484414311",
+    "188145323",
+    "3079718369",
+    "637432221",
+    "1834314516",
+    "1397824675",
+    "2212532336",
+    "2791276931",
+    "2957382457",
+    "4167858931",
+    "1256703444",
+    "1529702798",
+    "1840974662",
+    "4166894088",
+    "410262010",
+    "3903563814",
+  ];
+  const statsigFiles = walkFiles(assetsDir)
+    .filter((filePath) => /\.js$/.test(filePath))
+    .filter((filePath) => {
+      const basename = path.basename(filePath);
+      const source = fs.readFileSync(filePath, "utf8");
+      if (!statsigGateSourcePattern.test(source)) {
+        return false;
+      }
+      return (
+        /^statsig-.*\.js$/.test(basename) ||
+        source.includes("useStatsigClient") ||
+        source.includes("useFeatureGate") ||
+        source.includes("410262010")
+      );
+    });
+  const statsigFile = statsigFiles[0];
   if (!statsigFile) {
     log("跳过补丁点：Statsig webview gate（模块已变更）");
     return;
   }
-  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`,`3903563814`,`410065390`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  if (statsigFiles.length > 1) {
+    throw new Error(`Statsig webview gate bundle 匹配数量异常：${statsigFiles.length}`);
+  }
+  const nativeGateCode = `const ruizhiNativeFeatureGates=new Set(${JSON.stringify(statsigGateIds)});function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}`;
   const source = fs.readFileSync(statsigFile, "utf8");
   if (source.includes("ruizhiNativeFeatureGateValue")) {
     log("已存在 Codex 原生 webview gate 补丁");
@@ -751,15 +825,16 @@ function patchNativeWebviewFeatureGates() {
   if (!targetGateMatch) {
     throw new Error("Codex 原生 webview gate 补丁点不存在");
   }
-  const initHook = targetGateMatch[1];
-  const gateHook = targetGateMatch[2];
-  const gateStore = targetGateMatch[3];
+  const gateFunction = targetGateMatch[1];
+  const initHook = targetGateMatch[2];
+  const gateHook = targetGateMatch[3];
+  const gateStore = targetGateMatch[4];
   const patched = source.replace(
     statsigGateSourcePattern,
-    `${nativeGateCode}function Ue(e){return ${initHook}(),ruizhiNativeFeatureGateValue(e)||${gateHook}(${gateStore},e)}`
+    `${nativeGateCode}function ${gateFunction}(e){return ${initHook}(),ruizhiNativeFeatureGateValue(e)||${gateHook}(${gateStore},e)}`
   );
   fs.writeFileSync(statsigFile, patched, "utf8");
-  log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)}`);
+  log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)} (${statsigGateIds.length} 个)`);
 }
 
 function patchNativeStatsigNetwork() {
@@ -1120,6 +1195,35 @@ function patchTrustedBrowserClientHashes() {
   }
   fs.writeFileSync(mainFile, patched, "utf8");
   log(`已更新 Browser client nativePipe 信任哈希：${hashSummary}`);
+}
+
+function patchBrowserUseIabCdpNoTargetRetrySource(source) {
+  if (source.includes("ruizhiBrowserUseIabCdpNoTargetRetry")) {
+    return source;
+  }
+
+  const pattern =
+    /async sendDebuggerCommand\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)=\{\}\)\{let ([A-Za-z_$][\w$]*)=\4\.sessionId\?\?\(\4\.targetId==null\?void 0:this\.debuggerSessionIdForTarget\(\1,\4\.targetId\)\?\?void 0\);if\(\4\.targetId!=null&&\4\.targetId!==([A-Za-z_$][\w$]*)\(\1\)&&\5==null\)throw Error\(`No in-app browser debugger session is attached for target \$\{\4\.targetId\}`\);return await ([A-Za-z_$][\w$]*)\(\1\.webContents\.debugger\.sendCommand\(\2,\3,\5\),this\.cdpCommandTimeoutMs,`Timed out running CDP command "\$\{\2\}" for tab \$\{\1\.cdpTabId\}`\)\}/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：Browser Use IAB CDP No target 重试");
+  }
+
+  return source.replace(pattern, (match, tabName, methodName, paramsName, targetName, sessionName, ownTargetFnName, timeoutFnName) => {
+    return `async sendDebuggerCommand(${tabName},${methodName},${paramsName},${targetName}={}){let ${sessionName}=${targetName}.sessionId??(${targetName}.targetId==null?void 0:this.debuggerSessionIdForTarget(${tabName},${targetName}.targetId)??void 0);if(${targetName}.targetId!=null&&${targetName}.targetId!==${ownTargetFnName}(${tabName})&&${sessionName}==null)throw Error(\`No in-app browser debugger session is attached for target \${${targetName}.targetId}\`);try{return await ${timeoutFnName}(${tabName}.webContents.debugger.sendCommand(${methodName},${paramsName},${sessionName}),this.cdpCommandTimeoutMs,\`Timed out running CDP command "\${${methodName}}" for tab \${${tabName}.cdpTabId}\`)}catch(ruizhiError){let ruizhiMessage=ruizhiError instanceof Error?ruizhiError.message:String(ruizhiError);if(!ruizhiMessage.includes(\`No target available\`))throw ruizhiError;try{console.warn(\`[ruizhi][browser] ruizhiBrowserUseIabCdpNoTargetRetry\`,{method:${methodName},tabId:${tabName}.cdpTabId,webContentsId:${tabName}.webContents.id})}catch{}await this.detachTab(${tabName});await PX(50);await this.attachTab(${tabName});return await ${timeoutFnName}(${tabName}.webContents.debugger.sendCommand(${methodName},${paramsName},${sessionName}),this.cdpCommandTimeoutMs,\`Timed out running CDP command "\${${methodName}}" for tab \${${tabName}.cdpTabId}\`)}}`;
+  });
+}
+
+function patchBrowserUseIabCdpNoTargetRetry() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const mainFile = findOneFile(buildDir, /^main-.*\.js$/, "Electron main bundle");
+  const source = fs.readFileSync(mainFile, "utf8");
+  const patched = patchBrowserUseIabCdpNoTargetRetrySource(source);
+  if (patched === source) {
+    log(`已存在 Browser Use IAB CDP No target 重试补丁：${path.basename(mainFile)}`);
+    return;
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`已补丁 Browser Use IAB CDP No target 重试：${path.basename(mainFile)}`);
 }
 
 function replaceLocaleMessage(source, key, value) {
@@ -2534,6 +2638,7 @@ async function repackAppAsar() {
   patchBrowserNativePipeDiagnostics();
   patchBrowserNativePipePeerAuthorization();
   patchTrustedBrowserClientHashes();
+  patchBrowserUseIabCdpNoTargetRetry();
   patchWebviewLocales();
   patchPackageMetadata();
   patchWebviewHtml();

@@ -1,6 +1,6 @@
 {
   "productName": "锐智",
-  "version": "0.3.144",
+  "version": "0.3.1442",
   "locale": "zh-CN",
   "windows": {
     "sourceAppRoot": "vendor/codex-desktop/windows/current/app",

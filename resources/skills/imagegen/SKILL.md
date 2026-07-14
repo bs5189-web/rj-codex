@@ -11,7 +11,7 @@ description: "通过锐擎 UniAPI 和 gpt-image-2 生成位图。适用于让 Co
 
 - 使用 `RUIZHI_IMAGEGEN_EXE` 指向的内置 helper。锐智会打包为 `ruizhi-imagegen.exe`。
 - 默认模型：`gpt-image-2`。
-- 默认 API base URL 读取 `RUIZHI_OPENAI_BASE_URL`，未设置时使用 `https://uniapi.ruijie.com.cn/v1`。
+- 默认 API base URL 读取 `RUIZHI_OPENAI_BASE_URL`，未设置时使用 `https://gptauth.ruijie.com.cn/v1`。
 - 认证信息按顺序读取 `RUIZHI_API_KEY`、`RUIZHI_HOME` / `CODEX_HOME` 下的 `auth.json`、`OPENAI_API_KEY`。
 - 项目相关输出保存到当前 workspace，通常是 `output/imagegen/` 或用户指定路径。
 - 生成前不要单独执行 `mkdir`，helper 会自动创建父目录。

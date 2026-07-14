@@ -29,7 +29,7 @@ description: 使用火山引擎/UniAPI 进行 AI 视频生成时调用：支持�
 - 正常生成必须使用当前 skill 目录下的 `scripts/generate-video.mjs`。执行前把脚本路径解析成绝对路径。
 - 不要为了生成视频临时手写 `curl`、`Invoke-RestMethod` 或内联 PowerShell。锐智只预授权固定 helper 命令，不预授权任意网络 shell。
 - 认证读取顺序：`RUIZHI_API_KEY`、`RUIZHI_HOME` / `CODEX_HOME` 下的 `auth.json`、`OPENAI_API_KEY`。
-- 默认 API base URL 读取 `RUIZHI_OPENAI_BASE_URL`，未设置时使用 `https://uniapi.ruijie.com.cn/v1`。
+- 默认 API base URL 读取 `RUIZHI_OPENAI_BASE_URL`，未设置时使用 `https://gptauth.ruijie.com.cn/v1`。
 - 下载后的视频保存到当前工作区，默认建议使用 `output/video/`，除非用户指定路径。
 - 不要打印 API key、`auth.json` 内容或任何认证头。
 

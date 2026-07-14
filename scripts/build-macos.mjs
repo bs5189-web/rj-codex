@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 import fsExtra from "fs-extra";
 import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
 import {
+  patchBrowserUseIabOpenStability,
   codexClientVersionFromExe,
+  patchPluginSkillLocalListFallback,
   writeRuntimeModelCatalog
 } from "./windows-asar-overrides.mjs";
 
@@ -59,7 +61,7 @@ function ruizhiBuildDate(date = new Date()) {
 }
 
 function ruizhiBuildDateLabel() {
-  return ruizhiBuildVersionLabel();
+  return `锐智构建日期：${ruizhiBuildDate()}`;
 }
 
 function ruizhiShortBuildDate() {
@@ -97,6 +99,14 @@ function cleanDir(targetPath) {
 function execLogged(command, args, options = {}) {
   log([command, ...args].join(" "));
   execFileSync(command, args, { stdio: "inherit", ...options });
+}
+
+function execBestEffort(command, args, label) {
+  try {
+    execLogged(command, args);
+  } catch (error) {
+    log(`${label} 失败，继续构建：${error?.message ?? error}`);
+  }
 }
 
 function sleep(ms) {
@@ -531,6 +541,37 @@ function patchHelpDocumentationLinks() {
   }
 
   log(`已补丁帮助文档链接：${changedFiles} 个文件，${replacementCount} 处`);
+}
+
+function patchAccountSettingsLinks() {
+  const accountUrl = "https://gptauth.ruijie.com.cn/";
+  const accountSettingsPattern = /https:\/\/chatgpt\.com\/#settings(?:\/[A-Za-z]+)?/g;
+  const accountSecurityPattern = /https:\/\/chatgpt\.com\/open-security-settings/g;
+  let changedFiles = 0;
+  let replacementCount = 0;
+  const files = walkFiles(extractedDir).filter((filePath) => /\.(js|html|json)$/i.test(filePath));
+
+  for (const filePath of files) {
+    const source = fs.readFileSync(filePath, "utf8");
+    let next = source;
+    for (const pattern of [accountSettingsPattern, accountSecurityPattern]) {
+      const matches = next.match(pattern);
+      if (matches) {
+        replacementCount += matches.length;
+        next = next.replace(pattern, accountUrl);
+      }
+    }
+    if (next !== source) {
+      fs.writeFileSync(filePath, next, "utf8");
+      changedFiles += 1;
+    }
+  }
+
+  if (replacementCount === 0) {
+    throw new Error("未找到 ChatGPT 账户设置链接补丁点");
+  }
+
+  log(`已补丁账户设置链接：${changedFiles} 个文件，${replacementCount} 处`);
 }
 
 function escapeRegExp(value) {
@@ -1236,7 +1277,9 @@ function patchWebviewLocales() {
     .filter((name) => /^zh-(CN|HK|TW)-.*\.js$/.test(name))
     .map((name) => path.join(assetsDir, name));
   const globalReplacements = new Map([
-    ["electron.onboarding.login.includedPlans.welcomeV2", ruizhiBuildDateLabel()]
+    ["electron.onboarding.login.includedPlans.welcomeV2", ruizhiBuildDateLabel()],
+    ["electron.onboarding.welcomeV2.role.subtitle", ruizhiBuildDateLabel()],
+    ["electron.onboarding.welcomeV2.role.subtitle.chatgpt", ruizhiBuildDateLabel()]
   ]);
   const allLocaleFiles = fs.readdirSync(assetsDir)
     .filter((name) => /\.js$/.test(name))
@@ -1269,9 +1312,10 @@ function patchWebviewLocales() {
   }
 
   const replacements = new Map([
-    ["electron.onboarding.login.chatgpt.continue", "使用锐智继续"],
-    ["electron.onboarding.login.chatgpt.signIn", "使用锐智继续"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐智继续"]
+    ["electron.onboarding.login.chatgpt.continue", "使用锐擎继续"],
+    ["electron.onboarding.login.chatgpt.signIn", "使用锐擎继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"],
+    ["electron.onboarding.welcomeV2.continue", "使用锐擎继续"]
   ]);
 
   for (const localeFile of localeFiles) {
@@ -1532,7 +1576,7 @@ function patchOfficialUpdateLogic() {
 }
 
 function applicationMenuPatchSource() {
-  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{try{let e=await n();if(!e)return;try{await r(e,i)}catch(t){console.error(\`锐智设置菜单跳转失败\`,t);await r(e,\`/settings/general-settings\`)}}catch(e){console.error(\`锐智设置菜单打开失败\`,e)}},f=e?.items?.[0]?.submenu;if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}}`;
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{try{let e=await n();if(!e)return;try{await r(e,i)}catch(t){console.error(\`锐智设置菜单跳转失败\`,t);await r(e,\`/settings/general-settings\`)}}catch(e){console.error(\`锐智设置菜单打开失败\`,e)}},f=e?.items?.[0]?.submenu,A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐智账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}let g=l(/^(Account|账户)$/);g&&(g.click=A);q()}`;
 }
 
 function patchApplicationMenu() {
@@ -1567,7 +1611,7 @@ function patchApplicationMenu() {
     if (!next.includes(`ruizhiEnsureNativeMenuItems({menu:${menuName}`)) {
       next = next.replace(
         setApplicationMenuMatch[0],
-        `try{ruizhiEnsureNativeMenuItems({menu:${menuName},MenuItem:${electronName}.MenuItem,ensureWindow:${ensureWindowName},navigate:${navigateName},settingsRoute:${settingsRouteName}});ruizhiTranslateApplicationMenu(${menuName})}catch(e){console.error(\`锐智菜单修复失败\`,e)}${electronName}.Menu.setApplicationMenu(${menuName}),${afterSetApplicationMenuName}(${afterSetApplicationMenuArg})`
+        `try{ruizhiEnsureNativeMenuItems({menu:${menuName},MenuItem:${electronName}.MenuItem,ensureWindow:${ensureWindowName},navigate:${navigateName},settingsRoute:${settingsRouteName},shell:${electronName}.shell});ruizhiTranslateApplicationMenu(${menuName})}catch(e){console.error(\`锐智菜单修复失败\`,e)}${electronName}.Menu.setApplicationMenu(${menuName}),${afterSetApplicationMenuName}(${afterSetApplicationMenuArg})`
       );
     }
     return next;
@@ -1767,6 +1811,7 @@ function ruizhiInit(){
     }
     function applyRuizhiModelCatalogCompatibilityPatches(catalog){
       if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models))return catalog;
+      catalog.models=catalog.models.filter(model=>!isNonChatModelCatalogEntry(model));
       const guidance="\\n\\n## Codex Desktop Plugin Control\\n- When the user invokes \`[@浏览器]\` or \`plugin://browser@openai-bundled\`, use the Browser plugin's trusted runtime through the \`mcp__node_repl__js\` tool and select the \`iab\` browser. Do not use \`exec_command\`, \`node -e\`, standalone Playwright, or a system browser for this plugin.\\n- Browser plugin native-pipe authorization depends on Codex turn metadata in \`nodeRepl.requestMeta\`; a separate shell process cannot provide the required \`session_id\` / \`turn_id\` and will fail as not trusted.";
       const append=value=>{
         if(typeof value!=="string"||value.length===0)return value;
@@ -1796,6 +1841,11 @@ function ruizhiInit(){
         }
       }
       return catalog;
+    }
+    function isNonChatModelCatalogEntry(model){
+      const id=[model?.slug,model?.id,model?.name,model?.display_name,model?.displayName].map(value=>String(value??"").trim().toLowerCase()).filter(Boolean).join(" ");
+      if(!id)return false;
+      return /(^|[\\s/_-])(?:gpt-)?image\\d*(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])dall-e(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])(?:text-)?embedding(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])(?:realtime|rerank|reranker)(?=$|[\\s/_-])/.test(id);
     }
     function normalizeModelCatalogFile(filePath){
       const catalog=validateModelCatalogFile(filePath);
@@ -1917,7 +1967,7 @@ function ruizhiInit(){
     }
     function marketplaceConfigBlock(spec,source){
       const online=spec.online;
-      if(online&&online.source){
+      if(online&&online.source&&online.autoUpgrade===true){
         const lines=[
           "[marketplaces."+spec.name+"]",
           "source_type = "+tomlString("git"),
@@ -2135,6 +2185,86 @@ function ruizhiInit(){
         }
       }
     }
+    function readMarketplaceManifest(root){
+      const manifestPath=path.join(root,".agents","plugins","marketplace.json");
+      if(!fs.existsSync(manifestPath))return null;
+      const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
+      return Array.isArray(manifest.plugins)?manifest:null;
+    }
+    function isPathInside(root,candidate){
+      const base=path.resolve(root);
+      const target=path.resolve(candidate);
+      const normalizedBase=process.platform==="win32"?base.toLowerCase():base;
+      const normalizedTarget=process.platform==="win32"?target.toLowerCase():target;
+      return normalizedTarget===normalizedBase||normalizedTarget.startsWith(normalizedBase+path.sep);
+    }
+    function pluginSourceRoot(marketplaceRoot,plugin){
+      const sourcePath=plugin&&plugin.source&&typeof plugin.source.path==="string"?plugin.source.path:null;
+      if(!sourcePath)return null;
+      const sourceRoot=path.resolve(marketplaceRoot,sourcePath);
+      return isPathInside(marketplaceRoot,sourceRoot)?sourceRoot:null;
+    }
+    function copyManagedPluginCacheFiles(sourceRoot,targetRoot){
+      const stagingRoot=targetRoot+".staging-"+process.pid+"-"+Date.now();
+      fs.rmSync(stagingRoot,{recursive:true,force:true});
+      try{
+        fs.mkdirSync(path.dirname(stagingRoot),{recursive:true});
+        fs.cpSync(sourceRoot,stagingRoot,{recursive:true,force:true});
+        fs.rmSync(targetRoot,{recursive:true,force:true});
+        fs.renameSync(stagingRoot,targetRoot);
+      }catch(error){
+        fs.rmSync(stagingRoot,{recursive:true,force:true});
+        throw error;
+      }
+    }
+    function managedMarketplacePluginConfigBlock(marketplaceName,pluginName){
+      return [
+        "[plugins."+tomlString(pluginName+"@"+marketplaceName)+"]",
+        "enabled = true",
+        ""
+      ].join("\\n");
+    }
+    function syncManagedMarketplacePluginInstall(marketplaceSources){
+      const specs=managedMarketplaceSpecs();
+      if(specs.length===0)return;
+      const configPath=path.join(codexHome,"config.toml");
+      let next=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+      let changed=false;
+      for(const spec of specs){
+        const marketplaceRoot=marketplaceSources[spec.sourceToken];
+        if(!marketplaceRoot)continue;
+        let manifest=null;
+        try{
+          manifest=readMarketplaceManifest(marketplaceRoot);
+        }catch(error){
+          console.error("ruizhi managed marketplace manifest read failed",spec.name,error);
+          continue;
+        }
+        if(!manifest)continue;
+        const cacheRoot=path.join(codexHome,"plugins","cache",spec.name);
+        for(const plugin of manifest.plugins){
+          if(!plugin||typeof plugin.name!=="string"||plugin.name.length===0)continue;
+          try{
+            const sourceRoot=pluginSourceRoot(marketplaceRoot,plugin);
+            if(!sourceRoot)continue;
+            const version=readPluginVersion(sourceRoot);
+            if(!version)continue;
+            copyManagedPluginCacheFiles(sourceRoot,path.join(cacheRoot,plugin.name,version));
+            const tableName="plugins."+tomlString(plugin.name+"@"+spec.name);
+            if(!findTomlTable(tomlLines(next),"["+tableName+"]")){
+              const updated=upsertTomlTable(next,tableName,managedMarketplacePluginConfigBlock(spec.name,plugin.name));
+              if(updated!==next){next=updated;changed=true;}
+            }
+          }catch(error){
+            console.error("ruizhi managed marketplace plugin install failed",spec.name,plugin.name,error);
+          }
+        }
+      }
+      if(changed){
+        fs.mkdirSync(path.dirname(configPath),{recursive:true});
+        fs.writeFileSync(configPath,next,"utf8");
+      }
+    }
     function marketplaceRoot(name,marketplaceSources){
       const spec=marketplaceSpecs.find(item=>item.name===name);
       return spec?marketplaceSources[spec.sourceToken]:null;
@@ -2199,6 +2329,7 @@ function ruizhiInit(){
     const existingRuizhiConfig=fs.existsSync(configPath);
     const marketplaceSources=syncMarketplaces();
     syncManagedMarketplaceConfig(marketplaceSources);
+    syncManagedMarketplacePluginInstall(marketplaceSources);
     syncRuijieProviderConfig();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
@@ -2628,10 +2759,12 @@ async function repackAppAsar() {
   patchNativeProfileVisibility();
   patchNativeProfileUsageFallback();
   patchNativeProfileApiCallLogging();
+  patchPluginSkillLocalListFallback(extractedDir, { log });
   patchNativeBrowserDesktopFeatureAvailability();
   patchChatGptAuthExternalBrowser();
   patchBrowserNativePipeDiagnostics();
   patchBrowserNativePipePeerAuthorization();
+  patchBrowserUseIabOpenStability(extractedDir, { log });
   patchTrustedBrowserClientHashes();
   patchBrowserUseIabCdpNoTargetRetry();
   patchWebviewLocales();
@@ -2644,6 +2777,7 @@ async function repackAppAsar() {
   patchListModelsForHostFromUserCache();
   patchOfficialUpdateLogic();
   patchApplicationMenu();
+  patchAccountSettingsLinks();
   patchHelpDocumentationLinks();
   copyUpdaterRuntimeDependencies();
   patchBootstrap();
@@ -3277,15 +3411,17 @@ async function main() {
   log(`使用 Codex.app：${sourceAppRoot}`);
 
   log("复制 Codex.app");
-  await fsExtra.copy(sourceAppRoot, appOutRoot);
+  execLogged("ditto", ["--norsrc", sourceAppRoot, appOutRoot]);
+  execBestEffort("chflags", ["-R", "nouchg,noschg", appOutRoot], "清理 macOS 文件标志");
+  execBestEffort("/usr/bin/xattr", ["-cr", appOutRoot], "清理 macOS 扩展属性");
 
+  copyRuntimeOverrides();
+  copyPluginMarketplaces();
+  writeAppUpdateConfig();
   patchInfoPlist();
   assertAppBinaryArchMatchesHost();
   wrapMacosExecutableWithRuizhiUserData();
   buildImageGenHelper();
-  copyRuntimeOverrides();
-  copyPluginMarketplaces();
-  writeAppUpdateConfig();
   await repackAppAsar();
   await patchFuses();
   const signingState = signApp();

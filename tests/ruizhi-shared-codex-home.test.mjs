@@ -11,8 +11,15 @@ function readProjectFile(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
 }
 
+function existingProjectFiles(relativePaths) {
+  return relativePaths.filter((relativePath) => fs.existsSync(path.join(projectRoot, relativePath)));
+}
+
 test("runtime defaults initialize Ruizhi home and isolate Electron user data", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
+  assert.equal(config.openai.chatGptLoginBaseUrl, "https://gptauth.ruijie.com.cn");
+  assert.equal(config.openai.baseUrl, "https://gptauth.ruijie.com.cn/v1");
+  assert.equal(config.openai.providerBaseUrl, "https://gptauth.ruijie.com.cn/v1");
   assert.equal(config.runtime.defaultHomeDirName, ".ruizhi");
   assert.equal(config.runtime.electronUserDataDirName, config.productName);
   assert.match(
@@ -26,12 +33,12 @@ test("runtime defaults initialize Ruizhi home and isolate Electron user data", (
     "macOS display name should still show the Ruizhi product name"
   );
 
-  const sources = [
+  const sources = existingProjectFiles([
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
     "scripts/windows-asar-overrides.mjs",
     "overrides/windows-app/asar/.vite/build/bootstrap.js"
-  ];
+  ]);
 
   for (const sourcePath of sources) {
     const source = readProjectFile(sourcePath);
@@ -50,28 +57,84 @@ test("bootstrap auto-registers bundled Ruizhi marketplaces for first launch", ()
   assert.ok(config.pluginMarketplaces.length > 0, "test expects a bundled Ruizhi marketplace");
   assert.equal(config.pluginMarketplaces[0].name, "ruijie-marketplace");
   assert.equal(config.pluginMarketplaces[0].online.source, "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git");
+  assert.equal(config.pluginMarketplaces[0].online.autoUpgrade, true);
 
-  for (const sourcePath of [
+  for (const sourcePath of existingProjectFiles([
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
     "overrides/windows-app/asar/.vite/build/bootstrap.js"
-  ]) {
+  ])) {
     const source = readProjectFile(sourcePath);
 
     assert.match(source, /function syncManagedMarketplaceConfig\(marketplaceSources\)/, `${sourcePath} should register local marketplaces in config.toml`);
     assert.match(source, /managedMarketplaceSpecs\(\)/, `${sourcePath} should only manage configured custom marketplaces`);
     assert.match(source, /marketplaceSpecs\.filter\(spec=>spec\.hardcodedPlugins!==true&&spec\.alwaysCopy!==true\)/, `${sourcePath} should not rewrite built-in OpenAI marketplaces`);
-    assert.match(source, /const configPath=path\.join\((?:codexHome|home,"\.codex"),"config\.toml"\)/, `${sourcePath} should create the runtime config path on first launch`);
+    assert.match(source, /const configPath=path\.join\(codexHome,"config\.toml"\)/, `${sourcePath} should write marketplace config into the Ruizhi runtime home`);
+    assert.doesNotMatch(source, /const configPath=path\.join\(home,"\.codex","config\.toml"\)/, `${sourcePath} should not write marketplace config into the default Codex home`);
     assert.match(source, /fs\.existsSync\(configPath\)\?fs\.readFileSync\(configPath,"utf8"\):""/, `${sourcePath} should handle missing config.toml`);
     assert.match(source, /fs\.mkdirSync\(path\.dirname\(configPath\),\{recursive:true\}\)/, `${sourcePath} should create the config directory`);
     assert.match(source, /"\[marketplaces\."\+spec\.name\+"\]"/, `${sourcePath} should emit marketplace TOML tables`);
     assert.match(source, /tomlString\("local"\)/, `${sourcePath} should register local marketplace sources`);
     assert.match(source, /function marketplaceConfigBlock\(spec,source\)/, `${sourcePath} should register each marketplace once`);
+    assert.match(source, /online&&online\.source&&online\.autoUpgrade===true/, `${sourcePath} should only use Git marketplaces when auto-upgrade is enabled`);
     assert.match(source, /tomlString\("git"\)/, `${sourcePath} should emit Git marketplace sources`);
     assert.match(source, /"ref = "\+tomlString\(online\.ref\)/, `${sourcePath} should preserve the configured Git ref`);
+    assert.match(source, /"\[marketplaces\."\+spec\.name\+"\]"/, `${sourcePath} should emit [marketplaces.ruijie-marketplace] for the configured Ruizhi marketplace`);
     assert.match(source, /source=marketplaceSources\[spec\.sourceToken\]/, `${sourcePath} should require a synced offline snapshot before registration`);
     assert.match(source, /fs\.existsSync\(path\.join\(source,"\.agents","plugins","marketplace\.json"\)\)/, `${sourcePath} should only register valid synced marketplaces`);
     assert.match(source, /const existing(?:Ruizhi|Codex)Config=fs\.existsSync\(configPath\);\s*const marketplaceSources=syncMarketplaces\(\);/, `${sourcePath} should preserve first-launch detection before creating config.toml`);
-    assert.match(source, /syncManagedMarketplaceConfig\(marketplaceSources\);\s*syncRuijieProviderConfig\(\);\s*syncInstalledOpenAIBundledPluginCache\(\);/, `${sourcePath} should patch provider config before plugin UI reads config`);
+    assert.match(source, /syncManagedMarketplaceConfig\(marketplaceSources\);\s*syncManagedMarketplacePluginInstall\(marketplaceSources\);\s*syncRuijieProviderConfig\(\);\s*syncInstalledOpenAIBundledPluginCache\(\);/, `${sourcePath} should install managed marketplace plugins before plugin UI reads config`);
+    assert.match(source, /function syncManagedMarketplacePluginInstall\(marketplaceSources\)/, `${sourcePath} should install configured marketplace plugins at startup`);
+    assert.match(source, /const cacheRoot=path\.join\(codexHome,"plugins","cache",spec\.name\)/, `${sourcePath} should cache managed marketplace plugins under the Ruizhi runtime home`);
+    assert.doesNotMatch(source, /path\.join\(home,"\.codex","plugins","cache",spec\.name\)/, `${sourcePath} should not cache managed marketplace plugins under the default Codex home`);
+    assert.match(source, /copyManagedPluginCacheFiles\(sourceRoot,path\.join\(cacheRoot,plugin\.name,version\)\)/, `${sourcePath} should install each managed plugin version into the plugin cache`);
+    assert.match(source, /"\[plugins\."\+tomlString\(pluginName\+"\@"\+marketplaceName\)\+"\]"/, `${sourcePath} should emit plugin install tables for managed marketplaces`);
+    assert.match(source, /"enabled = true"/, `${sourcePath} should enable newly installed managed marketplace plugins`);
+    assert.match(source, /if\(!findTomlTable\(tomlLines\(next\),"\["\+tableName\+"\]"\)\)/, `${sourcePath} should not overwrite existing per-plugin user settings`);
+    assert.match(source, /isPathInside\(marketplaceRoot,sourceRoot\)/, `${sourcePath} should reject plugin source paths that escape the synced marketplace`);
   }
+});
+
+test("packaging keeps local plugins and skills visible when remote catalogs fail", async () => {
+  for (const sourcePath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = readProjectFile(sourcePath);
+    assert.match(source, /patchPluginSkillLocalListFallback/, `${sourcePath} should patch plugin and skill list fallbacks`);
+  }
+
+  const overrideSource = readProjectFile("scripts/windows-asar-overrides.mjs");
+  assert.match(overrideSource, /function ruizhiLocalPluginMarketplaces/, "fallback should read installed plugin cache");
+  assert.match(overrideSource, /plugins`,`cache/, "fallback should load plugins from CODEX_HOME plugins/cache");
+  assert.match(overrideSource, /ruizhiReadLocalPluginConfigEnabledMap/, "fallback should preserve local plugin enabled state");
+  assert.match(overrideSource, /ruizhiMergeLocalPluginMarketplaces/, "successful remote plugin responses should merge local installed plugins");
+  assert.match(overrideSource, /remoteMarketplaces/, "fallback should keep remote marketplace entries when available");
+  assert.match(overrideSource, /using local skills only/, "recommended skill failures should not block installed local skills");
+  assert.match(overrideSource, /return\{skills:\[\],repositories:\[\],sections:\[\]\}/, "skill recommendation failure should return a valid empty response");
+
+  const { patchPluginSkillLocalListFallbackSource } = await import("../scripts/windows-asar-overrides.mjs");
+  const mainBundle = readProjectFile("docs/app-asar-analysis/26.707.31428/extracted-source/.vite/build/main-CH17cjbj.js");
+  const patched = patchPluginSkillLocalListFallbackSource(mainBundle);
+  assert.notEqual(patched, mainBundle, "main bundle sample should receive the plugin/skill fallback patch");
+  assert.match(patched, /ruizhiLocalPluginMarketplaces/, "patched main bundle should include local plugin reader");
+  assert.match(patched, /ruizhiMergeLocalPluginMarketplaces\(\{codexHome:/, "patched plugin list should merge local and remote plugins");
+  assert.match(patched, /using local skills only/, "patched skills handler should swallow remote recommendation failures");
+});
+
+test("macOS packaging avoids provenance-blocked Resource directory creation", () => {
+  const source = readProjectFile("scripts/build-macos.mjs");
+  assert.match(source, /execLogged\("ditto", \["--norsrc", sourceAppRoot, appOutRoot\]\)/, "macOS packaging should avoid copying source app xattrs into dist");
+
+  const copyIndex = source.indexOf('execLogged("ditto", ["--norsrc", sourceAppRoot, appOutRoot])');
+  const runtimeIndex = source.indexOf("copyRuntimeOverrides();", copyIndex);
+  const marketplaceIndex = source.indexOf("copyPluginMarketplaces();", copyIndex);
+  const plistIndex = source.indexOf("patchInfoPlist();", copyIndex);
+  const helperIndex = source.indexOf("buildImageGenHelper();", copyIndex);
+
+  assert.ok(copyIndex >= 0, "macOS build should copy the source app with ditto");
+  assert.ok(runtimeIndex > copyIndex && runtimeIndex < plistIndex, "runtime override directories should be created before plist edits can make the bundle provenance-protected");
+  assert.ok(marketplaceIndex > copyIndex && marketplaceIndex < plistIndex, "marketplace directories should be created before plist edits can make the bundle provenance-protected");
+  assert.ok(helperIndex > runtimeIndex, "Go helper build should happen after runtime Resource directories already exist");
 });

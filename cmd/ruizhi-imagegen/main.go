@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	defaultBaseURL      = "https://uniapi.ruijie.com.cn/v1"
+	defaultBaseURL      = "https://gptauth.ruijie.com.cn/v1"
 	defaultModel        = "gpt-image-2"
 	defaultSize         = "auto"
 	defaultQuality      = "medium"

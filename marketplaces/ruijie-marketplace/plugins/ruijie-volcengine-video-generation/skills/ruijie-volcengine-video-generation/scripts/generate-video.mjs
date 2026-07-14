@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const DEFAULT_BASE_URL = "https://uniapi.ruijie.com.cn/v1";
+const DEFAULT_BASE_URL = "https://gptauth.ruijie.com.cn/v1";
 const DEFAULT_MODEL = "doubao-seedance-2-0-260128";
 const DEFAULT_DURATION = 10;
 const DEFAULT_RATIO = "16:9";

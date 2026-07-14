@@ -124,4 +124,6 @@ node -e "const m=require('./dist/ruizhi-latest-macos-arm64.json'); console.log(m
 - 没有配置 `MACOS_CODESIGN_IDENTITY`、Developer ID 和 notarization secrets 时，产物是 ad-hoc 签名，适合内部验证，不等同于正式公证发布包。
 - 如果再次出现 `Cannot find package 'fs-extra'`，先检查 `node_modules` 符号链接和 `/tmp/ruizhi-build-deps` 是否仍存在。
 - 如果再次出现 `.work/macos` 创建失败，先检查 `/tmp/ruizhi-macos-work` 是否仍存在。
+- 如果再次出现 `spawnSync go ENOENT` 或 `go` 不在 `PATH`，按 `docs/build/skills/rj-codex-macos-arm64/SKILL.md` 的「Go 工具链准备」节临时下载 Go 到 `/tmp/ruizhi-go`，然后用 `PATH="/tmp/ruizhi-go/go/bin:$PATH"` 重跑打包；不要硬编码系统 Go 路径。
+- 来源应用主程序名不要假设为 `Codex`。用 `Info.plist` 的 `CFBundleExecutable` 定位；新版 `/Applications/Codex.app` 可能是 `Contents/MacOS/ChatGPT`。
 - 提交代码时不要把 `dist/` 产物纳入 Git，除非发布流程明确要求。

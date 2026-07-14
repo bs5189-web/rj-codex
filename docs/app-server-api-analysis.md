@@ -111,7 +111,7 @@ NODE
 
 ## 锐智本地 Responses Bridge
 
-该 bridge 在 Electron 启动时由 `startRuizhiResponsesBridge()` 启动，默认监听 `127.0.0.1:17888`，返回给 Codex provider 的 base URL 是 `http://127.0.0.1:17888/v1`。上游地址来自 `config/rj-codex.json` 的 `openai.baseUrl`，当前为 `https://uniapi.ruijie.com.cn/v1`。
+该 bridge 在 Electron 启动时由 `startRuizhiResponsesBridge()` 启动，默认监听 `127.0.0.1:17888`，返回给 Codex provider 的 base URL 是 `http://127.0.0.1:17888/v1`。上游地址来自 `config/rj-codex.json` 的 `openai.baseUrl`，当前为 `https://gptauth.ruijie.com.cn/v1`。
 
 | HTTP 接口 | 参数 | 返回值 | 说明 |
 | --- | --- | --- | --- |
@@ -165,5 +165,5 @@ macOS 当前只注册 `auth.get/getCached`、`update.*` 和 `enhance.call`；`se
 
 - app-server JSON-RPC 协议由 `resources/codex` 或 Windows 的 `resources/codex.exe` 实现；本仓库没有 Rust 源码，参数和返回结构以当前二进制导出的 TS/JSON Schema 为准。
 - `.work/app-server-api/ts` 和 `.work/app-server-api/schema` 是本次分析临时生成的协议定义，不需要提交；需要时可用上面的命令重新生成。
-- `resources/bridge/ruizhi-responses-bridge.cjs` 是锐智本地模型协议转换服务，不是官方 app-server；它对外暴露 HTTP `/v1/*`，对上游调用 `https://uniapi.ruijie.com.cn/v1/responses` 或 `/chat/completions`。
+- `resources/bridge/ruizhi-responses-bridge.cjs` 是锐智本地模型协议转换服务，不是官方 app-server；它对外暴露 HTTP `/v1/*`，对上游调用 `https://gptauth.ruijie.com.cn/v1/responses` 或 `/chat/completions`。
 - `ruizhiDesktop.*` IPC 是桌面覆盖层 API，主要服务登录、更新、VC runtime、页面增强，不走 app-server JSON-RPC。

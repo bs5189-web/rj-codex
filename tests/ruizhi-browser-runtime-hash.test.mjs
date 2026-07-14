@@ -83,3 +83,30 @@ test("patchBrowserNativePipePeerAuthorizationSource disables packaged macOS peer
   assert.doesNotMatch(patched, /s\.authorizeSocketPeer/);
   assert.match(patched, /function LI\(e\)/);
 });
+
+test("patchBrowserUseIabOpenStabilitySource promotes reused Browser Use tabs", () => {
+  assert.equal(typeof windowsOverrides.patchBrowserUseIabOpenStabilitySource, "function");
+
+  const source = [
+    "var TI=n.xl({feature_status:n.Cl(n.wl(),n.ml())}),EI=r.a(`browser-sidebar-comment-mode-site-status`),DI=1440*60*1e3,OI=`agent`,kI={desktopOriginator:mu,devApiBaseUrl:pu,prodApiBaseUrl:fu};",
+    "function AI({appServerClient:e,desktopApiOptions:t=kI,now:n=Date.now}){async function l(e){let n=NI(e),r=await u(!1),i=await c.net.fetch(R_(t,n),{method:`GET`,headers:r});return i.status===401&&(r=await u(!0),i=await c.net.fetch(R_(t,n),{method:`GET`,headers:r})),i.ok?TI.parse(JSON.parse(await i.text())):(EI().warning(`browser sidebar comment mode site status request failed`,{safe:{status:i.status},sensitive:{}}),null)}return{}}",
+    "function yQ({browserSessionRegistry:e,browserTabId:t,conversationId:r,options:{isBrowserUseTab:i=!1}={},tabBudget:a,windowManager:o,windows:s,windowState:c}){let l=gQ(c,r,t),u=OL({browserTabId:l,conversationId:r}),d=c.threads.get(u);if(d!=null)return d;let f=bQ({browserTabId:l,conversationId:r,isBrowserUsePage:i});return a.markTabActivity(f),c.threads.set(u,f),sQ(e,o,s,c,f),f}",
+  ].join("");
+
+  const patched = windowsOverrides.patchBrowserUseIabOpenStabilitySource(source);
+
+  assert.notEqual(patched, source);
+  assert.match(patched, /ruizhiBrowserUseIabPromoteExistingTab/);
+  assert.match(patched, /if\(d!=null\)return ruizhiBrowserUseIabPromoteExistingTab\(d,i\);/);
+  assert.match(patched, /ruizhiParseBrowserSidebarCommentModeStatus\(TI,EI,await i\.text\(\)\)/);
+  assert.doesNotMatch(patched, /JSON\.parse\(await i\.text\(\)\)/);
+});
+
+test("patchBrowserUseIabOpenStabilitySource is idempotent", () => {
+  const source = [
+    "function ruizhiBrowserUseIabPromoteExistingTab(e,t){return e}",
+    "function ruizhiParseBrowserSidebarCommentModeStatus(e,t,n){return null}",
+  ].join("");
+
+  assert.equal(windowsOverrides.patchBrowserUseIabOpenStabilitySource(source), source);
+});

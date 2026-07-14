@@ -361,7 +361,7 @@ statsig.logEvent(eventName, metadata)
 
 | 类型 | 端点 | 配置来源 | 作用 |
 | --- | --- | --- | --- |
-| 模型/API provider | `https://uniapi.ruijie.com.cn/v1` | `config/rj-codex.json` 的 `openai.baseUrl` | 模型请求、Responses/Chat Completions 代理。 |
+| 模型/API provider | `https://gptauth.ruijie.com.cn/v1` | `config/rj-codex.json` 的 `openai.baseUrl` | 模型请求、Responses/Chat Completions 代理。 |
 | Statsig | `https://ab.chatgpt.com/v1` | 前端 bundle 硬编码 | 实验和 feature gate。 |
 | CES analytics | `https://chatgpt.com/ces/v1` | 前端 bundle 硬编码 | 产品事件和结构化埋点。 |
 
@@ -400,4 +400,4 @@ statsig.logEvent(eventName, metadata)
 - 如果模型调用正常，只是启动日志报错，可以先归类为“官方实验/埋点网络不可达”。
 - 如果某个 UI 功能依赖远端 gate，检查该 gate 是否已被本地 patch 或是否需要新增默认值。
 - 如果要面向内网发行，优先在构建脚本中显式禁用或替换这些 endpoint，避免每次启动等待 10 秒超时。
-- 不要把这两个接口和 `uniapi.ruijie.com.cn/v1` 混为一谈；后者是模型请求链路。
+- 不要把这两个接口和 `gptauth.ruijie.com.cn/v1` 混为一谈；后者是模型请求链路。

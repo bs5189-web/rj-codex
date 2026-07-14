@@ -1,6 +1,6 @@
 {
   "productName": "锐智",
-  "version": "0.3.130",
+  "version": "0.3.144",
   "locale": "zh-CN",
   "windows": {
     "sourceAppRoot": "vendor/codex-desktop/windows/current/app",
@@ -35,10 +35,10 @@
     "macosDownloadUrl": "/updates/macos/ruizhi-latest-macos.json"
   },
   "openai": {
-    "baseUrl": "https://uniapi.ruijie.com.cn/v1",
+    "baseUrl": "https://gptauth.ruijie.com.cn/v1",
     "providerBaseUrl": "https://gptauth.ruijie.com.cn/v1",
     "chatGptLoginBaseUrl": "https://gptauth.ruijie.com.cn",
-    "tokenUrl": "https://uniapi.ruijie.com.cn/console/token",
+    "tokenUrl": "https://gptauth.ruijie.com.cn/console/token",
     "defaultModel": "ray",
     "defaultReasoningEffort": "medium",
     "requestMaxRetries": 0,
@@ -338,7 +338,7 @@
         "source": "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git",
         "ref": "main",
         "fallbackToLocal": true,
-        "autoUpgrade": false
+        "autoUpgrade": true
       }
     }
   ],

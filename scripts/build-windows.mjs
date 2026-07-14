@@ -15,6 +15,8 @@ import {
   patchWindowsHelpDocumentationLinks,
   patchOpenAIBundledPluginDescriptions,
   patchBrowserNativePipeDiagnostics,
+  patchBrowserUseIabOpenStability,
+  patchPluginSkillLocalListFallback,
   patchTrustedBrowserClientHashes,
   refreshWindowsAsarBuildMetadata,
   validateRuizhiRuntimeBundle,
@@ -1187,6 +1189,7 @@ function ruizhiInit(){
     }
     function applyRuizhiModelCatalogCompatibilityPatches(catalog){
       if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models))return catalog;
+      catalog.models=catalog.models.filter(model=>!isNonChatModelCatalogEntry(model));
       const guidance="\\n\\n## Codex Desktop Plugin Control\\n- When the user invokes \`[@浏览器]\` or \`plugin://browser@openai-bundled\`, use the Browser plugin's trusted runtime through the \`mcp__node_repl__js\` tool and select the \`iab\` browser. Do not use \`exec_command\`, \`node -e\`, standalone Playwright, or a system browser for this plugin.\\n- Browser plugin native-pipe authorization depends on Codex turn metadata in \`nodeRepl.requestMeta\`; a separate shell process cannot provide the required \`session_id\` / \`turn_id\` and will fail as not trusted.";
       const append=value=>{
         if(typeof value!=="string"||value.length===0)return value;
@@ -1216,6 +1219,11 @@ function ruizhiInit(){
         }
       }
       return catalog;
+    }
+    function isNonChatModelCatalogEntry(model){
+      const id=[model?.slug,model?.id,model?.name,model?.display_name,model?.displayName].map(value=>String(value??"").trim().toLowerCase()).filter(Boolean).join(" ");
+      if(!id)return false;
+      return /(^|[\\s/_-])(?:gpt-)?image\\d*(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])dall-e(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])(?:text-)?embedding(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])(?:realtime|rerank|reranker)(?=$|[\\s/_-])/.test(id);
     }
     function normalizeModelCatalogFile(filePath){
       const catalog=validateModelCatalogFile(filePath);
@@ -1348,7 +1356,7 @@ function ruizhiInit(){
     }
     function marketplaceConfigBlock(spec,source){
       const online=spec.online;
-      if(online&&online.source){
+      if(online&&online.source&&online.autoUpgrade===true){
         const lines=[
           "[marketplaces."+spec.name+"]",
           "source_type = "+tomlString("git"),
@@ -1566,6 +1574,86 @@ function ruizhiInit(){
         }
       }
     }
+    function readMarketplaceManifest(root){
+      const manifestPath=path.join(root,".agents","plugins","marketplace.json");
+      if(!fs.existsSync(manifestPath))return null;
+      const manifest=JSON.parse(fs.readFileSync(manifestPath,"utf8"));
+      return Array.isArray(manifest.plugins)?manifest:null;
+    }
+    function isPathInside(root,candidate){
+      const base=path.resolve(root);
+      const target=path.resolve(candidate);
+      const normalizedBase=process.platform==="win32"?base.toLowerCase():base;
+      const normalizedTarget=process.platform==="win32"?target.toLowerCase():target;
+      return normalizedTarget===normalizedBase||normalizedTarget.startsWith(normalizedBase+path.sep);
+    }
+    function pluginSourceRoot(marketplaceRoot,plugin){
+      const sourcePath=plugin&&plugin.source&&typeof plugin.source.path==="string"?plugin.source.path:null;
+      if(!sourcePath)return null;
+      const sourceRoot=path.resolve(marketplaceRoot,sourcePath);
+      return isPathInside(marketplaceRoot,sourceRoot)?sourceRoot:null;
+    }
+    function copyManagedPluginCacheFiles(sourceRoot,targetRoot){
+      const stagingRoot=targetRoot+".staging-"+process.pid+"-"+Date.now();
+      fs.rmSync(stagingRoot,{recursive:true,force:true});
+      try{
+        fs.mkdirSync(path.dirname(stagingRoot),{recursive:true});
+        fs.cpSync(sourceRoot,stagingRoot,{recursive:true,force:true});
+        fs.rmSync(targetRoot,{recursive:true,force:true});
+        fs.renameSync(stagingRoot,targetRoot);
+      }catch(error){
+        fs.rmSync(stagingRoot,{recursive:true,force:true});
+        throw error;
+      }
+    }
+    function managedMarketplacePluginConfigBlock(marketplaceName,pluginName){
+      return [
+        "[plugins."+tomlString(pluginName+"@"+marketplaceName)+"]",
+        "enabled = true",
+        ""
+      ].join("\\n");
+    }
+    function syncManagedMarketplacePluginInstall(marketplaceSources){
+      const specs=managedMarketplaceSpecs();
+      if(specs.length===0)return;
+      const configPath=path.join(codexHome,"config.toml");
+      let next=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+      let changed=false;
+      for(const spec of specs){
+        const marketplaceRoot=marketplaceSources[spec.sourceToken];
+        if(!marketplaceRoot)continue;
+        let manifest=null;
+        try{
+          manifest=readMarketplaceManifest(marketplaceRoot);
+        }catch(error){
+          console.error("ruizhi managed marketplace manifest read failed",spec.name,error);
+          continue;
+        }
+        if(!manifest)continue;
+        const cacheRoot=path.join(codexHome,"plugins","cache",spec.name);
+        for(const plugin of manifest.plugins){
+          if(!plugin||typeof plugin.name!=="string"||plugin.name.length===0)continue;
+          try{
+            const sourceRoot=pluginSourceRoot(marketplaceRoot,plugin);
+            if(!sourceRoot)continue;
+            const version=readPluginVersion(sourceRoot);
+            if(!version)continue;
+            copyManagedPluginCacheFiles(sourceRoot,path.join(cacheRoot,plugin.name,version));
+            const tableName="plugins."+tomlString(plugin.name+"@"+spec.name);
+            if(!findTomlTable(tomlLines(next),"["+tableName+"]")){
+              const updated=upsertTomlTable(next,tableName,managedMarketplacePluginConfigBlock(spec.name,plugin.name));
+              if(updated!==next){next=updated;changed=true;}
+            }
+          }catch(error){
+            console.error("ruizhi managed marketplace plugin install failed",spec.name,plugin.name,error);
+          }
+        }
+      }
+      if(changed){
+        fs.mkdirSync(path.dirname(configPath),{recursive:true});
+        fs.writeFileSync(configPath,next,"utf8");
+      }
+    }
     function marketplaceRoot(name,marketplaceSources){
       const spec=marketplaceSpecs.find(item=>item.name===name);
       return spec?marketplaceSources[spec.sourceToken]:null;
@@ -1630,6 +1718,7 @@ function ruizhiInit(){
     const existingRuizhiConfig=fs.existsSync(configPath);
     const marketplaceSources=syncMarketplaces();
     syncManagedMarketplaceConfig(marketplaceSources);
+    syncManagedMarketplacePluginInstall(marketplaceSources);
     syncRuijieProviderConfig();
     syncInstalledOpenAIBundledPluginCache();
     syncExecPolicyRules(marketplaceSources);
@@ -2923,9 +3012,11 @@ function applyLegacyAsarPatches() {
   patchNativeProfileVisibility();
   patchNativeProfileUsageFallback();
   patchNativeProfileApiCallLogging();
+  patchPluginSkillLocalListFallback(extractedDir, { log });
   patchNativeBrowserDesktopFeatureAvailability();
   patchChatGptAuthExternalBrowser();
   patchBrowserNativePipeDiagnostics(extractedDir, { log });
+  patchBrowserUseIabOpenStability(extractedDir, { log });
   patchTrustedBrowserClientHashes(extractedDir, path.join(appOutRoot, "resources"), { log });
   patchWebviewLocales();
   patchPackageMetadata();

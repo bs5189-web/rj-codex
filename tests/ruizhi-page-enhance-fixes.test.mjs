@@ -34,7 +34,7 @@ function compareVersions(left, right) {
 test("Windows release version advances past the pre-plugin-menu installer", () => {
   const config = JSON.parse(read("config/rj-codex.json"));
 
-  assert.equal(config.version, "0.3.130");
+  assert.equal(config.version, "0.3.144");
   assert.ok(
     compareVersions(config.version, "0.2.2") > 0,
     "Windows installer version must advance so machines with the old 0.2.2 package receive the native Plugins menu patch",
@@ -397,6 +397,37 @@ test("macOS application menu keeps native Settings and Automations actions visib
   assert.match(source, /[mr]\(e,i\)/);
   assert.match(source, /visible=!0/);
   assert.match(source, /enabled=!0/);
+});
+
+test("application menu hides library and pull request entries and opens Ruizhi account auth", () => {
+  for (const scriptPath of [
+    "scripts/windows-asar-overrides.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /"Account":"账户"/, `${scriptPath} should localize Account`);
+    assert.match(source, /"Library":"资料库"/, `${scriptPath} should know the Library label before hiding it`);
+    assert.match(source, /"Pull Requests":"拉取请求"/, `${scriptPath} should know the Pull Requests label before hiding it`);
+    assert.match(source, /Library\|Libraries\|资料库\|Pull Request\|Pull Requests\|拉取请求/, `${scriptPath} should hide Library and Pull Requests menu entries`);
+    assert.match(source, /visible=!1/, `${scriptPath} should hide retired menu entries`);
+    assert.match(source, /enabled=!1/, `${scriptPath} should disable retired menu entries`);
+    assert.match(source, /gptauth\.ruijie\.com\.cn\//, `${scriptPath} should open the Ruizhi account auth URL`);
+    assert.match(source, /openExternal/, `${scriptPath} should use the system browser for Account`);
+    assert.match(source, /shell:/, `${scriptPath} should pass Electron shell into the menu helper`);
+  }
+});
+
+test("packaging routes ChatGPT account settings links to Ruizhi auth", () => {
+  for (const scriptPath of [
+    "scripts/windows-asar-overrides.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /chatgpt\\.com\\\/#settings/, `${scriptPath} should patch ChatGPT account settings links`);
+    assert.match(source, /open-security-settings/, `${scriptPath} should patch ChatGPT security settings links`);
+    assert.match(source, /gptauth\.ruijie\.com\.cn\//, `${scriptPath} should route account settings to Ruizhi auth`);
+    assert.match(source, /已补丁账户设置链接/, `${scriptPath} should log the account-settings link patch`);
+  }
 });
 
 test("macOS application menu patch tolerates main bundle minifier alias changes", () => {

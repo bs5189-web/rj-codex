@@ -2689,6 +2689,41 @@ function copyUpdaterRuntimeDependencies() {
   log("已内置 electron-updater 运行时依赖");
 }
 
+function patchAppProtocolAsarFileLoading() {
+  const buildDir = path.join(extractedDir, ".vite", "build");
+  const candidates = fs.readdirSync(buildDir)
+    .filter((name) => /\.js$/.test(name))
+    .map((name) => path.join(buildDir, name))
+    .filter((filePath) => {
+      const source = fs.readFileSync(filePath, "utf8");
+      return source.includes("protocol.handle(`app`") && source.includes("pathToFileURL");
+    });
+
+  if (candidates.length === 0) {
+    throw new Error("找不到 app:// 协议处理 bundle");
+  }
+
+  let patched = 0;
+  for (const filePath of candidates) {
+    writePatchedFileIfChanged(filePath, (source) => {
+      const pattern = /return ([A-Za-z_$][\w$]*)\?([A-Za-z_$][\w$]*)\(\1\)\?([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\1\):process\.platform===`win32`\?([A-Za-z_$][\w$]*)\.net\.fetch\(\(0,([A-Za-z_$][\w$]*)\.pathToFileURL\)\(\1\)\.toString\(\)\):([A-Za-z_$][\w$]*)\(\1\):new Response\(null,\{status:404,statusText:`Not Found`\}\)/;
+      if (!pattern.test(source)) {
+        return source;
+      }
+      patched += 1;
+      return source.replace(
+        pattern,
+        "return $1?$2($1)?$3($4,$1):$5.net.fetch((0,$6.pathToFileURL)($1).toString()):new Response(null,{status:404,statusText:`Not Found`})"
+      );
+    });
+  }
+
+  if (patched === 0) {
+    throw new Error("补丁点不存在：app:// 协议普通文件加载切换为 net.fetch");
+  }
+  log(`已补丁 app:// asar 文件加载：${patched} 个文件`);
+}
+
 function patchBootstrap() {
   const buildDir = path.join(extractedDir, ".vite", "build");
   const bootstrapCandidates = fs.readdirSync(buildDir)
@@ -2780,6 +2815,7 @@ async function repackAppAsar() {
   patchAccountSettingsLinks();
   patchHelpDocumentationLinks();
   copyUpdaterRuntimeDependencies();
+  patchAppProtocolAsarFileLoading();
   patchBootstrap();
   patchPreloadIntegration();
 

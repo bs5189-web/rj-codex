@@ -6,7 +6,7 @@
     {
       "slug": "ray",
       "display_name": "ray",
-      "description": "ray；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "ray；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -50,7 +50,7 @@
     {
       "slug": "DeepSeek-V4-Flash",
       "display_name": "origin DeepSeek V4 Flash",
-      "description": "DeepSeek V4 Flash；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "DeepSeek V4 Flash；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -339,7 +339,7 @@
     {
       "slug": "claude-opus-4-7",
       "display_name": "Claude Opus 4.7",
-      "description": "Claude 最新 Opus 大模型；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "Claude 最新 Opus 大模型；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -394,7 +394,7 @@
     {
       "slug": "claude-sonnet-4-6",
       "display_name": "Claude Sonnet 4.6",
-      "description": "Claude 最新 Sonnet 大模型；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "Claude 最新 Sonnet 大模型；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -449,7 +449,7 @@
     {
       "slug": "glm-5.1",
       "display_name": "GLM-5.2",
-      "description": "智谱 GLM 5.2；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "智谱 GLM 5.2；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -504,7 +504,7 @@
     {
       "slug": "kimi-k2.6",
       "display_name": "Kimi K2.6",
-      "description": "Kimi K2.6；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "Kimi K2.6；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -559,7 +559,7 @@
     {
       "slug": "MiniMax/MiniMax-M2.7",
       "display_name": "MiniMax M2.7",
-      "description": "MiniMax M2.7；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "MiniMax M2.7；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -614,7 +614,7 @@
     {
       "slug": "deepseek-v4-pro",
       "display_name": "origin-DeepSeek V4 Pro",
-      "description": "DeepSeek V4 Pro；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "DeepSeek V4 Pro；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "medium",
       "supported_reasoning_levels": [
         {
@@ -667,7 +667,7 @@
     {
       "slug": "deepseek-v4-flash-maxthink",
       "display_name": "DeepSeek V4 Flash MaxThink",
-      "description": "DeepSeek V4 Flash MaxThink；UniAPI /v1/chat/completions 实测可用，经锐智 bridge 转换为 Responses。",
+      "description": "DeepSeek V4 Flash MaxThink；UniAPI /v1/chat/completions 实测可用，经锐捷 bridge 转换为 Responses。",
       "default_reasoning_level": "high",
       "supported_reasoning_levels": [
         {

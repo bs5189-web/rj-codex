@@ -1,11 +1,11 @@
 ---
 name: rj-codex-macos-arm64
-description: Build, verify, document, or troubleshoot the rj-codex macOS Apple Silicon/arm64 desktop package from /Applications/Codex.app with scripts/build-macos.mjs. Use for requests such as 打包 mac arm, macOS arm64 release, generating DMG/ZIP/update manifests, checking arm64/codesign output, fixing repeated go/ruizhi-imagegen build failures, verifying 锐智 onboarding copy, or keeping dist artifacts out of commits.
+description: Build, verify, document, or troubleshoot the rj-codex macOS Apple Silicon/arm64 desktop package from /Applications/Codex.app with scripts/build-macos.mjs. Use for requests such as 打包 mac arm, macOS arm64 release, generating DMG/ZIP/update manifests, checking arm64/codesign output, fixing repeated go/ruizhi-imagegen build failures, verifying 锐捷 onboarding copy, or keeping dist artifacts out of commits.
 ---
 
 # rj-codex macOS arm64 打包
 
-用于在本项目为锐智桌面端生成 macOS Apple Silicon/arm64 包并验证产物。默认不要提交 `dist/` 产物，除非用户明确要求。
+用于在本项目为锐捷桌面端生成 macOS Apple Silicon/arm64 包并验证产物。默认不要提交 `dist/` 产物，除非用户明确要求。
 
 ## 先决检查
 
@@ -109,7 +109,7 @@ PATH="/tmp/ruizhi-go/go/bin:$PATH" CODEX_APP_ROOT=/Applications/Codex.app RUIZHI
 ## 脚本主要动作
 
 - 清理并重建 `dist/macos` 与 `.work/macos`。
-- 从 `CODEX_APP_ROOT` 或 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐智.app`。
+- 从 `CODEX_APP_ROOT` 或 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐捷Codex.app`。
 - 更新 `Info.plist` 元数据：显示名、Bundle ID、版本号等。
 - 校验 app 主程序 Mach-O 架构包含 `arm64`。
 - 编译并内置 `ruizhi-imagegen`。
@@ -138,7 +138,7 @@ PATH="/tmp/ruizhi-go/go/bin:$PATH" CODEX_APP_ROOT=/Applications/Codex.app RUIZHI
 构建完成后运行：
 
 ```bash
-APP="$PWD/dist/macos/锐智.app"
+APP="$PWD/dist/macos/锐捷Codex.app"
 EXE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")
 EXE="$APP/Contents/MacOS/$EXE_NAME"
 
@@ -157,7 +157,7 @@ node -e "const m=require('./dist/ruizhi-latest-macos-arm64.json'); console.log(m
 判断标准：
 
 - `file "$EXE"` 输出包含 `Mach-O 64-bit executable arm64`。
-- `CFBundleDisplayName` 为 `锐智`。
+- `CFBundleDisplayName` 为 `锐捷Codex`。
 - `CFBundleIdentifier` 为 `cn.ruizhi.desktop`。
 - `codesign --verify --deep --strict` 退出码为 `0`。
 - `ruizhi-latest-macos-arm64.json` 中 `arch` 为 `arm64`，`macos.fileName` 指向 `Ruizhi-macos-<version>-arm64.zip`。
@@ -172,13 +172,13 @@ node - <<'NODE'
 const asar=require('asar');
 const fs=require('fs');
 const path=require('path');
-const appAsar='dist/macos/锐智.app/Contents/Resources/app.asar';
+const appAsar='dist/macos/锐捷Codex.app/Contents/Resources/app.asar';
 const out='/tmp/ruizhi-built-asar-check';
 fs.rmSync(out,{recursive:true,force:true});
 asar.extractAll(appAsar,out);
 const today=new Date();
 const buildDate=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-const required=['使用锐擎继续',`锐智构建日期：${buildDate}`];
+const required=['使用锐捷继续',`锐捷构建日期：${buildDate}`];
 const forbidden=['使用 ChatGPT 继续','使用ChatGPT继续','所有 ChatGPT 套餐均包含','ChatGPT套餐均包含'];
 let all='';
 function walk(dir){

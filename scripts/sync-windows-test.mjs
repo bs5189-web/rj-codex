@@ -58,7 +58,7 @@ function modelCatalogPath() {
   }
   const resolved = resolveProjectPath(configured);
   if (!fs.existsSync(resolved)) {
-    throw new Error(`锐智模型目录不存在：${resolved}`);
+    throw new Error(`锐捷模型目录不存在：${resolved}`);
   }
   return resolved;
 }

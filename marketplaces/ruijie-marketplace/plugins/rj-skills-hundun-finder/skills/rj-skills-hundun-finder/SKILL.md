@@ -5,7 +5,7 @@ description: 使用远端锐捷 skills 服务的混沌大学能力时调用：�
 
 # 锐捷-混沌大学
 
-这是锐智内置“锐捷插件”提供的 skill。Codex 通过插件的 `skills/rj-skills-hundun-finder` 发现并触发本 skill。
+这是锐捷内置“锐捷插件”提供的 skill。Codex 通过插件的 `skills/rj-skills-hundun-finder` 发现并触发本 skill。
 
 ## 使用方式
 

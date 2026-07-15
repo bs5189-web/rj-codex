@@ -5,7 +5,7 @@ description: Use when building, verifying, documenting, or troubleshooting the r
 
 # rj-codex macOS x64 打包
 
-用于在 `/Users/tom/work/rj/rj-codex` 为锐智桌面端生成 macOS Intel/x86_64 包，并验证产物。默认只把流程和文档提交到 Git；不要提交 `dist/` 产物，除非用户明确要求。
+用于在 `/Users/tom/work/rj/rj-codex` 为锐捷桌面端生成 macOS Intel/x86_64 包，并验证产物。默认只把流程和文档提交到 Git；不要提交 `dist/` 产物，除非用户明确要求。
 
 ## 先决检查
 
@@ -34,7 +34,7 @@ CODEX_APP_ROOT=/Applications/Codex.app RUIZHI_MACOS_ARCH=x64 node ./scripts/buil
 ## 脚本主要动作
 
 - 清理并重建 `dist/macos` 与 `.work/macos`。
-- 从 `CODEX_APP_ROOT` 或 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐智.app`。
+- 从 `CODEX_APP_ROOT` 或 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐捷Codex.app`。
 - 更新 `Info.plist` 元数据：显示名、Bundle ID、版本号等。
 - 用 `lipo -archs` 校验 app 主程序架构。
 - 编译并内置 `ruizhi-imagegen`。
@@ -63,7 +63,7 @@ CODEX_APP_ROOT=/Applications/Codex.app RUIZHI_MACOS_ARCH=x64 node ./scripts/buil
 构建完成后至少运行：
 
 ```bash
-APP="/Users/tom/work/rj/rj-codex/dist/macos/锐智.app"
+APP="/Users/tom/work/rj/rj-codex/dist/macos/锐捷Codex.app"
 EXE="$APP/Contents/MacOS/Codex"
 
 lipo -archs "$EXE"
@@ -77,7 +77,7 @@ node -e "const m=require('./dist/ruizhi-latest-macos-x64.json'); console.log(m.v
 判断标准：
 
 - `lipo -archs` 输出包含 `x86_64`。
-- `CFBundleDisplayName` 应为 `锐智`。
+- `CFBundleDisplayName` 应为 `锐捷Codex`。
 - `codesign --verify --deep --strict` 退出码为 `0`。
 - `ruizhi-latest-macos-x64.json` 中 `arch` 应为 `x64`，`macos.fileName` 应指向 `Ruizhi-macos-<version>-x64.zip`。
 

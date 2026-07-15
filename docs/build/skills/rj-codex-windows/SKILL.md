@@ -1,11 +1,11 @@
 ---
 name: rj-codex-windows
-description: Use when building, verifying, documenting, or troubleshooting the rj-codex Windows x64 desktop package from the pinned Codex Desktop source with scripts/build-windows.mjs. Applies to requests such as 打包 windows, Windows release, generating NSIS installer/zip/update manifests, checking exe icon/rcedit output, verifying 锐智 onboarding copy, importing the pinned Codex source, or keeping dist artifacts out of commits.
+description: Use when building, verifying, documenting, or troubleshooting the rj-codex Windows x64 desktop package from the pinned Codex Desktop source with scripts/build-windows.mjs. Applies to requests such as 打包 windows, Windows release, generating NSIS installer/zip/update manifests, checking exe icon/rcedit output, verifying 锐捷 onboarding copy, importing the pinned Codex source, or keeping dist artifacts out of commits.
 ---
 
 # rj-codex Windows x64 打包
 
-用于在 Windows 构建机上为锐智桌面端生成 Windows x64 包（NSIS 安装包 + zip + 测试程序），并验证产物。默认只把流程、脚本或文档提交到 Git；不要提交 `dist/`、`.work/` 产物，也不要提交 `vendor/codex-desktop/windows/current/app/`，除非用户明确要求。
+用于在 Windows 构建机上为锐捷桌面端生成 Windows x64 包（NSIS 安装包 + zip + 测试程序），并验证产物。默认只把流程、脚本或文档提交到 Git；不要提交 `dist/`、`.work/` 产物，也不要提交 `vendor/codex-desktop/windows/current/app/`，除非用户明确要求。
 
 ## 先决检查
 
@@ -94,7 +94,7 @@ RUIZHI_BUILD_CODEX=1 node ./scripts/build-windows.mjs
 - 校验运行态产物（模型目录、bridge、环境标记、marketplace）。
 - 用 PowerShell `Compress-Archive` 生成 zip。
 - 复制到 `dist/test-app-<version>`，写入测试环境标记。
-- 用 `electron-builder` 生成 NSIS 安装包与 electron-updater 清单（`latest.yml`），清理旧 `锐智.exe` 残留。
+- 用 `electron-builder` 生成 NSIS 安装包与 electron-updater 清单（`latest.yml`），清理旧 `锐捷.exe` 残留。
 - 写入开发环境标记到 `.work/windows-app-out`。
 
 ## 预期产物
@@ -118,7 +118,7 @@ RUIZHI_BUILD_CODEX=1 node ./scripts/build-windows.mjs
 - `.work/windows-installer-input/`（electron-builder 预打包输入）
 - `.work/windows/`（asar 解包与 electron-builder 配置）
 
-文件名规则：主程序保留 `Codex.exe`；快捷方式名称为 `锐智`；任务管理器进程名为 `Codex`；appId 为 `cn.ruizhi.desktop`。
+文件名规则：主程序保留 `Codex.exe`；快捷方式名称为 `锐捷Codex`；任务管理器进程名为 `Codex`；appId 为 `cn.ruizhi.desktop`。
 
 ## 验证流程
 
@@ -156,7 +156,7 @@ Select-String -Path dist\installer\latest.yml -Pattern "^version:"
 如本次涉及欢迎页文案，解包最终 app 的 `app.asar` 验证：
 
 ```powershell
-node -e "const asar=require('asar');const fs=require('fs');const path=require('path');const appAsar='.work/windows-app-out/resources/app.asar';const out=require('os').tmpdir()+'/ruizhi-built-asar-check';fs.rmSync(out,{recursive:true,force:true});asar.extractAll(appAsar,out);const today=new Date();const buildDate=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;const required=['使用锐擎继续',`锐智构建日期：${buildDate}`];const forbidden=['使用 ChatGPT 继续','使用ChatGPT继续','所有 ChatGPT 套餐均包含','ChatGPT套餐均包含'];let all='';function walk(dir){for(const name of fs.readdirSync(dir)){const p=path.join(dir,name);const st=fs.statSync(p);if(st.isDirectory())walk(p);else if(/\.(js|html|json)$/.test(name))all+=fs.readFileSync(p,'utf8')+'\n';'}}walk(path.join(out,'webview'));for(const text of required)console.log(`${text}: ${all.includes(text)?'FOUND':'MISSING'}`);for(const text of forbidden)console.log(`${text}: ${all.includes(text)?'STILL_PRESENT':'absent'}`);"
+node -e "const asar=require('asar');const fs=require('fs');const path=require('path');const appAsar='.work/windows-app-out/resources/app.asar';const out=require('os').tmpdir()+'/ruizhi-built-asar-check';fs.rmSync(out,{recursive:true,force:true});asar.extractAll(appAsar,out);const today=new Date();const buildDate=`${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;const required=['使用锐捷继续',`锐捷构建日期：${buildDate}`];const forbidden=['使用 ChatGPT 继续','使用ChatGPT继续','所有 ChatGPT 套餐均包含','ChatGPT套餐均包含'];let all='';function walk(dir){for(const name of fs.readdirSync(dir)){const p=path.join(dir,name);const st=fs.statSync(p);if(st.isDirectory())walk(p);else if(/\.(js|html|json)$/.test(name))all+=fs.readFileSync(p,'utf8')+'\n';'}}walk(path.join(out,'webview'));for(const text of required)console.log(`${text}: ${all.includes(text)?'FOUND':'MISSING'}`);for(const text of forbidden)console.log(`${text}: ${all.includes(text)?'STILL_PRESENT':'absent'}`);"
 ```
 
 判断标准：必需文案为 `FOUND`，旧文案为 `absent`。
@@ -197,8 +197,8 @@ node -e "const asar=require('asar');const fs=require('fs');const path=require('p
 - 找不到 VC++ 运行库：从 https://aka.ms/vc14/vc_redist.x64.exe 下载 `vc_redist.x64.exe`，放入 `resources/windows/prerequisites/`。
 - Windows asar 覆盖层为空：`overrides/windows-app/asar` 下没有文件时构建失败。先运行 `node ./scripts/export-windows-overrides.mjs` 导出覆盖层（需要先有一次成功构建的补丁后 app.asar，或传入 `--patched-asar=<path>`）。
 - 找不到 `fs-extra` 等依赖：按「依赖准备」节的隔离方案安装依赖，**不要用 `npm ci`**（pnpm workspace 协议不兼容）。
-- 历史产物被占用无法清理：`EPERM`/`EBUSY` 说明旧版锐智/Codex 正在运行，先关闭相关进程后重新构建。
-- 测试程序目录被占用：同上，先关闭正在运行的测试版锐智。
+- 历史产物被占用无法清理：`EPERM`/`EBUSY` 说明旧版锐捷/Codex 正在运行，先关闭相关进程后重新构建。
+- 测试程序目录被占用：同上，先关闭正在运行的测试版锐捷。
 - 推送或提交前：保留 `dist/`、`.work/`、`vendor/codex-desktop/windows/current/app/` 为未跟踪/忽略产物，不要暂存发布包；只暂存文档、脚本或源码变更。
 
 ### rcedit 图标替换

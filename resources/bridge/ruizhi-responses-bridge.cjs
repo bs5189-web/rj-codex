@@ -115,12 +115,12 @@ function bridgeHttpStatus(kind, status) {
 
 function bridgeErrorMessage({ kind, status, attempts, code }) {
   const retryCount = Math.max(0, Number(attempts || 1) - 1);
-  const retryText = retryCount > 0 ? `锐智已重试 ${retryCount} 次仍失败。` : "";
+  const retryText = retryCount > 0 ? `锐捷已重试 ${retryCount} 次仍失败。` : "";
   if (kind === "network") {
     return `故障位置：本机到上游模型服务的网络连接。本机当前无法连接上游模型服务，可能是网络断开、热点不可用、VPN/代理异常或企业网络拦截，${retryText}请恢复网络后重试。错误代码：${code}`;
   }
   if (kind === "bridge") {
-    return `故障位置：锐智本地模型协议转换服务。本地转换服务处理失败，请将错误代码发给我们定位。错误代码：${code}`;
+    return `故障位置：锐捷本地模型协议转换服务。本地转换服务处理失败，请将错误代码发给我们定位。错误代码：${code}`;
   }
   if (status === 429) {
     return `故障位置：上游模型服务。上游模型服务当前请求过多或触发限流，${retryText}请稍后再试，或临时切换其他模型。错误代码：${code}`;
@@ -296,7 +296,7 @@ function failedResponseEvent(id, model, errorBody, options = {}) {
       model,
       error: {
         code: options.codexCode || "invalid_prompt",
-        message: error.message || "锐智本地模型协议转换服务处理失败。",
+        message: error.message || "锐捷本地模型协议转换服务处理失败。",
       },
       metadata: { ruizhi_error_code: error.code || "RZ-BRIDGE-LOCAL" },
     },

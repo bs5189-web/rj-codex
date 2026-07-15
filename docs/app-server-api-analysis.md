@@ -3,19 +3,19 @@
 本文档基于当前仓库里的打包产物与覆盖层分析：
 
 - 实际调用点：`.work/inspect-current-asar/webview/assets/app-server-manager-signals-Csopz8aM.js`
-- 协议类型来源：`dist/锐智.app/Contents/Resources/codex app-server generate-ts --experimental`
-- 锐智本地模型桥：`resources/bridge/ruizhi-responses-bridge.cjs`
-- 锐智页面增强桥：`resources/bridge/ruizhi-enhance-service.cjs`
+- 协议类型来源：`dist/锐捷Codex.app/Contents/Resources/codex app-server generate-ts --experimental`
+- 锐捷本地模型桥：`resources/bridge/ruizhi-responses-bridge.cjs`
+- 锐捷页面增强桥：`resources/bridge/ruizhi-enhance-service.cjs`
 - 桌面 IPC 注入：`scripts/build-windows.mjs`、`scripts/build-macos.mjs`
 
-结论：桌面前端真正调用 Codex app-server 的接口是 JSON-RPC 方法，不是普通 REST。当前 renderer bundle 里直接出现的 `sendRequest(method, params)` app-server 方法共 50 个。锐智另外增加了一个本地 HTTP Responses bridge 和一组 `window.ruizhiDesktop` IPC 接口。
+结论：桌面前端真正调用 Codex app-server 的接口是 JSON-RPC 方法，不是普通 REST。当前 renderer bundle 里直接出现的 `sendRequest(method, params)` app-server 方法共 50 个。锐捷另外增加了一个本地 HTTP Responses bridge 和一组 `window.ruizhiDesktop` IPC 接口。
 
 ## 复现方式
 
 ```bash
 mkdir -p .work/app-server-api/ts .work/app-server-api/schema
-dist/锐智.app/Contents/Resources/codex app-server generate-ts --experimental --out .work/app-server-api/ts
-dist/锐智.app/Contents/Resources/codex app-server generate-json-schema --experimental --out .work/app-server-api/schema
+dist/锐捷Codex.app/Contents/Resources/codex app-server generate-ts --experimental --out .work/app-server-api/ts
+dist/锐捷Codex.app/Contents/Resources/codex app-server generate-json-schema --experimental --out .work/app-server-api/schema
 ```
 
 实际调用的方法可用下面的提取逻辑复核：
@@ -109,7 +109,7 @@ NODE
 - 远程/文件辅助：`fs/createDirectory`、`fs/writeFile`、`fs/watch`、`fs/unwatch`、`gitDiffToRemote`、`remoteControl/status/read`。
 - 登录与反馈：`account/login/start`、`account/login/cancel`、`account/read`、`account/logout`、`feedback/upload`。
 
-## 锐智本地 Responses Bridge
+## 锐捷本地 Responses Bridge
 
 该 bridge 在 Electron 启动时由 `startRuizhiResponsesBridge()` 启动，默认监听 `127.0.0.1:17888`，返回给 Codex provider 的 base URL 是 `http://127.0.0.1:17888/v1`。上游地址来自 `config/rj-codex.json` 的 `openai.baseUrl`，当前为 `https://gptauth.ruijie.com.cn/v1`。
 
@@ -125,9 +125,9 @@ NODE
 
 重试逻辑：上游状态码 `429`、`502`、`503`、`504` 和常见网络错误会重试，默认最多 5 次，每次间隔 5000ms，单次上游超时 300000ms。
 
-## 锐智桌面 IPC 接口
+## 锐捷桌面 IPC 接口
 
-这些接口通过 `window.ruizhiDesktop` 暴露给 renderer，底层是 Electron `ipcRenderer.invoke/sendSync`。它们不是 app-server JSON-RPC，但属于锐智桌面新增的本地 API 面。
+这些接口通过 `window.ruizhiDesktop` 暴露给 renderer，底层是 Electron `ipcRenderer.invoke/sendSync`。它们不是 app-server JSON-RPC，但属于锐捷桌面新增的本地 API 面。
 
 | 前端入口 | IPC channel | 参数 | 返回值 |
 | --- | --- | --- | --- |
@@ -142,7 +142,7 @@ NODE
 
 macOS 当前只注册 `auth.get/getCached`、`update.*` 和 `enhance.call`；`setAndTest`、`resetToLogin`、`runtime.installVcRedist` 是 Windows 覆盖层里的能力。
 
-## 锐智页面增强服务 route
+## 锐捷页面增强服务 route
 
 这些 route 都通过 `ruizhiDesktop.enhance.call(route, payload)` 进入 `resources/bridge/ruizhi-enhance-service.cjs`。
 
@@ -165,5 +165,5 @@ macOS 当前只注册 `auth.get/getCached`、`update.*` 和 `enhance.call`；`se
 
 - app-server JSON-RPC 协议由 `resources/codex` 或 Windows 的 `resources/codex.exe` 实现；本仓库没有 Rust 源码，参数和返回结构以当前二进制导出的 TS/JSON Schema 为准。
 - `.work/app-server-api/ts` 和 `.work/app-server-api/schema` 是本次分析临时生成的协议定义，不需要提交；需要时可用上面的命令重新生成。
-- `resources/bridge/ruizhi-responses-bridge.cjs` 是锐智本地模型协议转换服务，不是官方 app-server；它对外暴露 HTTP `/v1/*`，对上游调用 `https://gptauth.ruijie.com.cn/v1/responses` 或 `/chat/completions`。
+- `resources/bridge/ruizhi-responses-bridge.cjs` 是锐捷本地模型协议转换服务，不是官方 app-server；它对外暴露 HTTP `/v1/*`，对上游调用 `https://gptauth.ruijie.com.cn/v1/responses` 或 `/chat/completions`。
 - `ruizhiDesktop.*` IPC 是桌面覆盖层 API，主要服务登录、更新、VC runtime、页面增强，不走 app-server JSON-RPC。

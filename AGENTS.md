@@ -10,11 +10,11 @@ Fetch details: get_observations([IDs]) | Search: mem-search skill
 Stats: 50 obs (18,799t read) | 180,000t work | 90% savings
 
 ### Jun 5, 2026
-S96 macOS arm64 锐智 version repackaging with 中台酱酒证书.p12 (Jun 5 at 10:09 PM)
+S96 macOS arm64 锐捷 version repackaging with 中台酱酒证书.p12 (Jun 5 at 10:09 PM)
 S95 Task 2 updated to reflect cert generation complete, p12 deferred to user (Jun 5 at 10:09 PM)
 ### Jun 6, 2026
 S99 Codex v0.2.3 V8 Thread Isolation Crash Reproduced - No Resolution Yet (Jun 6 at 2:55 PM)
-S100 验证锐智 app 签名无 hardened runtime flags (Jun 6 at 3:43 PM)
+S100 验证锐捷 app 签名无 hardened runtime flags (Jun 6 at 3:43 PM)
 ### Jun 9, 2026
 S109 Repeated skill install command executed twice with identical results (Jun 9 at 11:03 AM)
 2020 12:01p 🔵 iab browser not available in rj-codex session
@@ -39,7 +39,7 @@ S109 Repeated skill install command executed twice with identical results (Jun 9
 2039 1:24p ✅ User requested Bing search via in-app browser for Codex news
 2040 " 🔵 Codex in-app browser plugin exposes single setupBrowserRuntime entrypoint
 2041 " 🔵 Browser-client fails with "privileged native pipe bridge is not available" outside Codex runtime
-2042 1:31p ✅ Codex welcome page rebranding: ChatGPT references replaced with锐擎/锐智 labels
+2042 1:31p ✅ Codex welcome page rebranding: ChatGPT references replaced with锐擎/锐捷 labels
 2043 " ⚖️ 5-phase execution plan established for Codex rebranding and browser fix
 2044 1:32p 🔵 rj-codex-macos-arm64 build pipeline already includes welcome-page copy patching
 2045 " 🔵 Source-tree scan: welcome copy strings absent, Browser/nativePipe infrastructure present

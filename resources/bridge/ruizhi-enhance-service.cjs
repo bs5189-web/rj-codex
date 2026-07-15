@@ -456,7 +456,7 @@ class StorageAdapter {
     return {
       status: "ok",
       profile: {
-        display_name: os.userInfo().username || "锐智 用户",
+        display_name: os.userInfo().username || "锐捷 用户",
         profile_picture_url: null,
         username: null
       },

@@ -3,7 +3,7 @@
   "productName": "Codex",
   "author": "OpenAI",
   "version": "0.3.130",
-  "description": "锐智桌面端",
+  "description": "锐捷桌面端",
   "main": ".vite/build/bootstrap.js",
   "scripts": {
     "compile": "pnpm exec tsgo -b",

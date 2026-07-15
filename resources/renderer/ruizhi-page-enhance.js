@@ -174,7 +174,7 @@
     const root = document.createElement("div");
     root.id = "ruizhi-page-enhance-menu";
     root.innerHTML = `
-      <button type="button" data-trigger>锐智增强</button>
+      <button type="button" data-trigger>锐捷增强</button>
       <div data-panel>
         <label>插件入口<input type="checkbox" data-feature="pluginEntryUnlock"></label>
         <label>强制安装<input type="checkbox" data-feature="forcePluginInstall"></label>
@@ -688,7 +688,7 @@
       badge.className = "ruizhi-footer-version-badge";
       parent.insertBefore(badge, help.nextSibling);
     }
-    badge.textContent = `锐智 ${displayVersion}`;
+    badge.textContent = `锐捷 ${displayVersion}`;
     badge.dataset.ruizhiFooterVersion = displayVersion;
   }
 

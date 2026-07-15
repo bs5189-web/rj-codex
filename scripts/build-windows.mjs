@@ -129,7 +129,7 @@ function modelCatalogPath() {
   }
   const resolved = resolveProjectPath(configured);
   if (!fs.existsSync(resolved)) {
-    throw new Error(`锐智模型目录不存在：${resolved}`);
+    throw new Error(`锐捷模型目录不存在：${resolved}`);
   }
   return resolved;
 }
@@ -575,6 +575,31 @@ function patchNativeProfileVisibility() {
   log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
 }
 
+function patchNativeUsageSettingsVisibility() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const usageAccessFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible/,
+    "usage settings access bundle"
+  );
+  const source = fs.readFileSync(usageAccessFile, "utf8");
+  if (source.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+    log("已存在 Codex 使用情况设置入口补丁");
+    return;
+  }
+  const usageVisibilityPattern = /(function [A-Za-z_$][\w$]*\(\{authMethod:([A-Za-z_$][\w$]*),plan:[\s\S]{0,1400}?return\{canManageCreditSettings:[A-Za-z_$][\w$]*,isUsageSettingsVisible:)([^}]+)(\}\}function )/;
+  const patched = source.replace(
+    usageVisibilityPattern,
+    "$1($3)||$2===`apikey`/*ruizhiUsageSettingsVisibleForApiKey*/$4"
+  );
+  if (!patched.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+    throw new Error("Codex 使用情况设置入口补丁点不存在");
+  }
+  fs.writeFileSync(usageAccessFile, patched, "utf8");
+  log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
+}
+
 function patchNativeProfileUsageFallback() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileQueriesFile = findOneFileByContent(
@@ -717,8 +742,8 @@ function patchWebviewLocales() {
   }
 
   const replacements = new Map([
-    ["electron.onboarding.login.chatgpt.continue", "使用锐智继续"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐智继续"],
+    ["electron.onboarding.login.chatgpt.continue", "使用锐捷继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐捷继续"],
     ["electron.onboarding.login.includedPlans.welcomeV2", ruizhiBuildDateLabel()]
   ]);
 
@@ -740,7 +765,7 @@ function patchPackageMetadata() {
   packageJson.name = "ruizhi-desktop";
   packageJson.productName = windowsTaskManagerName();
   packageJson.version = appVersion;
-  packageJson.description = "锐智桌面端";
+  packageJson.description = "锐捷桌面端";
   fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
   log("已补丁 package 元数据");
 }
@@ -768,14 +793,29 @@ function templateLiteralValuePattern() {
   return /`((?:\\.|[^`\\])*)`/g;
 }
 
+function shortProductName() {
+  return (config.shortProductName ?? config.productName.replace(/Codex.*$/u, "").trim()) || config.productName;
+}
+
 function replaceBrandInVisibleText(value) {
-  return value.replace(/ChatGPT/g, config.productName).replace(/Codex/g, (match, offset, source) => {
+  const productPrefix = config.productName.replace(/Codex.*$/u, "").trim();
+  return value.replace(/ChatGPT|Codex/g, (match, offset, source) => {
     const before = source.slice(Math.max(0, offset - 16), offset);
-    if (/GPT-[0-9A-Za-z_. -]*$/i.test(before)) {
+    if (match === "Codex" && (/GPT-[0-9A-Za-z_. -]*$/i.test(before) || (productPrefix && before.endsWith(productPrefix)))) {
       return match;
     }
     return config.productName;
   });
+}
+
+function replaceLocalizedVisibleText(id, value) {
+  if (id === "sidebarElectron.productMode.chatGptWork") {
+    return `<chatGpt>${shortProductName()}</chatGpt> <work>工作</work>`;
+  }
+  if (id === "sidebarElectron.productMode.chatGptWork.plainText") {
+    return `${shortProductName()} 工作`;
+  }
+  return replaceBrandInVisibleText(value);
 }
 
 function localeBundlePattern(locale) {
@@ -790,7 +830,7 @@ function loadLocaleMessages(locale) {
   const pattern = /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g;
 
   for (const match of source.matchAll(pattern)) {
-    messages.set(match[1], replaceBrandInVisibleText(match[2]));
+    messages.set(match[1], replaceLocalizedVisibleText(match[1], match[2]));
   }
 
   if (messages.size === 0) {
@@ -809,7 +849,11 @@ function patchTemplateLiteralValues(source, transform) {
 
 function patchLocaleBundleBrandText(localeFile) {
   const original = fs.readFileSync(localeFile, "utf8");
-  const patched = patchTemplateLiteralValues(original, replaceBrandInVisibleText);
+  const patchedMessages = original.replace(
+    /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g,
+    (match, id, value) => `"${id}":\`${replaceLocalizedVisibleText(id, value)}\``
+  );
+  const patched = patchTemplateLiteralValues(patchedMessages, replaceBrandInVisibleText);
   if (patched !== original) {
     fs.writeFileSync(localeFile, patched, "utf8");
   }
@@ -851,7 +895,7 @@ function patchFrontendDefaultMessages() {
       /id:`([^`]+)`,defaultMessage:`((?:\\.|[^`\\])*)`/g,
       (match, id, defaultMessage) => {
         const localized = messages.get(id);
-        const nextMessage = localized ?? replaceBrandInVisibleText(defaultMessage);
+        const nextMessage = localized ?? replaceLocalizedVisibleText(id, defaultMessage);
         if (nextMessage === defaultMessage) {
           return match;
         }
@@ -1276,7 +1320,7 @@ function ruizhiInit(){
     function assertInside(base,target){
       const relative=path.relative(path.resolve(base),path.resolve(target));
       if(!relative||relative.startsWith("..")||path.isAbsolute(relative)){
-        throw new Error("拒绝覆盖锐智目录外的 marketplace："+target);
+        throw new Error("拒绝覆盖锐捷目录外的 marketplace："+target);
       }
     }
     function readMarketplaceVersion(root,spec){
@@ -1829,7 +1873,7 @@ function ruizhiStartBackgroundUpdateCheck(){
   }
   function updateReadyWindow(){
     let win=null,lastVersion="";
-    const html="<html><head><meta charset='utf-8'><style>body{margin:0;font-family:'Microsoft YaHei',sans-serif;background:#101418;color:#f4f7fb;display:flex;align-items:center;justify-content:center;height:100vh}main{width:360px}.title{font-size:18px;font-weight:600;margin-bottom:12px}.message{font-size:13px;color:#b8c2cc;line-height:1.7}.version{color:#fff;font-weight:600}.actions{margin-top:20px;text-align:right}button{border:0;border-radius:8px;background:#43b883;color:#07110c;font-size:13px;font-weight:600;padding:8px 18px;cursor:pointer}button:hover{background:#56d396}</style></head><body><main><div class='title'>锐智更新已就绪</div><div class='message'>新版本 <span id='version' class='version'></span> 已下载，退出锐智后将自动安装。</div><div class='actions'><button id='ok'>知道了</button></div></main><script>document.getElementById('ok').addEventListener('click',()=>window.close());</script></body></html>";
+    const html="<html><head><meta charset='utf-8'><style>body{margin:0;font-family:'Microsoft YaHei',sans-serif;background:#101418;color:#f4f7fb;display:flex;align-items:center;justify-content:center;height:100vh}main{width:360px}.title{font-size:18px;font-weight:600;margin-bottom:12px}.message{font-size:13px;color:#b8c2cc;line-height:1.7}.version{color:#fff;font-weight:600}.actions{margin-top:20px;text-align:right}button{border:0;border-radius:8px;background:#43b883;color:#07110c;font-size:13px;font-weight:600;padding:8px 18px;cursor:pointer}button:hover{background:#56d396}</style></head><body><main><div class='title'>锐捷更新已就绪</div><div class='message'>新版本 <span id='version' class='version'></span> 已下载，退出锐捷后将自动安装。</div><div class='actions'><button id='ok'>知道了</button></div></main><script>document.getElementById('ok').addEventListener('click',()=>window.close());</script></body></html>";
     function applyVersion(){
       if(win==null||win.isDestroyed())return;
       win.webContents.executeJavaScript("(()=>{const v=document.getElementById('version');if(v)v.textContent="+JSON.stringify(lastVersion)+";})()",true).catch(()=>{});
@@ -1838,7 +1882,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       show(version){
         lastVersion=String(version??"");
         if(win==null||win.isDestroyed()){
-          win=new n.BrowserWindow({width:460,height:190,resizable:false,maximizable:false,minimizable:false,alwaysOnTop:false,show:false,title:"锐智更新已就绪",webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true}});
+          win=new n.BrowserWindow({width:460,height:190,resizable:false,maximizable:false,minimizable:false,alwaysOnTop:false,show:false,title:"锐捷更新已就绪",webPreferences:{sandbox:true,nodeIntegration:false,contextIsolation:true}});
           win.setMenu(null);
           win.loadURL("data:text/html;charset=utf-8,"+encodeURIComponent(html)).catch(()=>{});
           win.webContents.once("did-finish-load",applyVersion);
@@ -2931,10 +2975,10 @@ function patchPreloadIntegration() {
       source,
       "\n//# sourceMappingURL=preload.js.map",
       `${preloadIntegrationCode()}\n//# sourceMappingURL=preload.js.map`,
-      "注入锐智 preload bridge"
+      "注入锐捷 preload bridge"
     )
   );
-  log("已补丁 preload 锐智 UI 集成");
+  log("已补丁 preload 锐捷 UI 集成");
 }
 
 function nodeModuleTargetDir(targetNodeModules, packageName) {
@@ -2977,7 +3021,7 @@ function patchBootstrap() {
       next,
       /var v=\{"install-update":`Install Update`,"check-for-updates":`Check for Updates`,quit:`Quit`\};async function y\(e\)\{[\s\S]*?\}\}var b=/,
       `${bootstrapInitCode()}var v={quit:\`Quit\`};async function y(e){await n.dialog.showMessageBox({type:\`error\`,buttons:[v.quit],defaultId:0,cancelId:0,message:\`${'${n.app.getName()}'} failed to start.\`,detail:e instanceof Error?e.message:\`The main desktop app failed during startup.\`,noLink:!0});n.app.quit();return}var b=`,
-      "移除 Codex 官方更新失败入口并注入锐智启动逻辑"
+      "移除 Codex 官方更新失败入口并注入锐捷启动逻辑"
     );
     next = replaceExact(
       next,
@@ -3010,6 +3054,7 @@ function applyLegacyAsarPatches() {
   patchNativeStatsigBootstrap();
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
+  patchNativeUsageSettingsVisibility();
   patchNativeProfileUsageFallback();
   patchNativeProfileApiCallLogging();
   patchPluginSkillLocalListFallback(extractedDir, { log });
@@ -3155,11 +3200,11 @@ function patchCodexHomeSource() {
     find_codex_home_from_env(codex_home_env.as_deref())`
     );
     if (next === source) {
-      throw new Error("补丁点不存在：锐智 home 环境变量解析");
+      throw new Error("补丁点不存在：锐捷 home 环境变量解析");
     }
     return next;
   });
-  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，锐智默认使用 ~/.ruizhi");
+  log("已补丁 Codex home 解析：RUIZHI_HOME 优先，锐捷默认使用 ~/.ruizhi");
 }
 
 function patchCodexBundledModels() {
@@ -3172,7 +3217,7 @@ function patchCodexBundledModels() {
   const raw = fs.readFileSync(sourcePath, "utf8");
   const catalog = JSON.parse(raw);
   if (!Array.isArray(catalog.models) || catalog.models.length === 0) {
-    throw new Error("锐智模型目录为空或格式无效。");
+    throw new Error("锐捷模型目录为空或格式无效。");
   }
   const targetPath = path.join(codexSourceRoot, "codex-rs", "models-manager", "models.json");
   fs.copyFileSync(sourcePath, targetPath);
@@ -3401,7 +3446,7 @@ function buildImageGenHelper() {
   buildGoConsoleExe(
     path.join(appOutRoot, "resources", "bin", imageGenHelperExeName()),
     path.join(projectRoot, "cmd", "ruizhi-imagegen"),
-    "锐智生图工具"
+    "锐捷生图工具"
   );
 }
 
@@ -3475,7 +3520,7 @@ function removeLegacyArtifact(artifactPath, options = {}) {
     fs.rmSync(artifactPath, { force: true, ...options });
   } catch (error) {
     if (error?.code === "EPERM" || error?.code === "EBUSY") {
-      throw new Error(`历史产物被占用，无法清理：${artifactPath}。请先关闭正在运行的旧版锐智/Codex 进程后重新构建。`);
+      throw new Error(`历史产物被占用，无法清理：${artifactPath}。请先关闭正在运行的旧版锐捷/Codex 进程后重新构建。`);
     }
     throw error;
   }
@@ -3484,7 +3529,7 @@ function removeLegacyArtifact(artifactPath, options = {}) {
 function cleanLegacyWindowsArtifacts() {
   const distDir = path.join(projectRoot, "dist");
   const legacyArtifacts = [
-    path.join(distDir, "锐智-Setup.exe"),
+    path.join(distDir, "锐捷Codex-Setup.exe"),
     path.join(distDir, "ruizhi-latest.json"),
     path.join(distDir, "ruizhi-windows.zip"),
     path.join(distDir, windowsZipName())
@@ -3552,7 +3597,7 @@ function createTestApp() {
     cleanDir(testAppOutDir);
   } catch (error) {
     if (error?.code === "EPERM" || error?.code === "EBUSY") {
-      throw new Error(`测试程序目录被占用，无法清理：${testAppOutDir}。请先关闭正在运行的测试版锐智/Codex 进程后重新构建。`);
+      throw new Error(`测试程序目录被占用，无法清理：${testAppOutDir}。请先关闭正在运行的测试版锐捷/Codex 进程后重新构建。`);
     }
     throw error;
   }
@@ -3636,7 +3681,7 @@ function writeNsisInstallerInclude() {
       `  nsExec::Exec \`"$SYSDIR\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -Command "$$target = Join-Path '$INSTDIR' '${exeName}'; if (Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -and $$_.ExecutablePath.Equals($$target, [System.StringComparison]::OrdinalIgnoreCase) }) { exit 0 } else { exit 1 }"\``,
       "  Pop $R0",
       "  ${if} $R0 == 0",
-      `    MessageBox MB_OK|MB_ICONEXCLAMATION "检测到旧版 ${exeName} 正在运行，请先退出锐智后再安装。"`,
+      `    MessageBox MB_OK|MB_ICONEXCLAMATION "检测到旧版 ${exeName} 正在运行，请先退出锐捷后再安装。"`,
       "    Quit",
       "  ${endIf}"
     );
@@ -3648,7 +3693,7 @@ function writeNsisInstallerInclude() {
     lines.push(
       `  Delete "$INSTDIR\\${exeName}"`,
       `  IfFileExists "$INSTDIR\\${exeName}" 0 +3`,
-      `  MessageBox MB_OK|MB_ICONEXCLAMATION "旧版 ${exeName} 删除失败。请确认旧版锐智已完全退出后重新安装。"`,
+      `  MessageBox MB_OK|MB_ICONEXCLAMATION "旧版 ${exeName} 删除失败。请确认旧版锐捷已完全退出后重新安装。"`,
       "  Quit"
     );
   }

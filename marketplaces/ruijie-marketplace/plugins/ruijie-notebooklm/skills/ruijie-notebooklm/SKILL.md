@@ -5,7 +5,7 @@ description: v2026.05.07.2；使用 NotebookLM 快速阅读 PDF 书籍。适用�
 
 # 锐捷-读书助手
 
-这是锐智内置“锐捷插件”提供的 skill。它面向小白用户，不要求用户理解 NotebookLM、notebookId、sourceId、token 或 SDK 方法。底层通过现有后端的 NotebookLM 桥接服务和书籍 PDF 处理接口调用 NotebookLM。
+这是锐捷内置“锐捷插件”提供的 skill。它面向小白用户，不要求用户理解 NotebookLM、notebookId、sourceId、token 或 SDK 方法。底层通过现有后端的 NotebookLM 桥接服务和书籍 PDF 处理接口调用 NotebookLM。
 
 脚本内硬编码 token `st-ruijie`，不要向用户索要 token、cookies、账号或 2FA。
 
@@ -36,7 +36,7 @@ description: v2026.05.07.2；使用 NotebookLM 快速阅读 PDF 书籍。适用�
 
 ## 交互规则
 
-- 锐智默认启用 Codex feature `default_mode_request_user_input`，使 Default 模式也能使用 `functions.request_user_input`。
+- 锐捷默认启用 Codex feature `default_mode_request_user_input`，使 Default 模式也能使用 `functions.request_user_input`。
 - 工具名就是 `functions.request_user_input`，不要写成 `ask`、`question` 或纯文本菜单。
 - 不要在未尝试调用 `functions.request_user_input` 前声称交互选择器不可用。
 - 如果用户在调用 skill 的同一句话里已经明确要求“快速读书 / 书籍总结 / 生成图表”，上传完成后直接执行对应生成动作，不再追问。

@@ -1,5 +1,5 @@
 {
-  "productName": "锐智",
+  "productName": "锐捷Codex",
   "version": "0.3.1442",
   "locale": "zh-CN",
   "windows": {
@@ -8,9 +8,10 @@
     "sourceExeName": "Codex.exe",
     "appExeName": "Codex.exe",
     "taskManagerName": "Codex",
-    "shortcutName": "锐智",
+    "shortcutName": "锐捷Codex",
     "previousAppExeNames": [
-      "锐智.exe"
+      "锐捷Codex.exe",
+      "锐捷.exe"
     ],
     "zipName": "ruizhi-windows-${version}.${ext}",
     "iconPath": "assets/ruizhi.ico"
@@ -57,7 +58,7 @@
   "runtime": {
     "homeEnv": "RUIZHI_HOME",
     "defaultHomeDirName": ".ruizhi",
-    "electronUserDataDirName": "锐智"
+    "electronUserDataDirName": "锐捷Codex"
   },
   "models": {
     "enabled": true,

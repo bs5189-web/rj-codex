@@ -1,6 +1,6 @@
 # ChatGPT Statsig 与 CES 接口说明
 
-本文记录 Codex Desktop / 锐智桌面端启动时出现的两个 OpenAI 官方前端网络接口：
+本文记录 Codex Desktop / 锐捷桌面端启动时出现的两个 OpenAI 官方前端网络接口：
 
 - `https://ab.chatgpt.com/v1/initialize`：Statsig feature gate / experiment 初始化。
 - `https://chatgpt.com/ces/v1/rgstr`：CES structured analytics 初始化与事件上报。
@@ -22,9 +22,9 @@
 
 - 控制台出现 `[Statsig] A networking error occurred`。
 - 部分官方实验或 gate 维持默认值。
-- 锐智构建脚本中已经 patch 的少数 gate 仍可由本地补丁强制打开，但未 patch 的远端开关不会更新。
+- 锐捷构建脚本中已经 patch 的少数 gate 仍可由本地补丁强制打开，但未 patch 的远端开关不会更新。
 
-锐智当前构建策略：构建期将 Statsig `networkConfig` 中的 `networkOverrideFunc` 替换为 `preventAllNetworkTraffic:!0`，阻止 SDK 发起 `https://ab.chatgpt.com/v1/initialize` 和 `sdk_exception` 等 Statsig 网络请求。实验和功能开关不再远程拉取，只使用 SDK 默认值与本项目本地 gate 补丁。
+锐捷当前构建策略：构建期将 Statsig `networkConfig` 中的 `networkOverrideFunc` 替换为 `preventAllNetworkTraffic:!0`，阻止 SDK 发起 `https://ab.chatgpt.com/v1/initialize` 和 `sdk_exception` 等 Statsig 网络请求。实验和功能开关不再远程拉取，只使用 SDK 默认值与本项目本地 gate 补丁。
 
 ### 端点
 
@@ -225,7 +225,7 @@ ERROR [Statsig] A networking error occurred during POST request to https://ab.ch
 
 如果该接口失败，通常影响埋点上报，不应影响模型请求或本地核心功能。
 
-锐智当前构建策略：构建期将 CES 端点替换为 `ruizhi-disabled://ces/v1`，同时把 AnalyticsLogger 的 enabled 条件改为恒 false，阻止 SDK 初始化和发送 `https://chatgpt.com/ces/v1/rgstr` 批量事件请求。
+锐捷当前构建策略：构建期将 CES 端点替换为 `ruizhi-disabled://ces/v1`，同时把 AnalyticsLogger 的 enabled 条件改为恒 false，阻止 SDK 初始化和发送 `https://chatgpt.com/ces/v1/rgstr` 批量事件请求。
 
 ### 端点
 
@@ -367,7 +367,7 @@ statsig.logEvent(eventName, metadata)
 
 ## 4. 本项目中的相关 patch 点
 
-当前锐智构建脚本已经 patch 了部分 Statsig gate 的读取结果，并禁用了 Statsig 初始化网络请求与 CES 分析上报请求；`ab.chatgpt.com` 和 `chatgpt.com/ces` 仍不是运行时配置项。
+当前锐捷构建脚本已经 patch 了部分 Statsig gate 的读取结果，并禁用了 Statsig 初始化网络请求与 CES 分析上报请求；`ab.chatgpt.com` 和 `chatgpt.com/ces` 仍不是运行时配置项。
 
 - macOS：`scripts/build-macos.mjs` 的 `patchNativeWebviewFeatureGates()`。
 - macOS：`scripts/build-macos.mjs` 的 `patchNativeStatsigNetwork()`。

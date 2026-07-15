@@ -1,6 +1,6 @@
 # 锐捷插件市场
 
-锐智使用单一市场名 `ruijie-marketplace`，同时支持离线初始化和在线升级：
+锐捷使用单一市场名 `ruijie-marketplace`，同时支持离线初始化和在线升级：
 
 - 离线快照：`marketplaces/ruijie-marketplace`，随安装包内置，首次启动同步到运行态 home 的 `.tmp/marketplaces/ruijie-marketplace`。
 - 在线来源：通过 `config/rj-codex.json` 的 `pluginMarketplaces[].online` 配置，当前地址为 `http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git`。

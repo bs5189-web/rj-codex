@@ -5,7 +5,7 @@ description: v2026.05.07.01；使用远端锐捷 skills 服务的哈佛商业评
 
 # 锐捷-哈佛商业评论
 
-这是锐智内置“锐捷插件”提供的 skill。Codex 通过插件的 `skills/rj-skills-hbr-finder` 发现并触发本 skill。
+这是锐捷内置“锐捷插件”提供的 skill。Codex 通过插件的 `skills/rj-skills-hbr-finder` 发现并触发本 skill。
 
 ## 使用方式
 

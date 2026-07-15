@@ -165,7 +165,7 @@ function apiKey() {
   }
   const openaiKey = String(process.env.OPENAI_API_KEY || "").trim();
   if (openaiKey) return openaiKey;
-  throw new Error("缺少 APIKey：请先登录锐智，或设置 RUIZHI_API_KEY");
+  throw new Error("缺少 APIKey：请先登录锐捷，或设置 RUIZHI_API_KEY");
 }
 
 function imageValue(input) {

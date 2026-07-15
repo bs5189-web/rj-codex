@@ -83,7 +83,7 @@ test("page enhance hides its floating menu and replaces footer help with the Rui
   assert.match(source, /function installFooterVersionBadge\(/);
   assert.match(source, /findFooterHelpControl/);
   assert.match(source, /ruizhi-footer-version-badge/);
-  assert.match(source, /badge\.textContent = `锐智 \$\{displayVersion\}`/);
+  assert.match(source, /badge\.textContent = `锐捷 \$\{displayVersion\}`/);
 });
 
 test("session action click guard does not block action handlers", () => {
@@ -226,9 +226,26 @@ test("packaging patches onboarding continue button and build date badge", () => 
     const source = read(scriptPath);
     assert.match(source, /function ruizhiBuildDateLabel\(/, `${scriptPath} should compute the build-date label during packaging`);
     assert.match(source, /\$\{appVersion\}-\$\{ruizhiShortBuildDate\(\)\}/, `${scriptPath} should include the packaging version and short build date`);
-    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.continue", "使用锐智继续"\]/, `${scriptPath} should patch the ChatGPT continue button label`);
-    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.signIn\.streamlined", "使用锐智继续"\]/, `${scriptPath} should patch the streamlined ChatGPT continue button label`);
+    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.continue", "使用锐捷继续"\]/, `${scriptPath} should patch the ChatGPT continue button label`);
+    assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.signIn\.streamlined", "使用锐捷继续"\]/, `${scriptPath} should patch the streamlined ChatGPT continue button label`);
     assert.match(source, /\["electron\.onboarding\.login\.includedPlans\.welcomeV2", ruizhiBuildDateLabel\(\)\]/, `${scriptPath} should replace the ChatGPT plan badge with the build date`);
+  }
+});
+
+test("packaging keeps the ChatGPT Work sidebar title as RuiJie Work", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /function shortProductName\(\)/, `${scriptPath} should derive a short brand for mixed product-mode labels`);
+    assert.match(source, /function replaceLocalizedVisibleText\(id, value\)/, `${scriptPath} should support id-specific locale replacements`);
+    assert.match(source, /id === "sidebarElectron\.productMode\.chatGptWork"/, `${scriptPath} should patch the rich ChatGPT Work mode label`);
+    assert.match(source, /<chatGpt>\$\{shortProductName\(\)\}<\/chatGpt> <work>工作<\/work>/, `${scriptPath} should render the mode label as 锐捷 工作`);
+    assert.match(source, /id === "sidebarElectron\.productMode\.chatGptWork\.plainText"/, `${scriptPath} should patch the accessible ChatGPT Work mode label`);
+    assert.match(source, /\$\{shortProductName\(\)\} 工作/, `${scriptPath} should render the accessible label as 锐捷 工作`);
+    assert.match(source, /replace\("\/ChatGPT\|Codex\/g|replace\(\/ChatGPT\|Codex\/g/, `${scriptPath} should replace ChatGPT and Codex in one pass`);
+    assert.doesNotMatch(source, /replace\(\/ChatGPT\/g, config\.productName\)\.replace\(\/Codex\/g/, `${scriptPath} should not reprocess Codex inside the replacement product name`);
   }
 });
 
@@ -492,6 +509,24 @@ test("packaging routes and logs native profile token activity", () => {
     assert.match(source, /replace\(\/\^\\\\\/\+\//, `${scriptPath} should preserve the slash escape in generated regex literals`);
     assert.match(source, /\[ruizhi\]\[profile\] GET \/wham\/profiles\/me start/, `${scriptPath} should log renderer profile API attempts`);
   }
+});
+
+test("packaging keeps Usage settings visible for API key mode", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /patchNativeUsageSettingsVisibility/, `${scriptPath} should patch the native Usage settings visibility bundle`);
+    assert.match(source, /enable_free_go_usage_settings/, `${scriptPath} should locate the Usage settings access bundle by code shape`);
+    assert.match(source, /isUsageSettingsVisible/, `${scriptPath} should patch the Usage settings visibility result`);
+    assert.match(source, /ruizhiUsageSettingsVisibleForApiKey/, `${scriptPath} should keep Usage settings visible in API key mode`);
+    assert.match(source, /===`apikey`/, `${scriptPath} should explicitly allow API key auth mode`);
+  }
+
+  const windowsOverrideSource = read("scripts/windows-asar-overrides.mjs");
+  assert.match(windowsOverrideSource, /\["Qo=`Usage`", "Qo=`使用情况`"\]/, "Windows overrides should label the menu as 使用情况");
 });
 
 test("profile API logging patch emits parseable regex literals", () => {

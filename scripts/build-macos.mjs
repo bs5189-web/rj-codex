@@ -61,7 +61,7 @@ function ruizhiBuildDate(date = new Date()) {
 }
 
 function ruizhiBuildDateLabel() {
-  return `锐智构建日期：${ruizhiBuildDate()}`;
+  return `锐捷构建日期：${ruizhiBuildDate()}`;
 }
 
 function ruizhiShortBuildDate() {
@@ -259,7 +259,7 @@ function modelCatalogPath() {
   }
   const resolved = resolveProjectPath(configured);
   if (!fs.existsSync(resolved)) {
-    throw new Error(`锐智模型目录不存在：${resolved}`);
+    throw new Error(`锐捷模型目录不存在：${resolved}`);
   }
   return resolved;
 }
@@ -954,6 +954,31 @@ function patchNativeProfileVisibility() {
   log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
 }
 
+function patchNativeUsageSettingsVisibility() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const usageAccessFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible/,
+    "usage settings access bundle"
+  );
+  const source = fs.readFileSync(usageAccessFile, "utf8");
+  if (source.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+    log("已存在 Codex 使用情况设置入口补丁");
+    return;
+  }
+  const usageVisibilityPattern = /(function [A-Za-z_$][\w$]*\(\{authMethod:([A-Za-z_$][\w$]*),plan:[\s\S]{0,1400}?return\{canManageCreditSettings:[A-Za-z_$][\w$]*,isUsageSettingsVisible:)([^}]+)(\}\}function )/;
+  const patched = source.replace(
+    usageVisibilityPattern,
+    "$1($3)||$2===`apikey`/*ruizhiUsageSettingsVisibleForApiKey*/$4"
+  );
+  if (!patched.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+    throw new Error("Codex 使用情况设置入口补丁点不存在");
+  }
+  fs.writeFileSync(usageAccessFile, patched, "utf8");
+  log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
+}
+
 function patchNativeProfileUsageFallback() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileQueriesFile = findOneFileByContent(
@@ -1312,10 +1337,10 @@ function patchWebviewLocales() {
   }
 
   const replacements = new Map([
-    ["electron.onboarding.login.chatgpt.continue", "使用锐擎继续"],
-    ["electron.onboarding.login.chatgpt.signIn", "使用锐擎继续"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐擎继续"],
-    ["electron.onboarding.welcomeV2.continue", "使用锐擎继续"]
+    ["electron.onboarding.login.chatgpt.continue", "使用锐捷继续"],
+    ["electron.onboarding.login.chatgpt.signIn", "使用锐捷继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐捷继续"],
+    ["electron.onboarding.welcomeV2.continue", "使用锐捷继续"]
   ]);
 
   for (const localeFile of localeFiles) {
@@ -1337,7 +1362,7 @@ function patchPackageMetadata() {
   packageJson.name = "ruizhi-desktop";
   packageJson.productName = config.productName;
   packageJson.version = appVersion;
-  packageJson.description = "锐智桌面端";
+  packageJson.description = "锐捷桌面端";
   fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
   log("已补丁 package 元数据");
 }
@@ -1368,14 +1393,29 @@ function templateLiteralValuePattern() {
   return /`((?:\\.|[^`\\])*)`/g;
 }
 
+function shortProductName() {
+  return (config.shortProductName ?? config.productName.replace(/Codex.*$/u, "").trim()) || config.productName;
+}
+
 function replaceBrandInVisibleText(value) {
-  return value.replace(/ChatGPT/g, config.productName).replace(/Codex/g, (match, offset, source) => {
+  const productPrefix = config.productName.replace(/Codex.*$/u, "").trim();
+  return value.replace(/ChatGPT|Codex/g, (match, offset, source) => {
     const before = source.slice(Math.max(0, offset - 16), offset);
-    if (/GPT-[0-9A-Za-z_. -]*$/i.test(before)) {
+    if (match === "Codex" && (/GPT-[0-9A-Za-z_. -]*$/i.test(before) || (productPrefix && before.endsWith(productPrefix)))) {
       return match;
     }
     return config.productName;
   });
+}
+
+function replaceLocalizedVisibleText(id, value) {
+  if (id === "sidebarElectron.productMode.chatGptWork") {
+    return `<chatGpt>${shortProductName()}</chatGpt> <work>工作</work>`;
+  }
+  if (id === "sidebarElectron.productMode.chatGptWork.plainText") {
+    return `${shortProductName()} 工作`;
+  }
+  return replaceBrandInVisibleText(value);
 }
 
 function localeBundlePattern(locale) {
@@ -1390,7 +1430,7 @@ function loadLocaleMessages(locale) {
   const pattern = /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g;
 
   for (const match of source.matchAll(pattern)) {
-    messages.set(match[1], replaceBrandInVisibleText(match[2]));
+    messages.set(match[1], replaceLocalizedVisibleText(match[1], match[2]));
   }
 
   if (messages.size === 0) {
@@ -1409,7 +1449,11 @@ function patchTemplateLiteralValues(source, transform) {
 
 function patchLocaleBundleBrandText(localeFile) {
   const original = fs.readFileSync(localeFile, "utf8");
-  const patched = patchTemplateLiteralValues(original, replaceBrandInVisibleText);
+  const patchedMessages = original.replace(
+    /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g,
+    (match, id, value) => `"${id}":\`${replaceLocalizedVisibleText(id, value)}\``
+  );
+  const patched = patchTemplateLiteralValues(patchedMessages, replaceBrandInVisibleText);
   if (patched !== original) {
     fs.writeFileSync(localeFile, patched, "utf8");
   }
@@ -1451,7 +1495,7 @@ function patchFrontendDefaultMessages() {
       /id:`([^`]+)`,defaultMessage:`((?:\\.|[^`\\])*)`/g,
       (match, id, defaultMessage) => {
         const localized = messages.get(id);
-        const nextMessage = localized ?? replaceBrandInVisibleText(defaultMessage);
+        const nextMessage = localized ?? replaceLocalizedVisibleText(id, defaultMessage);
         if (nextMessage === defaultMessage) {
           return match;
         }
@@ -1576,7 +1620,7 @@ function patchOfficialUpdateLogic() {
 }
 
 function applicationMenuPatchSource() {
-  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{try{let e=await n();if(!e)return;try{await r(e,i)}catch(t){console.error(\`锐智设置菜单跳转失败\`,t);await r(e,\`/settings/general-settings\`)}}catch(e){console.error(\`锐智设置菜单打开失败\`,e)}},f=e?.items?.[0]?.submenu,A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐智账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}let g=l(/^(Account|账户)$/);g&&(g.click=A);q()}`;
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{try{let e=await n();if(!e)return;try{await r(e,i)}catch(t){console.error(\`锐捷设置菜单跳转失败\`,t);await r(e,\`/settings/general-settings\`)}}catch(e){console.error(\`锐捷设置菜单打开失败\`,e)}},f=e?.items?.[0]?.submenu,A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐捷账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}let g=l(/^(Account|账户)$/);g&&(g.click=A);q()}`;
 }
 
 function patchApplicationMenu() {
@@ -1611,7 +1655,7 @@ function patchApplicationMenu() {
     if (!next.includes(`ruizhiEnsureNativeMenuItems({menu:${menuName}`)) {
       next = next.replace(
         setApplicationMenuMatch[0],
-        `try{ruizhiEnsureNativeMenuItems({menu:${menuName},MenuItem:${electronName}.MenuItem,ensureWindow:${ensureWindowName},navigate:${navigateName},settingsRoute:${settingsRouteName},shell:${electronName}.shell});ruizhiTranslateApplicationMenu(${menuName})}catch(e){console.error(\`锐智菜单修复失败\`,e)}${electronName}.Menu.setApplicationMenu(${menuName}),${afterSetApplicationMenuName}(${afterSetApplicationMenuArg})`
+        `try{ruizhiEnsureNativeMenuItems({menu:${menuName},MenuItem:${electronName}.MenuItem,ensureWindow:${ensureWindowName},navigate:${navigateName},settingsRoute:${settingsRouteName},shell:${electronName}.shell});ruizhiTranslateApplicationMenu(${menuName})}catch(e){console.error(\`锐捷菜单修复失败\`,e)}${electronName}.Menu.setApplicationMenu(${menuName}),${afterSetApplicationMenuName}(${afterSetApplicationMenuArg})`
       );
     }
     return next;
@@ -1887,7 +1931,7 @@ function ruizhiInit(){
     function assertInside(base,target){
       const relative=path.relative(path.resolve(base),path.resolve(target));
       if(!relative||relative.startsWith("..")||path.isAbsolute(relative)){
-        throw new Error("拒绝覆盖锐智目录外的 marketplace："+target);
+        throw new Error("拒绝覆盖锐捷目录外的 marketplace："+target);
       }
     }
     function readMarketplaceVersion(root,spec){
@@ -2393,7 +2437,7 @@ function ruizhiStartBackgroundUpdateCheck(){
   function notifyUpdateReady(version){
     try{
       if(${electronName}.Notification?.isSupported?.()){
-        new ${electronName}.Notification({title:"锐智更新已就绪",body:"新版本 "+String(version||"")+" 已下载，退出锐智后将自动安装。"}).show();
+        new ${electronName}.Notification({title:"锐捷更新已就绪",body:"新版本 "+String(version||"")+" 已下载，退出锐捷后将自动安装。"}).show();
       }
     }catch(error){
       console.error("ruizhi update notification failed",error);
@@ -2645,10 +2689,10 @@ function patchPreloadIntegration() {
       source,
       "\n//# sourceMappingURL=preload.js.map",
       `${preloadIntegrationCode()}\n//# sourceMappingURL=preload.js.map`,
-      "注入锐智 macOS preload bridge"
+      "注入锐捷 macOS preload bridge"
     )
   );
-  log("已补丁 preload 锐智 bridge");
+  log("已补丁 preload 锐捷 bridge");
 }
 
 function nodeModuleTargetDir(targetNodeModules, packageName) {
@@ -2738,7 +2782,7 @@ function patchBootstrap() {
     const bootstrapFailureHandlerPattern = /var ([A-Za-z_$][\w$]*)=\{"install-update":`Install Update`,"check-for-updates":`Check for Updates`,quit:`Quit`\};async function ([A-Za-z_$][\w$]*)\(e\)\{[\s\S]*?message:`\$\{([A-Za-z_$][\w$]*)\.app\.getName\(\)\} failed to start\.`[\s\S]*?\}\}var ([A-Za-z_$][\w$]*)=/;
     const bootstrapFailureHandlerMatch = next.match(bootstrapFailureHandlerPattern);
     if (!bootstrapFailureHandlerMatch) {
-      throw new Error("补丁点不存在：移除 Codex 官方更新失败入口并注入锐智启动逻辑");
+      throw new Error("补丁点不存在：移除 Codex 官方更新失败入口并注入锐捷启动逻辑");
     }
     const [, labelsName, failureHandlerName, electronName, nextVarName] = bootstrapFailureHandlerMatch;
     next = next.replace(
@@ -2750,7 +2794,7 @@ function patchBootstrap() {
       next,
       updaterInitializePattern,
       "await ruizhiForceUpdateIfAvailable();try{let{runMainAppStartup:",
-      "禁用 Codex 官方 updater 初始化，改为锐智启动逻辑"
+      "禁用 Codex 官方 updater 初始化，改为锐捷启动逻辑"
     );
     const setNameBeforeUserDataPattern = new RegExp(
       `${escapeRegExp(electronName)}\\.app\\.setName\\([\\s\\S]*?\\)\\s*,\\s*${escapeRegExp(electronName)}\\.app\\.setPath\\(\\s*\`userData\``
@@ -2768,7 +2812,7 @@ function patchBootstrap() {
       next,
       singleInstanceExitPattern,
       "if(false)",
-      "允许锐智与 ChatGPT/Codex 并行启动"
+      "允许锐捷与 ChatGPT/Codex 并行启动"
     );
     next = replaceAllIfPresent(next, "process.platform===`win32`&&n.app.setAppUserModelId(t.v(x))", "process.platform===`win32`&&n.app.setAppUserModelId(`cn.ruizhi.desktop`)");
     return next;
@@ -2792,6 +2836,7 @@ async function repackAppAsar() {
   patchNativeStatsigBootstrap();
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
+  patchNativeUsageSettingsVisibility();
   patchNativeProfileUsageFallback();
   patchNativeProfileApiCallLogging();
   patchPluginSkillLocalListFallback(extractedDir, { log });
@@ -3016,7 +3061,7 @@ function buildImageGenHelper() {
   const outputPath = path.join(appResourcesDir(), "bin", imageGenHelperName());
   fs.rmSync(outputPath, { force: true });
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  log("编译锐智生图工具");
+  log("编译锐捷生图工具");
   execLogged("go", [
     "build",
     "-trimpath",

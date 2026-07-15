@@ -71,7 +71,7 @@ export function resolveProjectPath(targetPath) {
 }
 
 function windowsTaskManagerName(config) {
-  return config.windows?.taskManagerName ?? config.productName ?? "锐智";
+  return config.windows?.taskManagerName ?? config.productName ?? "锐捷";
 }
 
 function ruizhiBuildDate(date = new Date()) {
@@ -416,6 +416,32 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
   }
   fs.writeFileSync(profileVisibilityFile, source, "utf8");
   log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
+}
+
+function patchNativeUsageSettingsVisibility(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const usageAccessFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible/,
+    "usage settings access bundle"
+  );
+  let source = fs.readFileSync(usageAccessFile, "utf8");
+  if (source.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+    log("已存在 Codex 使用情况设置入口补丁");
+    return;
+  }
+  const usageVisibilityPattern = /(function [A-Za-z_$][\w$]*\(\{authMethod:([A-Za-z_$][\w$]*),plan:[\s\S]{0,1400}?return\{canManageCreditSettings:[A-Za-z_$][\w$]*,isUsageSettingsVisible:)([^}]+)(\}\}function )/;
+  source = source.replace(
+    usageVisibilityPattern,
+    "$1($3)||$2===`apikey`/*ruizhiUsageSettingsVisibleForApiKey*/$4"
+  );
+  if (!source.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+    throw new Error("Codex 使用情况设置入口补丁点不存在");
+  }
+  fs.writeFileSync(usageAccessFile, source, "utf8");
+  log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
 }
 
 function patchNativeProfileUsageFallback(extractedAppDir, options = {}) {
@@ -977,15 +1003,15 @@ export function codexClientVersionFromExe(exePath) {
 export function normalizeModelCatalogForClientVersion(catalog, clientVersion) {
   const normalized = JSON.parse(JSON.stringify(catalog));
   if (!Array.isArray(normalized.models) || normalized.models.length === 0) {
-    throw new Error("锐智模型目录缺少 models 数组");
+    throw new Error("锐捷模型目录缺少 models 数组");
   }
 
   for (const model of normalized.models) {
     if (!model || typeof model.slug !== "string" || !model.slug) {
-      throw new Error("锐智模型目录存在无效模型 slug");
+      throw new Error("锐捷模型目录存在无效模型 slug");
     }
     if (model.visibility !== "list" && model.visibility !== "hide" && model.visibility !== "none") {
-      throw new Error(`锐智模型 ${model.slug} 的 visibility 无效：${model.visibility}`);
+      throw new Error(`锐捷模型 ${model.slug} 的 visibility 无效：${model.visibility}`);
     }
   }
 
@@ -1073,7 +1099,7 @@ function sourceModelCatalogPath(config) {
   }
   const resolved = resolveProjectPath(configured);
   if (!fs.existsSync(resolved)) {
-    throw new Error(`锐智模型源目录不存在：${resolved}`);
+    throw new Error(`锐捷模型源目录不存在：${resolved}`);
   }
   return resolved;
 }
@@ -2250,7 +2276,7 @@ const systemSkillTranslations = {
     displayName: "图片生成",
     description: "生成或编辑图片素材、产品图、UI mockup、封面和其他位图资源。"
   },
-  "锐智-图片生成": {
+  "锐捷-图片生成": {
     displayName: "图片生成",
     description: "生成或编辑图片素材、产品图、UI mockup、封面和其他位图资源。"
   },
@@ -2452,9 +2478,9 @@ export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
   }
 
   const originalStart = "function _j(e){let n=(0,Z.c)(27),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,u;";
-  const patchedStart = "function _j(e){let n=(0,Z.c)(30),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,ruizhiVcErrorText=[c,l].filter(Boolean).join(`\\n`),ruizhiIsVcRuntimeMissing=s&&/(3221225781|0xC0000135|STATUS_DLL_NOT_FOUND|VCRUNTIME140|VCRUNTIME140_1|MSVCP140)/i.test(ruizhiVcErrorText);if(ruizhiIsVcRuntimeMissing)return (0,$.jsx)(`div`,{className:`flex size-full items-center justify-center p-6`,children:(0,$.jsxs)(`div`,{className:`flex w-full max-w-md flex-col gap-4`,children:[(0,$.jsx)(`h2`,{className:`text-2xl font-medium`,children:`缺少运行依赖`}),(0,$.jsx)(`p`,{className:`text-token-description-foreground`,children:`锐智需要安装 Microsoft Visual C++ 运行库才能启动。`}),(0,$.jsx)(`p`,{id:`ruizhi-vc-runtime-status`,className:`min-h-5 text-sm text-token-description-foreground`,children:`点击“安装并重启锐智”打开安装程序。安装完成后锐智会自动重启。`}),(0,$.jsxs)(`div`,{className:`flex flex-wrap gap-2`,children:[(0,$.jsx)(uc,{id:`ruizhi-vc-runtime-install-button`,onClick:ruizhiInstallVcRuntime,children:`安装并重启锐智`}),(0,$.jsx)(uc,{onClick:ruizhiOpenVcRedistManualDownload,color:`outline`,children:`手动下载`})]})]})});let u;";
+  const patchedStart = "function _j(e){let n=(0,Z.c)(30),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,ruizhiVcErrorText=[c,l].filter(Boolean).join(`\\n`),ruizhiIsVcRuntimeMissing=s&&/(3221225781|0xC0000135|STATUS_DLL_NOT_FOUND|VCRUNTIME140|VCRUNTIME140_1|MSVCP140)/i.test(ruizhiVcErrorText);if(ruizhiIsVcRuntimeMissing)return (0,$.jsx)(`div`,{className:`flex size-full items-center justify-center p-6`,children:(0,$.jsxs)(`div`,{className:`flex w-full max-w-md flex-col gap-4`,children:[(0,$.jsx)(`h2`,{className:`text-2xl font-medium`,children:`缺少运行依赖`}),(0,$.jsx)(`p`,{className:`text-token-description-foreground`,children:`锐捷需要安装 Microsoft Visual C++ 运行库才能启动。`}),(0,$.jsx)(`p`,{id:`ruizhi-vc-runtime-status`,className:`min-h-5 text-sm text-token-description-foreground`,children:`点击“安装并重启锐捷”打开安装程序。安装完成后锐捷会自动重启。`}),(0,$.jsxs)(`div`,{className:`flex flex-wrap gap-2`,children:[(0,$.jsx)(uc,{id:`ruizhi-vc-runtime-install-button`,onClick:ruizhiInstallVcRuntime,children:`安装并重启锐捷`}),(0,$.jsx)(uc,{onClick:ruizhiOpenVcRedistManualDownload,color:`outline`,children:`手动下载`})]})]})});let u;";
   const originalHelpers = "function yj(){G.dispatchMessage(`open-in-browser`,{url:Up})}";
-  const patchedHelpers = `${originalHelpers}function ruizhiSetVcRuntimeStatus(e){let t=document.getElementById(\`ruizhi-vc-runtime-status\`);t&&(t.textContent=e)}function ruizhiVcRuntimeFailureMessage(e,t){let n=e?.message||String(e||\`未知错误\`),r=t?.launchLogPath?\` 日志：\`+t.launchLogPath:\`\`;return\`安装失败：\`+n+\`。请点击“手动下载”安装后重启锐智。\`+r}async function ruizhiInstallVcRuntime(e){if(window.__ruizhiVcRuntimeInstallStarted)return;let t=e?.currentTarget||document.getElementById(\`ruizhi-vc-runtime-install-button\`),n=null;try{window.__ruizhiVcRuntimeInstallStarted=!0,t&&(t.disabled=!0,t.textContent=\`正在打开安装程序...\`),ruizhiSetVcRuntimeStatus(\`正在打开安装程序。如系统弹出权限确认，请选择“是”；如果没有看到弹窗，请检查任务栏。\`);n=await window.ruizhiDesktop?.runtime?.installVcRedist?.();if(n?.ok){ruizhiSetVcRuntimeStatus(\`安装完成，正在重启锐智。\`),t&&(t.textContent=\`正在重启...\`);return}throw new Error(n?.error||\`install failed\`)}catch(e){window.__ruizhiVcRuntimeInstallStarted=!1,console.error(\`ruizhi vc runtime install failed\`,e,n),ruizhiSetVcRuntimeStatus(ruizhiVcRuntimeFailureMessage(e,n)),t&&(t.disabled=!1,t.textContent=\`安装并重启锐智\`)}}function ruizhiOpenVcRedistManualDownload(){G.dispatchMessage(\`open-in-browser\`,{url:\`https://aka.ms/vc14/vc_redist.x64.exe\`})}`;
+  const patchedHelpers = `${originalHelpers}function ruizhiSetVcRuntimeStatus(e){let t=document.getElementById(\`ruizhi-vc-runtime-status\`);t&&(t.textContent=e)}function ruizhiVcRuntimeFailureMessage(e,t){let n=e?.message||String(e||\`未知错误\`),r=t?.launchLogPath?\` 日志：\`+t.launchLogPath:\`\`;return\`安装失败：\`+n+\`。请点击“手动下载”安装后重启锐捷。\`+r}async function ruizhiInstallVcRuntime(e){if(window.__ruizhiVcRuntimeInstallStarted)return;let t=e?.currentTarget||document.getElementById(\`ruizhi-vc-runtime-install-button\`),n=null;try{window.__ruizhiVcRuntimeInstallStarted=!0,t&&(t.disabled=!0,t.textContent=\`正在打开安装程序...\`),ruizhiSetVcRuntimeStatus(\`正在打开安装程序。如系统弹出权限确认，请选择“是”；如果没有看到弹窗，请检查任务栏。\`);n=await window.ruizhiDesktop?.runtime?.installVcRedist?.();if(n?.ok){ruizhiSetVcRuntimeStatus(\`安装完成，正在重启锐捷。\`),t&&(t.textContent=\`正在重启...\`);return}throw new Error(n?.error||\`install failed\`)}catch(e){window.__ruizhiVcRuntimeInstallStarted=!1,console.error(\`ruizhi vc runtime install failed\`,e,n),ruizhiSetVcRuntimeStatus(ruizhiVcRuntimeFailureMessage(e,n)),t&&(t.disabled=!1,t.textContent=\`安装并重启锐捷\`)}}function ruizhiOpenVcRedistManualDownload(){G.dispatchMessage(\`open-in-browser\`,{url:\`https://aka.ms/vc14/vc_redist.x64.exe\`})}`;
 
   let source = fs.readFileSync(targetPath, "utf8");
   if (source.includes("ruizhiInstallVcRuntime")) {
@@ -2478,7 +2504,7 @@ export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
 
 function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {}) {
   const log = options.log ?? (() => {});
-  const productName = config.productName ?? "锐智";
+  const productName = config.productName ?? "锐捷";
   const runtimeConfig = config.runtime ?? {};
   const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
   const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
@@ -2517,7 +2543,7 @@ ${preludeEnd}
   }
 
   fs.writeFileSync(bootstrapPath, `${prelude}${withoutExistingPrelude}`, "utf8");
-  log("已注入 Windows bootstrap 早期锐智环境初始化");
+  log("已注入 Windows bootstrap 早期锐捷环境初始化");
 }
 
 function bridgeBootstrapBlock(config) {
@@ -2771,12 +2797,12 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     }
   }
   if (!replacedConfigWrite && !next.includes(readOnlyConfigCheck)) {
-    throw new Error("Windows bootstrap 锐智 config.toml 只读检查补丁点不存在");
+    throw new Error("Windows bootstrap 锐捷 config.toml 只读检查补丁点不存在");
   }
 
   if (next !== source) {
     fs.writeFileSync(bootstrapPath, next, "utf8");
-    log("已刷新 Windows bootstrap 模型 provider、bridge 与锐智 config.toml 只读逻辑");
+    log("已刷新 Windows bootstrap 模型 provider、bridge 与锐捷 config.toml 只读逻辑");
   }
 }
 
@@ -2798,7 +2824,7 @@ function findWindowsNativeMenuBundle(extractedAppDir) {
 }
 
 function windowsNativeMenuPatchSource() {
-  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Check for Updates":"检查更新","Check for Updates…":"检查更新…","Install Update":"安装更新","Quit":"退出","Exit":"退出","New Thread":"新聊天","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder":"打开文件夹","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Reset Zoom":"重置缩放","Toggle Full Screen":"切换全屏","Toggle Developer Tools":"切换开发者工具","Developer Tools":"开发者工具","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Plugins":"插件","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=e?.items?.[0]?.submenu,d=e=>e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))??null,f=()=>d(e)?.submenu??u,p=async()=>{let e=await n();e&&r(e,i)},m=async()=>{let e=await n();e&&r(e,\`/plugins\`)},g=async()=>{let e=await n();e&&r(e,\`/automations\`)},A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐智账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}function ensureSettingsMenu(){let n=e?.items?.find(e=>/^(Settings|设置)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`设置\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function ensurePluginsMenu(){let n=e?.items?.find(e=>/^(Plugins|插件)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`插件\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function h(e,n,r,i,o){let s=e?.items?.find(e=>n.test(a(e)));if(s)return c(s),s.click=i,s;if(e?.insert){let n=new t({label:r,accelerator:o?.accelerator,click:i});e.insert(Math.min(o?.index??e.items.length,e.items.length),n);return n}return null}let y=ensureSettingsMenu(),b=ensurePluginsMenu();h(y,/^(Settings|设置|Preferences|偏好设置)/,\`设置…\`,p,{accelerator:\`CmdOrCtrl+,\`,index:0});h(y,/^(Plugins|插件)$/,\`插件\`,m,{index:1});h(y,/^(Automations|自动化)$/,\`自动化\`,g,{index:2});h(b,/^(Plugins|插件)$/,\`插件\`,m,{index:0});let x=l(/^(Settings|设置|Preferences|偏好设置)/);x&&(x.click=p);let S=l(/^(Plugins|插件)$/);S&&(S.click=m);let C=l(/^(Automations|自动化)$/);C&&(C.click=g);let T=l(/^(Account|账户)$/);T&&(T.click=A);q()}`;
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Check for Updates":"检查更新","Check for Updates…":"检查更新…","Install Update":"安装更新","Quit":"退出","Exit":"退出","New Thread":"新聊天","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder":"打开文件夹","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Reset Zoom":"重置缩放","Toggle Full Screen":"切换全屏","Toggle Developer Tools":"切换开发者工具","Developer Tools":"开发者工具","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Plugins":"插件","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=e?.items?.[0]?.submenu,d=e=>e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))??null,f=()=>d(e)?.submenu??u,p=async()=>{let e=await n();e&&r(e,i)},m=async()=>{let e=await n();e&&r(e,\`/plugins\`)},g=async()=>{let e=await n();e&&r(e,\`/automations\`)},A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐捷账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}function ensureSettingsMenu(){let n=e?.items?.find(e=>/^(Settings|设置)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`设置\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function ensurePluginsMenu(){let n=e?.items?.find(e=>/^(Plugins|插件)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`插件\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function h(e,n,r,i,o){let s=e?.items?.find(e=>n.test(a(e)));if(s)return c(s),s.click=i,s;if(e?.insert){let n=new t({label:r,accelerator:o?.accelerator,click:i});e.insert(Math.min(o?.index??e.items.length,e.items.length),n);return n}return null}let y=ensureSettingsMenu(),b=ensurePluginsMenu();h(y,/^(Settings|设置|Preferences|偏好设置)/,\`设置…\`,p,{accelerator:\`CmdOrCtrl+,\`,index:0});h(y,/^(Plugins|插件)$/,\`插件\`,m,{index:1});h(y,/^(Automations|自动化)$/,\`自动化\`,g,{index:2});h(b,/^(Plugins|插件)$/,\`插件\`,m,{index:0});let x=l(/^(Settings|设置|Preferences|偏好设置)/);x&&(x.click=p);let S=l(/^(Plugins|插件)$/);S&&(S.click=m);let C=l(/^(Automations|自动化)$/);C&&(C.click=g);let T=l(/^(Account|账户)$/);T&&(T.click=A);q()}`;
 }
 
 function patchWindowsBrowserWindowNativeMenuVisibility(source) {
@@ -2857,7 +2883,7 @@ function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
     if (!menuSetPattern.test(source)) {
       throw new Error("顶部菜单中文补丁点不存在：setApplicationMenu");
     }
-    source = source.replace(menuSetPattern, `}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:${settingsRouteVar},shell:n.shell});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(\`锐智菜单修复失败\`,e)}n.Menu.setApplicationMenu($1),$2($3)}`);
+    source = source.replace(menuSetPattern, `}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:${settingsRouteVar},shell:n.shell});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(\`锐捷菜单修复失败\`,e)}n.Menu.setApplicationMenu($1),$2($3)}`);
   }
 
   source = patchWindowsBrowserWindowNativeMenuVisibility(source);
@@ -2895,7 +2921,7 @@ function patchWindowsTrayMenuLabels(extractedAppDir, config, options = {}) {
     ["Ko=`Recent`", "Ko=`最近`"],
     ["Jo=`Unread`", "Jo=`未读`"],
     ["Xo=`Completed`", "Xo=`已完成`"],
-    ["Qo=`Usage`", "Qo=`用量`"],
+    ["Qo=`Usage`", "Qo=`使用情况`"],
     ["es=`More`", "es=`更多`"],
     ["ns=`Chats`", "ns=`聊天`"]
   ];
@@ -3005,7 +3031,7 @@ export function patchWindowsHelpDocumentationLinks(extractedAppDir, config, opti
 
   if (replacementCount === 0) {
     if (alreadyPatchedCount > 0) {
-      log(`帮助文档链接已是锐智目标地址：${alreadyPatchedCount} 处`);
+      log(`帮助文档链接已是锐捷目标地址：${alreadyPatchedCount} 处`);
       return;
     }
     throw new Error("未找到 Codex 帮助文档链接补丁点");
@@ -3043,7 +3069,7 @@ export function patchWindowsAccountSettingsLinks(extractedAppDir, _config, optio
 
   if (replacementCount === 0) {
     if (alreadyPatchedCount > 0) {
-      log(`账户设置链接已是锐智目标地址：${alreadyPatchedCount} 处`);
+      log(`账户设置链接已是锐捷目标地址：${alreadyPatchedCount} 处`);
       return;
     }
     throw new Error("未找到 ChatGPT 账户设置链接补丁点");
@@ -3102,6 +3128,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeStatsigBootstrap(extractedAppDir, { log });
   patchNativeCesAnalyticsNetwork(extractedAppDir, { log });
   patchNativeProfileVisibility(extractedAppDir, { log });
+  patchNativeUsageSettingsVisibility(extractedAppDir, { log });
   patchNativeProfileUsageFallback(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchListModelsForHostFromUserCache(extractedAppDir, config, { log });

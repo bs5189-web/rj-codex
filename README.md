@@ -1,15 +1,15 @@
-# 锐智
+# 锐捷Codex
 
 这是一个 Codex Desktop 初版魔改构建工程。它不直接改系统安装目录，而是复制已安装的 Codex Desktop，解包 `app.asar` 后打补丁，再输出一个独立的桌面应用目录。
 
 ## 当前改动
 
 - 登录页默认进入 APIKey 输入，不展示账号登录选择。
-- 对外品牌统一为“锐智”，APIKey 获取入口使用“锐擎API”相关文案。
+- 对外品牌统一为“锐捷”，APIKey 获取入口使用“锐擎API”相关文案。
 - APIKey 文案改成通用 APIKey，并把取 Key 地址改为内部控制台地址。
-- 默认锐智 home 使用用户主目录下的 `.ruizhi`，优先读取 `RUIZHI_HOME`，并兼容 `CODEX_HOME`。启动后会把 `CODEX_HOME` 指向同一个目录，兼容 Codex 内部和 system skills 里写死的路径。
+- 默认锐捷 home 使用用户主目录下的 `.ruizhi`，优先读取 `RUIZHI_HOME`，并兼容 `CODEX_HOME`。启动后会把 `CODEX_HOME` 指向同一个目录，兼容 Codex 内部和 system skills 里写死的路径。
 - Electron 启动时使用自定义 `ruizhi` provider，显示名为“锐擎API”。运行态先启动本地 Responses bridge，provider `base_url` 指向 `http://127.0.0.1:17888/v1`，上游仍是锐擎 UniAPI；认证继续复用 Codex 原生 APIKey 登录链路。
-- APIKey 保存到锐智 home 的 `auth.json`，不使用 `auth.command`，避免额外 token helper 把状态绕复杂。
+- APIKey 保存到锐捷 home 的 `auth.json`，不使用 `auth.command`，避免额外 token helper 把状态绕复杂。
 - 默认语言设置为简体中文（`zh-CN`），并用内置 `zh-CN` 翻译回填前端 `defaultMessage`，避免首屏先显示英文再切中文。
 - 默认配置开启 `default_mode_request_user_input`、`plugins`、`apps`、`browser_use`。
 - 默认不重新编译 `resources\codex.exe`。只有必须修改 Rust 内嵌逻辑时才设置 `RUIZHI_BUILD_CODEX=1` 重编，否则优先走 Electron 启动注入、运行态资源同步和用户级缓存。
@@ -19,10 +19,10 @@
 - 内置 `ruizhi-imagegen.exe` 生图 helper，并在运行态覆盖 system `imagegen` skill：默认走锐擎 UniAPI 的 `gpt-image-2`，从 `RUIZHI_HOME` / `CODEX_HOME` 的 `auth.json` 读取 APIKey，不要求用户安装 Python SDK 或手动设置 `OPENAI_API_KEY`。生成成功后要求直接用 Markdown 图片语法把本地图片渲染进会话，而不是只甩一个文件路径；用户只说“生成一张图片”这类缺主题请求时，优先通过 `request_user_input` 继续收集主题，避免普通 final 回复把任务显示成已结束。
 - 会话列表和对话头里的“归档”文案改为“删除”，已归档对话页改为“已删除对话”，恢复动作改为“恢复”。底层仍使用 Codex 原生归档能力，不做物理删除。
 - 内置本地插件 marketplace：`锐捷插件`。HBR 中文版检索、混沌大学检索、快速找书、锐捷知识库、NotebookLM 读书助手、Seedance 提示词助手和火山引擎视频生成分别作为独立插件展示，避免继续挤在一个聚合插件里。
-- 启动时按插件 manifest 版本号同步内置 marketplace 到 `CODEX_HOME\.tmp\marketplaces`，只替换锐智托管块，不覆盖用户已安装插件状态。
-- 启动时先禁用 Codex 官方更新器，再在后台检查锐智更新清单；如果发现新版本，会在使用过程中自动下载 NSIS 安装包，下载完成后提示用户，等用户退出锐智时再静默安装。
-- 主程序保留为 `Codex.exe`，进程名回到 Codex；安装器创建的桌面/开始菜单快捷方式显示为“锐智”。
-- 从旧版升级时，安装器会清理安装目录里历史遗留的 `锐智.exe`，避免旧进程名残留。
+- 启动时按插件 manifest 版本号同步内置 marketplace 到 `CODEX_HOME\.tmp\marketplaces`，只替换锐捷托管块，不覆盖用户已安装插件状态。
+- 启动时先禁用 Codex 官方更新器，再在后台检查锐捷更新清单；如果发现新版本，会在使用过程中自动下载 NSIS 安装包，下载完成后提示用户，等用户退出锐捷时再静默安装。
+- 主程序保留为 `Codex.exe`，进程名回到 Codex；安装器创建的桌面/开始菜单快捷方式显示为“锐捷Codex”。
+- 从旧版升级时，安装器会清理安装目录里历史遗留的 `锐捷.exe`，避免旧进程名残留。
 - 输出 NSIS 安装包，支持选择安装路径、开始菜单/桌面快捷方式、静默安装和系统卸载入口。
 - 去掉 `app.asar` 完整性校验 fuse，让补丁后的 asar 可以启动。
 - 输出 Windows zip 包。
@@ -75,7 +75,7 @@ Windows 正式分发产物放到 `dist\installer`。如果要本地直接点开�
 .\dist\test-app-0.1.13\Codex.exe
 ```
 
-`dist\test-app-<version>\Codex.exe` 就是补丁后的 Electron 主程序，不是二次转发启动器；安装后的快捷方式名称仍是“锐智”。`.work\windows-app-out` 是开发构建中间产物，`resources\codex.exe` 是 Codex 自带的 app server/CLI helper，不是用户入口。
+`dist\test-app-<version>\Codex.exe` 就是补丁后的 Electron 主程序，不是二次转发启动器；安装后的快捷方式名称仍是“锐捷”。`.work\windows-app-out` 是开发构建中间产物，`resources\codex.exe` 是 Codex 自带的 app server/CLI helper，不是用户入口。
 
 ## macOS 云构建
 
@@ -89,7 +89,7 @@ CODEX_APP_ROOT=/Applications/Codex.app npm run build:macos
 gh workflow run build-macos.yml
 ```
 
-不传 `codex_app_url` 时，脚本会默认下载 OpenAI 官方 Codex Desktop macOS DMG。也可以在仓库 Secrets 里配置 `CODEX_MACOS_APP_URL` 覆盖默认来源。这个 URL 必须指向包含 `Codex.app` 的 `.zip` 或 `.dmg`，构建脚本会复制官方 app、补丁 `Contents/Resources/app.asar`、内置锐智模型/插件/生图 helper、写入 MinIO generic update 配置、做签名，然后上传 `dist/Ruizhi-macos-<version>.zip`、`dist/latest.yml`、`dist/latest-<version>.yml`、`dist/ruizhi-latest-macos.json` 和 `dist/ruizhi-latest-macos-<version>.json`。JSON 里的 `macos` 和 `manualDownload` 都指向同一个英文 zip，官网/人工下载继续读取 `ruizhi-latest-macos.json`。当前 macOS 云构建只支持 arm64，如果 runner 不是 arm64 会直接失败。GitHub 下载单个 artifact 时仍会套一层 zip，这是 GitHub Actions 平台机制；现在每个 artifact 只包含一个目标文件，不再把全部 macOS 产物揉成一个集合包。
+不传 `codex_app_url` 时，脚本会默认下载 OpenAI 官方 Codex Desktop macOS DMG。也可以在仓库 Secrets 里配置 `CODEX_MACOS_APP_URL` 覆盖默认来源。这个 URL 必须指向包含 `Codex.app` 的 `.zip` 或 `.dmg`，构建脚本会复制官方 app、补丁 `Contents/Resources/app.asar`、内置锐捷模型/插件/生图 helper、写入 MinIO generic update 配置、做签名，然后上传 `dist/Ruizhi-macos-<version>.zip`、`dist/latest.yml`、`dist/latest-<version>.yml`、`dist/ruizhi-latest-macos.json` 和 `dist/ruizhi-latest-macos-<version>.json`。JSON 里的 `macos` 和 `manualDownload` 都指向同一个英文 zip，官网/人工下载继续读取 `ruizhi-latest-macos.json`。当前 macOS 云构建只支持 arm64，如果 runner 不是 arm64 会直接失败。GitHub 下载单个 artifact 时仍会套一层 zip，这是 GitHub Actions 平台机制；现在每个 artifact 只包含一个目标文件，不再把全部 macOS 产物揉成一个集合包。
 
 这不是正式分发签名。要给普通用户无拦截安装，还需要 Apple Developer ID 签名和 notarization；先把 unsigned 云包跑通，别一上来就把苹果全家桶塞进 CI 里抽盲盒。
 
@@ -106,14 +106,14 @@ APP_STORE_CONNECT_PRIVATE_KEY_BASE64
 
 `MACOS_CERTIFICATE_P12_BASE64` 是 Developer ID Application 证书导出的 `.p12` 的 base64 内容。`APP_STORE_CONNECT_PRIVATE_KEY_BASE64` 是 App Store Connect API Key `.p8` 的 base64 内容。缺少这些 secrets 时，workflow 会自动降级为 ad-hoc 签名包，`ruizhi-latest-macos.json` 会标记 `signed:false`、`notarized:false`。macOS 自动更新必须用正式 Developer ID 签名和 notarization 才能给普通用户稳定工作；ad-hoc 包只适合内测跑链路。
 
-如果只是自己测试 Mac 能不能跑，不需要 Apple 开发者账号。下载 artifact 里的 `ruizhi-macos-update-<version>`，先解开 GitHub 外层 zip，再解开里面的 `Ruizhi-macos-<version>.zip`，把 `锐智.app` 放到 `/Applications` 或 `~/Applications`：
+如果只是自己测试 Mac 能不能跑，不需要 Apple 开发者账号。下载 artifact 里的 `ruizhi-macos-update-<version>`，先解开 GitHub 外层 zip，再解开里面的 `Ruizhi-macos-<version>.zip`，把 `锐捷Codex.app` 放到 `/Applications` 或 `~/Applications`：
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/锐智.app
-open /Applications/锐智.app
+xattr -dr com.apple.quarantine /Applications/锐捷Codex.app
+open /Applications/锐捷Codex.app
 ```
 
-未配置 Developer ID 和 notarization 时，macOS 仍可能提示拦截；内测机可以右键 `锐智.app` 选择打开。正式给普通用户分发仍然要走 Developer ID 签名和公证。
+未配置 Developer ID 和 notarization 时，macOS 仍可能提示拦截；内测机可以右键 `锐捷Codex.app` 选择打开。正式给普通用户分发仍然要走 Developer ID 签名和公证。
 
 首次启动会生成：
 
@@ -124,7 +124,7 @@ open /Applications/锐智.app
 %USERPROFILE%\.ruizhi\.tmp\marketplaces\ruijie-skills
 ```
 
-`config.toml` 里的锐智托管配置被 `# BEGIN Ruizhi Managed Defaults` 和 `# END Ruizhi Managed Defaults` 包住。后续更新只替换这个托管块，Codex 自己写入的插件安装状态会保留。
+`config.toml` 里的锐捷托管配置被 `# BEGIN Ruizhi Managed Defaults` 和 `# END Ruizhi Managed Defaults` 包住。后续更新只替换这个托管块，Codex 自己写入的插件安装状态会保留。
 
 生图 helper 会随 Windows 产物放在：
 
@@ -132,7 +132,7 @@ open /Applications/锐智.app
 .\dist\test-app-<version>\resources\bin\ruizhi-imagegen.exe
 ```
 
-在锐智进程中会自动设置：
+在锐捷进程中会自动设置：
 
 ```powershell
 $env:RUIZHI_HOME
@@ -145,7 +145,7 @@ $env:RUIZHI_IMAGEGEN_EXE
 system `imagegen` skill 会优先使用 `$env:RUIZHI_IMAGEGEN_EXE`，例如：
 
 ```powershell
-& $env:RUIZHI_IMAGEGEN_EXE generate --prompt "一张锐智桌面端启动页概念图" --out "output/imagegen/ruizhi.png" --quality medium --size auto --force
+& $env:RUIZHI_IMAGEGEN_EXE generate --prompt "一张锐捷桌面端启动页概念图" --out "output/imagegen/ruizhi.png" --quality medium --size auto --force
 ```
 
 Windows 正式分发产物只看 `dist\installer`：
@@ -165,7 +165,7 @@ Windows 正式分发产物只看 `dist\installer`：
 
 `dist\test-app-<version>` 是测试环境，不是分发物，不上传到更新目录。它带 `resources\ruizhi-environment.json` 标记，启动后版本号显示为 `<version>-test`，并跳过自动更新，避免测试时被远端正式包覆盖。`.work\windows-app-out` 只是开发构建中间产物，构建结束后会标记为 `development`。
 
-Windows 不再生成 `dist\锐智-Setup.exe`、`dist\installer\锐智-Setup-<version>.exe` 或 `dist\ruizhi-latest.json`。自动更新和官网下载统一以 `latest.yml` 为准。发版时先把 `dist\installer\Ruizhi-Setup-<version>.exe` 上传到 `updates.downloadBaseUrl` 对应目录，再上传同目录下的 `Ruizhi-Setup-<version>.exe.blockmap`，最后覆盖 `dist\installer\latest.yml` 为远端 `latest.yml`；顺序别反，反了客户端就会拿着清单找不存在的包。
+Windows 不再生成 `dist\锐捷Codex-Setup.exe`、`dist\installer\锐捷Codex-Setup-<version>.exe` 或 `dist\ruizhi-latest.json`。自动更新和官网下载统一以 `latest.yml` 为准。发版时先把 `dist\installer\Ruizhi-Setup-<version>.exe` 上传到 `updates.downloadBaseUrl` 对应目录，再上传同目录下的 `Ruizhi-Setup-<version>.exe.blockmap`，最后覆盖 `dist\installer\latest.yml` 为远端 `latest.yml`；顺序别反，反了客户端就会拿着清单找不存在的包。
 
 macOS 自动更新走 macOS 目录下的 `latest.yml`。官网和人工下载继续走 `ruizhi-latest-macos.json`，但 JSON 里的 `macos` 和 `manualDownload` 都指向同一个 `Ruizhi-macos-<version>.zip`，不再单独生成中文 app zip 或 test-kit。发版时先把 `dist\Ruizhi-macos-<version>.zip` 上传到 `updates.macos.downloadBaseUrl` 对应目录，再上传版本化清单，最后覆盖同目录下的 `latest.yml` 和 `ruizhi-latest-macos.json`。
 
@@ -200,7 +200,7 @@ ai-ruizhi/updates/macos/Ruizhi-macos-<version>.zip
 
 ## 官网
 
-`website/` 是锐智官网静态页。页面会先请求版本清单，再从清单里的 `url` 解析出最终下载地址，不把安装包地址硬编码进前端。
+`website/` 是锐捷官网静态页。页面会先请求版本清单，再从清单里的 `url` 解析出最终下载地址，不把安装包地址硬编码进前端。
 
 推荐的分发策略是：
 

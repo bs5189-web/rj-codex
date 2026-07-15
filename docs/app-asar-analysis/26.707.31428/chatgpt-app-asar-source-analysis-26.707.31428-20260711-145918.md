@@ -11,7 +11,7 @@
 - 主进程核心逻辑集中在 `.vite/build/main-CH17cjbj.js`，格式化后约 84,710 行。
 - 包内没有 `.map` sourcemap，文件末尾虽然保留 `sourceMappingURL` 注释，但实际未打包 `.map` 文件，因此不能精确还原原始 TypeScript 文件名和模块边界。
 - Renderer 前端在 `webview/` 下，入口 HTML 和大量按路由/页面切分的 ESM chunk 都在包内，可以继续做字符串级和模块级分析。
-- 对锐智覆盖层来说，可行策略是继续基于构建产物做定点 patch 或在构建脚本中做稳定字符串替换；不建议试图完整“反编译回源码工程”。
+- 对锐捷覆盖层来说，可行策略是继续基于构建产物做定点 patch 或在构建脚本中做稳定字符串替换；不建议试图完整“反编译回源码工程”。
 
 ## 包基础信息
 
@@ -113,7 +113,7 @@ codex_desktop:connect-app-host
 codex_desktop:start-file-drag
 ```
 
-这些通道构成 renderer 与主进程之间的桥接层，也是锐智定制时最常用的 patch 入口。
+这些通道构成 renderer 与主进程之间的桥接层，也是锐捷定制时最常用的 patch 入口。
 
 ## 窗口与 preload
 
@@ -189,7 +189,7 @@ unsafeSkipTargetOriginCheck=true
 - 校验 plugin path 不逃逸 marketplace root。
 - 通过 app-server connection 查询/移除 marketplace。
 
-对锐智项目有价值的是：官方包仍然把 `openai-bundled` 当成默认内置插件源，后续覆盖层可以围绕 marketplace 名称、缓存目录和插件描述同步逻辑做 patch。
+对锐捷项目有价值的是：官方包仍然把 `openai-bundled` 当成默认内置插件源，后续覆盖层可以围绕 marketplace 名称、缓存目录和插件描述同步逻辑做 patch。
 
 ## Codex 子进程与本地执行
 
@@ -200,7 +200,7 @@ unsafeSkipTargetOriginCheck=true
 - 包含 child-process snapshot worker。
 - 包含 `codex-micro-service` bundle，可能承担本地服务或桥接任务。
 
-这与锐智桌面版当前维护重点一致：桌面壳负责 UI、配置、插件同步和本地 app-server/CLI 连接，真实任务执行仍然经由 Codex runtime/子进程体系。
+这与锐捷桌面版当前维护重点一致：桌面壳负责 UI、配置、插件同步和本地 app-server/CLI 连接，真实任务执行仍然经由 Codex runtime/子进程体系。
 
 ## 网络与服务端线索
 
@@ -227,7 +227,7 @@ https://persistent.oaistatic.com/codex-app-prod/appcast.xml
 
 建议按目标选择下一步：
 
-1. **做锐智覆盖层 patch**：优先定位 `preload.js`、`main-CH17cjbj.js`、`webview/assets/*` 里的稳定字符串，写入构建脚本自动替换。
+1. **做锐捷覆盖层 patch**：优先定位 `preload.js`、`main-CH17cjbj.js`、`webview/assets/*` 里的稳定字符串，写入构建脚本自动替换。
 2. **分析插件商店**：围绕 `openai-bundled`、`.codex-plugin/plugin.json`、`marketplace/remove`、`listPlugins` 做局部格式化和调用链索引。
 3. **分析账号/网络限制**：围绕 `https://chatgpt.com/backend-api`、`/backend-api/subscriptions/update`、`/backend-api/wham` 做请求构造和 UI fallback 分析。
 4. **分析窗口/UI 加载**：围绕 `loadURL`、`BrowserWindow`、`webview/index.html` 做窗口类型、路由和权限矩阵。

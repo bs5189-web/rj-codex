@@ -1,6 +1,6 @@
 # macOS arm64 打包记录
 
-本文记录在本机为锐智桌面端打包 macOS Apple Silicon/arm64 版本的实际流程、修复点与验证结果。
+本文记录在本机为锐捷桌面端打包 macOS Apple Silicon/arm64 版本的实际流程、修复点与验证结果。
 
 ## 环境
 
@@ -62,7 +62,7 @@ execLogged("/usr/bin/xattr", ["-cr", appOutRoot]);
 ## 主要流程
 
 1. 清理并重建 `dist/macos` 与 `.work/macos`。
-2. 从 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐智.app`。
+2. 从 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐捷Codex.app`。
 3. 更新 `Info.plist` 元数据：显示名、Bundle ID、版本号等。
 4. 校验主程序 Mach-O 架构包含 `arm64`。
 5. 编译并内置 `ruizhi-imagegen` 辅助工具。
@@ -92,7 +92,7 @@ execLogged("/usr/bin/xattr", ["-cr", appOutRoot]);
 ## 验证命令
 
 ```bash
-APP="/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐智.app"
+APP="/Volumes/ext_data/work/ai/rj-codex/dist/macos/锐捷Codex.app"
 EXE="$APP/Contents/MacOS/Codex"
 
 file "$EXE"
@@ -109,7 +109,7 @@ node -e "const m=require('./dist/ruizhi-latest-macos-arm64.json'); console.log(m
 ## 本次验证结果
 
 - 主程序：`Mach-O 64-bit executable arm64`
-- `CFBundleDisplayName`：`锐智`
+- `CFBundleDisplayName`：`锐捷Codex`
 - `CFBundleIdentifier`：`cn.ruizhi.desktop`
 - `CFBundleShortVersionString`：`0.2.3`
 - `CFBundleVersion`：`0.2.3`

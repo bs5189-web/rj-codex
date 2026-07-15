@@ -1,6 +1,6 @@
 # macOS x64 打包记录
 
-本文记录在本机为锐智桌面端打包 macOS Intel/x86_64 版本的实际流程与验证结果。
+本文记录在本机为锐捷桌面端打包 macOS Intel/x86_64 版本的实际流程与验证结果。
 
 ## 环境
 
@@ -22,7 +22,7 @@ RUIZHI_MACOS_ARCH=x64 node ./scripts/build-macos.mjs
 ## 主要流程
 
 1. 清理并重建 `dist/macos` 与 `.work/macos`。
-2. 从 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐智.app`。
+2. 从 `/Applications/Codex.app` 复制原始 app 到 `dist/macos/锐捷Codex.app`。
 3. 更新 `Info.plist` 元数据：显示名、Bundle ID、版本号等。
 4. 使用 `lipo -archs` 校验主程序包含目标架构 `x86_64`。
 5. 编译并内置 `ruizhi-imagegen` 辅助工具。
@@ -50,7 +50,7 @@ RUIZHI_MACOS_ARCH=x64 node ./scripts/build-macos.mjs
 ## 验证命令
 
 ```bash
-APP="/Users/tom/work/rj/rj-codex/dist/macos/锐智.app"
+APP="/Users/tom/work/rj/rj-codex/dist/macos/锐捷Codex.app"
 EXE="$APP/Contents/MacOS/Codex"
 
 lipo -archs "$EXE"
@@ -63,7 +63,7 @@ node -e "const m=require('./dist/ruizhi-latest-macos-x64.json'); console.log(m.v
 ## 本次验证结果
 
 - `lipo -archs` 输出：`x86_64`
-- `CFBundleDisplayName`：`锐智`
+- `CFBundleDisplayName`：`锐捷Codex`
 - `CFBundleShortVersionString`：`0.2.3`
 - `codesign --verify --deep --strict`：通过
 - `ruizhi-latest-macos-x64.json`：`version=0.2.3`，`arch=x64`，`fileName=Ruizhi-macos-0.2.3-x64.zip`，`size=426565513`

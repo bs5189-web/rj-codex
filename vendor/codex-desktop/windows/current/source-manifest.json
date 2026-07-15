@@ -1,18 +1,21 @@
 {
   "source": "OpenAI Codex Desktop",
-  "packageVersion": "26.616.10790.0",
-  "importedAt": "2026-06-30T01:14:18.904Z",
-  "sourceAppRoot": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.616.10790.0_x64__2p2nqsd0c76g0\\app",
-  "targetAppRoot": "C:/codex-desktop-source/app",
-  "externalCopy": true,
+  "packageVersion": null,
+  "importedAt": "2026-07-14T10:16:22.613Z",
+  "sourceAppRoot": "C:\\Programs\\CodexR",
+  "targetAppRoot": "vendor/codex-desktop/windows/current/app",
   "files": {
     "resources/app.asar": {
-      "size": 159592222,
-      "sha256": "b1445de6388cab35b3c1662646fc4231e63dbb1a9b08668260145b1baa367c26"
+      "size": 199363505,
+      "sha256": "8ddc04d44985ca64d59097a76e5871c1010eeb94d7305fd61c5b3f111d452dff"
     },
     "Codex.exe": {
-      "size": 4512256,
-      "sha256": "9fa3c69cba3dacc3bf70e5a824014f2899dfb6778dbe14724a1b815dbd94e32d"
+      "size": 1089536,
+      "sha256": "09177c5d8fc111782464a33540dd064253f8537ddb1bafa8b4b37ee00d94e951"
+    },
+    "ChatGPT.exe": {
+      "size": 4070400,
+      "sha256": "28c3e8b6c55fff39ecb12a5eb27f493abf997804247517aa7a46c277ca5d9e93"
     }
   }
 }

@@ -44,7 +44,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -97,7 +100,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -156,7 +162,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -215,7 +224,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -274,7 +286,10 @@
       "auto_compact_token_limit": 360000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -333,7 +348,10 @@
       "auto_compact_token_limit": 360000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -388,7 +406,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -443,7 +464,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -498,7 +522,10 @@
       "auto_compact_token_limit": 180000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -553,7 +580,10 @@
       "auto_compact_token_limit": 235929,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -608,7 +638,10 @@
       "auto_compact_token_limit": 184320,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -661,7 +694,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -714,7 +750,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -769,7 +808,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -824,7 +866,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text", "image"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -879,7 +924,10 @@
       "auto_compact_token_limit": 900000,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -934,7 +982,10 @@
       "auto_compact_token_limit": 235929,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     },
     {
@@ -989,7 +1040,10 @@
       "auto_compact_token_limit": 235929,
       "effective_context_window_percent": 95,
       "experimental_supported_tools": [],
-      "input_modalities": ["text"],
+      "input_modalities": [
+        "text",
+        "image"
+      ],
       "supports_search_tool": false
     }
   ],

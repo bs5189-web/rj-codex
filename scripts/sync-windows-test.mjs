@@ -15,6 +15,7 @@ import {
   refreshWindowsAsarBuildMetadata,
   resolveProjectPath,
   validateRuizhiRuntimeBundle,
+  writeOwlUserDataDirectoryName,
   windowsResourceOverridesRoot,
   windowsAsarOverridesRoot,
   writeRuntimeModelCatalog
@@ -161,10 +162,22 @@ function syncRuntimeSystemSkills(resourcesDir) {
 
 function syncRuntimeResources() {
   const resourcesDir = path.join(testAppRoot, "resources");
+  writeOwlUserDataDirectoryName(testAppRoot, config, { log });
   const codexExePath = path.join(resourcesDir, "codex.exe");
   const modelTargetDir = path.join(resourcesDir, "models");
   if (modelCatalogEnabled()) {
-    const codexClientVersion = codexClientVersionFromExe(codexExePath);
+    let codexClientVersion = process.env.RUIZHI_CODEX_CLIENT_VERSION;
+    if (!codexClientVersion) {
+      const existingCatalogPath = path.join(modelTargetDir, "ruizhi-model-catalog.json");
+      if (fs.existsSync(existingCatalogPath)) {
+        try {
+          const existingCatalog = JSON.parse(fs.readFileSync(existingCatalogPath, "utf8"));
+          codexClientVersion = existingCatalog.codexClientVersion ?? existingCatalog.client_version;
+        } catch {
+        }
+      }
+    }
+    codexClientVersion ??= codexClientVersionFromExe(codexExePath);
     writeRuntimeModelCatalog(
       modelCatalogPath(),
       path.join(modelTargetDir, "ruizhi-model-catalog.json"),
@@ -187,7 +200,10 @@ function syncRuntimeResources() {
     log("已关闭模型协议 bridge");
   }
   copyWindowsPrerequisites(resourcesDir, { log });
-  copyWindowsResourceOverrides(resourcesDir, { log });
+  copyWindowsResourceOverrides(resourcesDir, {
+    log,
+    pageEnhanceEnabled: config.pageEnhance?.enabled !== false
+  });
   patchOpenAIBundledPluginDescriptions(resourcesDir, { log });
 }
 

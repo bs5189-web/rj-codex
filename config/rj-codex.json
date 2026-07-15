@@ -5,13 +5,15 @@
   "windows": {
     "sourceAppRoot": "vendor/codex-desktop/windows/current/app",
     "sourceManifestPath": "vendor/codex-desktop/windows/current/source-manifest.json",
-    "sourceExeName": "Codex.exe",
-    "appExeName": "Codex.exe",
+    "sourceExeName": "ChatGPT.exe",
+    "appExeName": "ChatGPT.exe",
     "taskManagerName": "Codex",
     "shortcutName": "锐捷Codex",
     "previousAppExeNames": [
-      "锐捷Codex.exe",
-      "锐捷.exe"
+      "Codex.exe",
+      "??.exe",
+      "??Codex.exe",
+      "??.exe"
     ],
     "zipName": "ruizhi-windows-${version}.${ext}",
     "iconPath": "assets/ruizhi.ico"
@@ -58,14 +60,17 @@
   "runtime": {
     "homeEnv": "RUIZHI_HOME",
     "defaultHomeDirName": ".ruizhi",
-    "electronUserDataDirName": "锐捷Codex"
+    "electronUserDataDirName": "Ruizhi"
+  },
+  "branding": {
+    "enabled": true
   },
   "models": {
     "enabled": true,
     "catalogPath": "resources/ruizhi-model-catalog.json"
   },
   "modelBridge": {
-    "enabled": true,
+    "enabled": false,
     "host": "127.0.0.1",
     "port": 17888,
     "runtimeScriptPath": "resources/bridge/ruizhi-responses-bridge.cjs",
@@ -122,17 +127,17 @@
     }
   },
   "pageEnhance": {
-    "enabled": true,
+    "enabled": false,
     "features": {
       "menu": false,
-      "pluginEntryUnlock": true,
-      "forcePluginInstall": true,
+      "pluginEntryUnlock": false,
+      "forcePluginInstall": false,
       "sessionDelete": false,
-      "markdownExport": true,
+      "markdownExport": false,
       "projectMove": false,
-      "timeline": true,
-      "threadScrollRestore": true,
-      "threadSort": true,
+      "timeline": false,
+      "threadScrollRestore": false,
+      "threadSort": false,
       "modelWhitelistUnlock": false,
       "zedRemoteOpen": false,
       "upstreamWorktreeCreate": false,

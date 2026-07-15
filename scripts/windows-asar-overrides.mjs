@@ -74,6 +74,10 @@ function windowsTaskManagerName(config) {
   return config.windows?.taskManagerName ?? config.productName ?? "锐捷";
 }
 
+function brandingEnabled(config) {
+  return config.branding?.enabled !== false;
+}
+
 function ruizhiBuildDate(date = new Date()) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -201,11 +205,12 @@ function pageEnhanceFeatures(config) {
 }
 
 function pageEnhanceBootstrapConfig(config, appVersion = config.version) {
+  const appDisplayVersion = brandingEnabled(config) ? ruizhiBuildVersionLabel(appVersion) : appVersion;
   return {
     enabled: pageEnhanceEnabled(config),
     features: pageEnhanceFeatures(config),
     appVersion,
-    appDisplayVersion: ruizhiBuildVersionLabel(appVersion),
+    appDisplayVersion,
     rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
     serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
   };
@@ -238,7 +243,7 @@ function patchNativeWebviewFeatureGates(extractedAppDir, options = {}) {
     log("已存在 Codex 原生 webview gate 补丁");
     return;
   }
-  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`,`3903563814`,`410065390`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
+  const nativeGateCode = "const ruizhiNativeFeatureGates=new Set([`3075919032`,`4166894088`,`410262010`,`3903563814`,`410065390`,`824038554`]);function ruizhiNativeFeatureGateValue(e){return ruizhiNativeFeatureGates.has(String(e))}";
   const targetGateMatch = original.match(statsigGateSourcePattern);
   if (!targetGateMatch) {
     throw new Error("Codex 原生 webview gate 补丁点不存在");
@@ -332,6 +337,18 @@ function patchNativeStatsigBootstrap(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const statsigBootstrapPattern = /async function ([A-Za-z_$][\w$]*)\(\{appSessionId:([A-Za-z_$][\w$]*),appVersion:([A-Za-z_$][\w$]*),buildFlavor:([A-Za-z_$][\w$]*),locale:([A-Za-z_$][\w$]*),stableId:([A-Za-z_$][\w$]*),systemName:([A-Za-z_$][\w$]*),systemVersion:([A-Za-z_$][\w$]*),windowType:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=null;try\{let\{statsigPayload:([A-Za-z_$][\w$]*)\}=await Promise\.race\(\[[\s\S]*?Timed out while fetching post-login Statsig bootstrap[\s\S]*?\]\),\{user:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\.parse\(JSON\.parse\(([A-Za-z_$][\w$]*)\)\);return\{statsigPayload:([A-Za-z_$][\w$]*),user:([A-Za-z_$][\w$]*)\}\}finally\{([A-Za-z_$][\w$]*)!=null&&globalThis\.clearTimeout\(([A-Za-z_$][\w$]*)\)\}\}/;
+  const candidates = walkFiles(assetsDir).filter((filePath) => {
+    if (!filePath.endsWith(".js")) return false;
+    const source = fs.readFileSync(filePath, "utf8");
+    return source.includes("Timed out while fetching post-login Statsig bootstrap") || source.includes("ruizhiCreateStatsigBootstrapPayload");
+  });
+  if (candidates.length === 0) {
+    log("已跳过 Codex 原生 Statsig post-login bootstrap 补丁（结构已变更）");
+    return;
+  }
+  if (candidates.length > 1) {
+    throw new Error(`Statsig post-login bootstrap bundle 匹配数量异常：${candidates.length}`);
+  }
   const statsigFile = candidates[0];
   const original = fs.readFileSync(statsigFile, "utf8");
   if (original.includes("ruizhiCreateStatsigBootstrapPayload")) {
@@ -340,7 +357,8 @@ function patchNativeStatsigBootstrap(extractedAppDir, options = {}) {
   }
   const match = original.match(statsigBootstrapPattern);
   if (!match) {
-    throw new Error("Codex 原生 Statsig post-login bootstrap 等待禁用补丁点不存在");
+    log("已跳过 Codex 原生 Statsig post-login bootstrap 补丁（补丁点不存在）");
+    return;
   }
   const functionName = match[1];
   const appSessionId = match[2];
@@ -355,6 +373,260 @@ function patchNativeStatsigBootstrap(extractedAppDir, options = {}) {
   );
   fs.writeFileSync(statsigFile, next, "utf8");
   log(`已禁用 Codex 原生 Statsig post-login bootstrap 等待：${path.basename(statsigFile)}`);
+}
+
+function patchWindowsDefaultLocale(extractedAppDir, config, options = {}) {
+  const log = options.log ?? (() => {});
+  const locale = config.locale ?? "zh-CN";
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  let changedFiles = 0;
+
+  const legacyResolvers = fs.existsSync(assetsDir)
+    ? walkFiles(assetsDir).filter((filePath) => /^locale-resolver-.*\.js$/.test(path.basename(filePath)))
+    : [];
+  for (const resolverFile of legacyResolvers) {
+    const changed = writePatchedFile(resolverFile, (source) => {
+      if (source.includes("var t=`en-US`")) {
+        return source.replace("var t=`en-US`", `var t=\`${locale}\``);
+      }
+      return source;
+    });
+    changedFiles += changed ? 1 : 0;
+  }
+
+  const intlSignalFiles = findFilesByContent(
+    assetsDir,
+    /\.js$/,
+    /locale:`en`,messages:\{\}/
+  );
+  for (const intlFile of intlSignalFiles) {
+    const changed = writePatchedFile(intlFile, (source) =>
+      source.replace(/locale:`en`,messages:\{\}/g, `locale:\`${locale}\`,messages:{}`)
+    );
+    changedFiles += changed ? 1 : 0;
+  }
+
+  if (legacyResolvers.length === 0 && intlSignalFiles.length === 0) {
+    throw new Error("Windows webview default locale patch point not found");
+  }
+
+  log(`Patched Windows default locale: ${locale}, changed files: ${changedFiles}`);
+}
+
+function shouldPreserveCodexVisibleText(value, contextKey = "") {
+  const text = String(value);
+  const key = String(contextKey);
+  return (
+    text === "Codex" ||
+    /\b(ChatGPT Work|Business Codex|Codex CLI|Codex Desktop|Codex Micro|Codex Workspace|Codex dependencies)\b/i.test(text) ||
+    /^sidebarElectron\.productMode\./.test(key) ||
+    /^settings\.(usage|codexMicro)\./.test(key) ||
+    /^threadPage\.remoteConnectionStatusBadge\.(install|remote|update).*Codex/i.test(key)
+  );
+}
+
+function replaceBrandInVisibleText(value, config, contextKey = "") {
+  if (shouldPreserveCodexVisibleText(value, contextKey)) {
+    return String(value).replace(/ChatGPT/g, config.productName ?? "锐智");
+  }
+  const productName = config.productName ?? "锐智";
+  return String(value)
+    .replace(/ChatGPT/g, productName)
+    .replace(/Codex/g, (match, offset, source) => {
+      const before = source.slice(Math.max(0, offset - 16), offset);
+      return /GPT-[0-9A-Za-z_. -]*$/i.test(before) ? match : productName;
+    });
+}
+
+function localeBundlePattern(locale) {
+  return new RegExp(`^${escapeRegExp(locale)}-.*\\.js$`);
+}
+
+function loadWindowsLocaleMessages(assetsDir, locale, config) {
+  const localeFiles = walkFiles(assetsDir)
+    .filter((filePath) => localeBundlePattern(locale).test(path.basename(filePath)));
+  if (localeFiles.length !== 1) {
+    throw new Error(`Windows ${locale} locale bundle match count is ${localeFiles.length}`);
+  }
+
+  const source = fs.readFileSync(localeFiles[0], "utf8");
+  const messages = new Map();
+  const pattern = /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g;
+  for (const match of source.matchAll(pattern)) {
+    messages.set(match[1], replaceBrandInVisibleText(match[2], config, match[1]));
+  }
+  if (messages.size === 0) {
+    throw new Error(`Windows ${locale} locale bundle is empty: ${localeFiles[0]}`);
+  }
+  return { localeFile: localeFiles[0], messages };
+}
+
+function patchWindowsFrontendLocalization(extractedAppDir, config, options = {}) {
+  const log = options.log ?? (() => {});
+  const locale = config.locale ?? "zh-CN";
+  const webviewRoot = path.join(extractedAppDir, "webview");
+  const assetsDir = path.join(webviewRoot, "assets");
+  const { localeFile, messages } = loadWindowsLocaleMessages(assetsDir, locale, config);
+  let changedFiles = 0;
+  let changedMessages = 0;
+
+  const onboardingReplacements = new Map([
+    ["electron.onboarding.login.chatgpt.continue", "使用锐智继续"],
+    ["electron.onboarding.login.chatgpt.signIn", "使用锐智继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐智继续"],
+    ["electron.onboarding.welcomeV2.continue", "使用锐智继续"],
+    ["electron.onboarding.login.includedPlans.welcomeV2", `${config.version ?? ""}`],
+    ["electron.onboarding.welcomeV2.role.subtitle", `${config.version ?? ""}`],
+    ["electron.onboarding.welcomeV2.role.subtitle.chatgpt", `${config.version ?? ""}`],
+    ["sidebarElectron.productMode.chatGptWork", "<chatGpt>\u5de5\u4f5c</chatGpt>"],
+    ["sidebarElectron.productMode.chatGptWork.plainText", "\u5de5\u4f5c"],
+    ["sidebarElectron.productMode.codex", "Codex"]
+  ]);
+
+  const localeChanged = writePatchedFile(localeFile, (source) => {
+    const localeEntryPattern = /"((?:\\.|[^"\\])+)":`((?:\\.|[^`\\])*)`/g;
+    let next = source.replace(localeEntryPattern, (literal, key, value) => {
+      if (onboardingReplacements.has(key)) {
+        return `"${key}":\`${onboardingReplacements.get(key)}\``;
+      }
+      const branded = replaceBrandInVisibleText(value, config, key);
+      return branded === value ? literal : `"${key}":\`${branded}\``;
+    });
+    next = next.replace(/`((?:\\.|[^`\\])*)`/g, (literal, value) => {
+      const branded = replaceBrandInVisibleText(value, config);
+      return branded === value ? literal : `\`${branded}\``;
+    });
+    for (const [key, value] of onboardingReplacements) {
+      const pattern = new RegExp(`("${escapeRegExp(key)}":)\`(?:\\\\.|[^\`\\\\])*\``);
+      next = next.replace(pattern, `$1\`${value}\``);
+      messages.set(key, value);
+    }
+    next = next
+      .replace(/("sidebarElectron\.productMode\.chatGptWork":)`(?:\\.|[^`\\])*`/, "$1`<chatGpt>\u5de5\u4f5c</chatGpt>`")
+      .replace(/("sidebarElectron\.productMode\.chatGptWork\.plainText":)`(?:\\.|[^`\\])*`/, "$1`\u5de5\u4f5c`")
+      .replace(/("sidebarElectron\.productMode\.codex":)`(?:\\.|[^`\\])*`/, "$1`Codex`");
+    return next;
+  });
+  changedFiles += localeChanged ? 1 : 0;
+
+  const textFiles = walkFiles(webviewRoot)
+    .filter((filePath) => /\.(js|html)$/i.test(filePath));
+  for (const filePath of textFiles) {
+    if (filePath === localeFile) {
+      continue;
+    }
+    const changed = writePatchedFile(filePath, (source) =>
+      source.replace(
+        /id:`([^`]+)`,defaultMessage:`((?:\\.|[^`\\])*)`/g,
+        (match, id, defaultMessage) => {
+          const localized = messages.get(id);
+          const nextMessage = localized ?? replaceBrandInVisibleText(defaultMessage, config, id);
+          if (nextMessage === defaultMessage) {
+            return match;
+          }
+          changedMessages += 1;
+          return `id:\`${id}\`,defaultMessage:\`${nextMessage}\``;
+        }
+      ).replace(/(defaultMessage|title|label):`((?:\\.|[^`\\])*)`/g, (match, key, value) => {
+        const branded = replaceBrandInVisibleText(value, config);
+        return branded === value ? match : `${key}:\`${branded}\``;
+      })
+    );
+    changedFiles += changed ? 1 : 0;
+  }
+
+  log(`Patched Windows frontend localization: ${locale}, files=${changedFiles}, messages=${changedMessages}`);
+}
+
+function replaceLocaleBacktickValue(source, key, value) {
+  const prefix = `"${key}":\``;
+  const start = source.indexOf(prefix);
+  if (start < 0) {
+    throw new Error(`Windows locale key not found: ${key}`);
+  }
+  const valueStart = start + prefix.length;
+  const valueEnd = source.indexOf("`", valueStart);
+  if (valueEnd < 0) {
+    throw new Error(`Windows locale value terminator not found: ${key}`);
+  }
+  return `${source.slice(0, valueStart)}${value}${source.slice(valueEnd)}`;
+}
+
+function patchWindowsProductModeLabels(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const localeFiles = walkFiles(assetsDir)
+    .filter((filePath) => /^zh-CN-.*\.js$/.test(path.basename(filePath)));
+  if (localeFiles.length !== 1) {
+    throw new Error(`Windows product mode locale bundle match count is ${localeFiles.length}`);
+  }
+  const changed = writePatchedFile(localeFiles[0], (source) => {
+    let next = source;
+    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork", "<chatGpt>\u5de5\u4f5c</chatGpt>");
+    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork.plainText", "\u5de5\u4f5c");
+    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.codex", "Codex");
+    return next;
+  });
+  log(`Patched Windows product mode labels: ${changed ? "changed" : "already current"}`);
+}
+
+function patchWindowsProductModeSwitcherVisibility(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const candidates = walkFiles(assetsDir).filter((filePath) => {
+    if (!/^app-main-.*\.js$/.test(path.basename(filePath))) return false;
+    const source = fs.readFileSync(filePath, "utf8");
+    return source.includes("sidebarElectron.productMode.trigger");
+  });
+  if (candidates.length !== 1) {
+    throw new Error(`Windows product mode switcher bundle match count is ${candidates.length}`);
+  }
+
+  const appMainFile = candidates[0];
+  const changed = writePatchedFile(appMainFile, (source) => {
+    let next = source;
+    next = next.replace(
+      /([A-Za-z_$][\w$]*)=ba\(`824038554`\)/,
+      "$1=!0"
+    );
+    next = next.replace(
+      /([A-Za-z_$][\w$]*)=ba\(`3075919032`\)/,
+      "$1=!0"
+    );
+    return next;
+  });
+
+  log(`Patched Windows product mode switcher visibility: ${changed ? "changed" : "already current"}`);
+}
+
+function patchWindowsSandboxOnboardingBypass(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const candidates = walkFiles(assetsDir).filter((filePath) => {
+    if (!/^app-main-.*\.js$/.test(path.basename(filePath))) return false;
+    const source = fs.readFileSync(filePath, "utf8");
+    return source.includes("start-windows-sandbox-setup-for-host") && source.includes("allowUnelevatedFallback");
+  });
+  if (candidates.length !== 1) {
+    throw new Error(`Windows sandbox onboarding bundle match count is ${candidates.length}`);
+  }
+
+  const appMainFile = candidates[0];
+  const changed = writePatchedFile(appMainFile, (source) => {
+    if (source.includes("function ruizhiWindowsSandboxOnboardingState()")) {
+      return source;
+    }
+    return source.replace(
+      /function ([A-Za-z_$][\w$]*)\(e\)\{let t=\(0,([A-Za-z_$][\w$]*)\.c\)\(6\),\{children:n\}=e,[\s\S]*?let a;return t\[4\]===n\?a=t\[5\]:\(a=\(0,([A-Za-z_$][\w$]*)\.jsx\)\(([A-Za-z_$][\w$]*),\{children:n\}\),t\[4\]=n,t\[5\]=a\),a\}function ([A-Za-z_$][\w$]*)\(e\)\{let t=\(0,\2\.c\)\(22\),\{children:n\}=e,/,
+      "function ruizhiWindowsSandboxOnboardingState(){return {isEnabled:!0,isLoading:!1,shouldShow:!1}}function $1(e){let{children:n}=e;return (0,$3.jsx)($4,{value:ruizhiWindowsSandboxOnboardingState(),children:n})}function $5(e){let t=(0,$2.c)(22),{children:n}=e,"
+    );
+  });
+
+  if (!fs.readFileSync(appMainFile, "utf8").includes("function ruizhiWindowsSandboxOnboardingState()")) {
+    throw new Error("Windows sandbox onboarding bypass patch point not found");
+  }
+
+  log(`Patched Windows sandbox onboarding bypass: ${changed ? "changed" : "already current"}`);
 }
 
 function patchNativeCesAnalyticsNetwork(extractedAppDir, options = {}) {
@@ -392,12 +664,18 @@ function patchNativeCesAnalyticsNetwork(extractedAppDir, options = {}) {
 function patchNativeProfileVisibility(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const profileVisibilityFile = findOneFileByContent(
-    assetsDir,
-    /^profile-visibility-.*\.js$/,
-    /2478676115[\s\S]*3503973010[\s\S]*show_dropdown_entry_point/,
-    "profile visibility bundle"
-  );
+  let profileVisibilityFile;
+  try {
+    profileVisibilityFile = findOneFileByContent(
+      assetsDir,
+      /^profile-visibility-.*\.js$/,
+      /2478676115[\s\S]*3503973010[\s\S]*show_dropdown_entry_point/,
+      "profile visibility bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex 个人资料入口补丁：${error.message}`);
+    return;
+  }
   let source = fs.readFileSync(profileVisibilityFile, "utf8");
   if (source.includes("ruizhiProfileVisibility()")) {
     log("已存在 Codex 个人资料入口补丁");
@@ -421,12 +699,18 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
 function patchNativeUsageSettingsVisibility(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const usageAccessFile = findOneFileByContent(
-    assetsDir,
-    /^.+\.js$/,
-    /enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible/,
-    "usage settings access bundle"
-  );
+  let usageAccessFile;
+  try {
+    usageAccessFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible/,
+      "usage settings access bundle"
+    );
+  } catch (error) {
+    log(`Skipped usage settings visibility patch: ${error.message}`);
+    return;
+  }
   let source = fs.readFileSync(usageAccessFile, "utf8");
   if (source.includes("ruizhiUsageSettingsVisibleForApiKey")) {
     log("已存在 Codex 使用情况设置入口补丁");
@@ -483,12 +767,18 @@ function patchNativeProfileDropdownUsageVisibility(extractedAppDir, options = {}
 function patchNativeProfileUsageFallback(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
-  const profileQueriesFile = findOneFileByContent(
-    assetsDir,
-    /^.+\.js$/,
-    /\/wham\/profiles\/me/,
-    "profile queries bundle"
-  );
+  let profileQueriesFile;
+  try {
+    profileQueriesFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /\/wham\/profiles\/me/,
+      "profile queries bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex 个人资料 Token 活动本地兜底补丁：${error.message}`);
+    return;
+  }
   let source = fs.readFileSync(profileQueriesFile, "utf8");
   if (source.includes("/profile/usage")) {
     log("已存在 Codex 个人资料 Token 活动本地兜底补丁");
@@ -508,12 +798,18 @@ function patchNativeProfileUsageFallback(extractedAppDir, options = {}) {
 function patchNativeProfileApiCallLogging(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const mainBuildDir = path.join(extractedAppDir, ".vite", "build");
-  const mainFile = findOneFileByContent(
-    mainBuildDir,
-    /^main-.*\.js$/,
-    /CODEX_API_BASE_URL[\s\S]*?prodApiBaseUrl/,
-    "main API base bundle"
-  );
+  let mainFile;
+  try {
+    mainFile = findOneFileByContent(
+      mainBuildDir,
+      /^main-.*\.js$/,
+      /CODEX_API_BASE_URL[\s\S]*?prodApiBaseUrl/,
+      "main API base bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex /wham/profiles/me 主进程调用日志补丁：${error.message}`);
+    return;
+  }
   let source = fs.readFileSync(mainFile, "utf8");
   if (source.includes("[ruizhi][profile-api]")) {
     log("已存在 Codex /wham/profiles/me 主进程调用日志补丁");
@@ -706,7 +1002,13 @@ function patchChatGptAuthExternalBrowser(extractedAppDir, options = {}) {
   }
 
   const source = fs.readFileSync(mainFile[0], "utf8");
-  const patched = patchChatGptAuthExternalBrowserSource(source);
+  let patched;
+  try {
+    patched = patchChatGptAuthExternalBrowserSource(source);
+  } catch (error) {
+    log(`已跳过 ChatGPT 认证链接外部浏览器补丁：${error.message}`);
+    return;
+  }
   if (patched === source) {
     log(`已存在 ChatGPT 认证链接外部浏览器补丁：${path.basename(mainFile[0])}`);
     return;
@@ -954,6 +1256,47 @@ export function walkFiles(root) {
   return result;
 }
 
+function findOneFileByContent(dir, namePattern, contentPattern, description) {
+  const candidates = walkFiles(dir).filter((filePath) => {
+    if (!namePattern.test(path.basename(filePath))) return false;
+    return contentPattern.test(fs.readFileSync(filePath, "utf8"));
+  });
+  if (candidates.length !== 1) {
+    throw new Error(`${description} 匹配数量异常：${candidates.length}`);
+  }
+  return candidates[0];
+}
+
+function findFilesByContent(dir, namePattern, contentPattern) {
+  return walkFiles(dir).filter((filePath) => {
+    if (!namePattern.test(path.basename(filePath))) return false;
+    return contentPattern.test(fs.readFileSync(filePath, "utf8"));
+  });
+}
+
+function replaceExact(source, from, to, label) {
+  if (!source.includes(from)) {
+    throw new Error(`Patch point not found: ${label}`);
+  }
+  return source.replace(from, to);
+}
+
+function replaceRegex(source, pattern, to, label) {
+  if (!pattern.test(source)) {
+    throw new Error(`Patch point not found: ${label}`);
+  }
+  return source.replace(pattern, to);
+}
+
+function writePatchedFile(filePath, transform) {
+  const original = fs.readFileSync(filePath, "utf8");
+  const patched = transform(original);
+  if (patched !== original) {
+    fs.writeFileSync(filePath, patched, "utf8");
+  }
+  return patched !== original;
+}
+
 export function asarRelativePath(root, filePath) {
   const relativePath = path.relative(root, filePath).replaceAll(path.sep, "/");
   if (!relativePath || relativePath.startsWith("../") || path.isAbsolute(relativePath)) {
@@ -1062,13 +1405,16 @@ export function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
   catalog.models = catalog.models.filter((model) => !isNonChatModelCatalogEntry(model));
   for (const model of catalog.models) {
     if (!model || typeof model !== "object") continue;
-    model.input_modalities = ensureTextAndImageInputModalities(model.input_modalities);
+    model.input_modalities = ["text", "image"];
     model.inputModalities = model.input_modalities;
     if (!Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length === 0) {
       model.supported_reasoning_levels = defaultReasoningLevels();
     }
     if (typeof model.default_reasoning_level !== "string" || model.default_reasoning_level.length === 0) {
       model.default_reasoning_level = "medium";
+    }
+    if (!Array.isArray(model.supported_reasoning_efforts) || model.supported_reasoning_efforts.length === 0) {
+      model.supported_reasoning_efforts = defaultReasoningEfforts();
     }
     model.supportedReasoningEfforts = model.supported_reasoning_levels.map((entry) => ({
       reasoningEffort: entry.effort,
@@ -1083,6 +1429,10 @@ export function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
     }
   }
   return catalog;
+}
+
+function defaultReasoningEfforts() {
+  return ["minimal", "low", "medium", "high", "xhigh"];
 }
 
 function ensureTextAndImageInputModalities(value) {
@@ -1190,9 +1540,7 @@ function removeValidationDirBestEffort(dir) {
 }
 
 function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
-  if (!modelBridgeEnabled(config)) {
-    return { bridge: false };
-  }
+  const bridgeEnabled = modelBridgeEnabled(config);
 
   const resourcesDir = path.join(appRoot, "resources");
   const appAsarPath = path.join(resourcesDir, "app.asar");
@@ -1200,8 +1548,8 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
     throw new Error(`${label} 缺少 app.asar：${appAsarPath}`);
   }
 
-  const bridgePath = path.join(resourcesDir, ...modelBridgeRuntimeResourcePath(config));
-  if (!fs.existsSync(bridgePath)) {
+  const bridgePath = bridgeEnabled ? path.join(resourcesDir, ...modelBridgeRuntimeResourcePath(config)) : null;
+  if (bridgeEnabled && !fs.existsSync(bridgePath)) {
     throw new Error(`${label} 缺少模型协议 bridge：${bridgePath}`);
   }
 
@@ -1218,8 +1566,13 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
     try {
       asar.uncache?.(appAsarPath);
       asar.extractAll(appAsarPath, extractDir);
-      const bootstrapPath = path.join(extractDir, ".vite", "build", "bootstrap.js");
-      if (!fs.existsSync(bootstrapPath)) {
+      const buildDir = path.join(extractDir, ".vite", "build");
+      const bootstrapPath = fs.existsSync(path.join(buildDir, "bootstrap.js"))
+        ? path.join(buildDir, "bootstrap.js")
+        : fs.existsSync(buildDir)
+          ? path.join(buildDir, fs.readdirSync(buildDir).find((name) => /^bootstrap(?:-[A-Za-z0-9_]+)?\.js$/.test(name)) ?? "")
+          : path.join(buildDir, "bootstrap.js");
+      if (!bootstrapPath || !fs.existsSync(bootstrapPath)) {
         throw new Error(`${label} app.asar 缺少 bootstrap.js`);
       }
       if (options.expectedVersion) {
@@ -1231,8 +1584,49 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
         if (packageJson.version !== options.expectedVersion) {
           throw new Error(`${label} app.asar package 版本不一致：期望 ${options.expectedVersion}，实际 ${packageJson.version}`);
         }
+        if (typeof packageJson.main !== "string" || !packageJson.main || !fs.existsSync(path.join(extractDir, packageJson.main))) {
+          throw new Error(`${label} app.asar package main 入口不存在：${packageJson.main ?? "<missing>"}`);
+        }
       }
       const bootstrap = fs.readFileSync(bootstrapPath, "utf8");
+      const runtimeConfig = config.runtime ?? {};
+      const expectedHomeEnv = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
+      const expectedHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
+      const expectedLocale = config.locale ?? "zh-CN";
+      const expectedUserDataName = runtimeConfig.electronUserDataDirName ?? "Codex";
+      if (!bootstrap.includes(`process.env.${expectedHomeEnv}=codexHome`) && !(bootstrap.includes(`ruizhiHomeEnvName=${JSON.stringify(expectedHomeEnv)}`) && bootstrap.includes("process.env[ruizhiHomeEnvName]=codexHome"))) {
+        throw new Error(`${label} bootstrap missing ${expectedHomeEnv} codexHome assignment`);
+      }
+      if (!bootstrap.includes("process.env.CODEX_HOME=codexHome")) {
+        throw new Error(`${label} bootstrap missing CODEX_HOME codexHome assignment`);
+      }
+      if (!bootstrap.includes(expectedHomeDirName)) {
+        throw new Error(`${label} bootstrap missing default home dir ${expectedHomeDirName}`);
+      }
+      if (!bootstrap.includes(`appendSwitch(\`lang\`,\`${expectedLocale}\`)`) && !bootstrap.includes(`appendSwitch(\`lang\`,${JSON.stringify(expectedLocale)})`) && !bootstrap.includes(`appendSwitch("lang",${JSON.stringify(expectedLocale)})`)) {
+        throw new Error(`${label} bootstrap missing forced locale ${expectedLocale}`);
+      }
+      const preloadPath = path.join(buildDir, "preload.js");
+      if (!fs.existsSync(preloadPath)) {
+        throw new Error(`${label} app.asar missing preload.js`);
+      }
+      const preload = fs.readFileSync(preloadPath, "utf8");
+      if (!preload.includes("forceRuizhiLocale") || !preload.includes(expectedLocale)) {
+        throw new Error(`${label} preload missing forced renderer locale ${expectedLocale}`);
+      }
+      if (!bootstrap.includes("cn.ruizhi.desktop")) {
+        throw new Error(`${label} bootstrap missing independent Windows AppUserModelID`);
+      }
+      if (!bootstrap.includes(`getPath(\`appData\`),\`${expectedUserDataName}\``) && !bootstrap.includes(`getPath("appData"),"${expectedUserDataName}"`) && !(bootstrap.includes(`electronUserDataDirName=${JSON.stringify(expectedUserDataName)}`) && bootstrap.includes("process.env.CODEX_ELECTRON_USER_DATA_PATH=userData"))) {
+        throw new Error(`${label} bootstrap missing independent userData directory ${expectedUserDataName}`);
+      }
+      if (/if\(!\(![A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\.app\.requestSingleInstanceLock\(\)\)\)/.test(bootstrap)) {
+        throw new Error(`${label} bootstrap still contains official single-instance lock`);
+      }
+      if (!bridgeEnabled) {
+        removeValidationDirBestEffort(extractDir);
+        return { bridge: false };
+      }
       if ((config.models?.enabled ?? true) && bootstrap.includes("const modelCatalogEnabled=false;")) {
         throw new Error(`${label} bootstrap 仍会关闭运行态模型目录`);
       }
@@ -1245,11 +1639,20 @@ function validateRuntimeAsarBridge(appRoot, config, label, options = {}) {
       if (!bootstrap.includes("ensureLoopbackNoProxy")) {
         throw new Error(`${label} bootstrap 缺少本地 bridge 代理绕过逻辑`);
       }
-      if (!bootstrap.includes(bridgeBaseUrl)) {
-        throw new Error(`${label} bootstrap 未指向本地模型 provider：${bridgeBaseUrl}`);
-      }
-      removeValidationDirBestEffort(extractDir);
-      return { bridge: true };
+        if (!bootstrap.includes(bridgeBaseUrl)) {
+          throw new Error(`${label} bootstrap 未指向本地模型 provider：${bridgeBaseUrl}`);
+        }
+        if (!bootstrap.includes("cn.ruizhi.desktop")) {
+          throw new Error(`${label} bootstrap 未设置独立 Windows AppUserModelID`);
+        }
+        if (!bootstrap.includes(`getPath(\`appData\`),\`${expectedUserDataName}\``) && !bootstrap.includes(`getPath("appData"),"${expectedUserDataName}"`)) {
+          throw new Error(`${label} bootstrap 未设置独立 userData 目录：${expectedUserDataName}`);
+        }
+        if (/if\(!\(![A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\.app\.requestSingleInstanceLock\(\)\)\)/.test(bootstrap)) {
+          throw new Error(`${label} bootstrap 仍包含官方单实例锁`);
+        }
+        removeValidationDirBestEffort(extractDir);
+        return { bridge: true };
     } catch (error) {
       lastError = error;
       removeValidationDirBestEffort(extractDir);
@@ -1341,11 +1744,49 @@ function validateRuntimePluginMarketplaces(appRoot, config, label) {
   return { marketplaces: marketplaces.length };
 }
 
+function expectedOwlUserDataDirectoryName(config) {
+  return config.runtime?.electronUserDataDirName ?? "Codex";
+}
+
+export function writeOwlUserDataDirectoryName(appRoot, config, options = {}) {
+  const log = options.log ?? (() => {});
+  const iniPath = path.join(appRoot, "resources", "owl-app.ini");
+  const expectedName = expectedOwlUserDataDirectoryName(config);
+  if (!fs.existsSync(iniPath)) {
+    throw new Error(`缺少 Owl runtime 配置：${iniPath}`);
+  }
+
+  const source = fs.readFileSync(iniPath, "utf8");
+  const next = /^UserDataDirectoryName=/m.test(source)
+    ? source.replace(/^UserDataDirectoryName=.*$/m, `UserDataDirectoryName=${expectedName}`)
+    : `${source.replace(/\s*$/, "")}\nUserDataDirectoryName=${expectedName}\n`;
+  if (next !== source) {
+    fs.writeFileSync(iniPath, next, "utf8");
+    log(`已设置 Owl 用户数据目录：${expectedName}`);
+  }
+}
+
+function validateOwlUserDataDirectoryName(appRoot, config, label) {
+  const iniPath = path.join(appRoot, "resources", "owl-app.ini");
+  const expectedName = expectedOwlUserDataDirectoryName(config);
+  if (!fs.existsSync(iniPath)) {
+    throw new Error(`${label} 缺少 Owl runtime 配置：${iniPath}`);
+  }
+  const source = fs.readFileSync(iniPath, "utf8");
+  const match = source.match(/^UserDataDirectoryName=(.*)$/m);
+  const actualName = match?.[1]?.trim();
+  if (actualName !== expectedName) {
+    throw new Error(`${label} Owl 用户数据目录不一致：期望 ${expectedName}，实际 ${actualName ?? "<missing>"}`);
+  }
+  return { owlUserDataDirectoryName: actualName };
+}
+
 export function validateRuizhiRuntimeBundle(appRoot, config, options = {}) {
   const log = options.log ?? (() => {});
   const label = options.label ?? (path.relative(projectRoot, appRoot) || appRoot);
   const resourcesDir = path.join(appRoot, "resources");
   assertInsideProject(resourcesDir);
+  const owlResult = validateOwlUserDataDirectoryName(appRoot, config, label);
 
   const targetCatalogPath = path.join(resourcesDir, "models", "ruizhi-model-catalog.json");
   if (!modelCatalogEnabled(config)) {
@@ -1358,7 +1799,7 @@ export function validateRuizhiRuntimeBundle(appRoot, config, options = {}) {
     const environmentText = environmentResult.environment ? `，env=${environmentResult.environment}` : "";
     const marketplaceText = marketplaceResult.marketplaces ? `，marketplaces=${marketplaceResult.marketplaces}` : "";
     log(`已校验运行态产物：${label}，models=off，bridge=${bridgeResult.bridge ? "on" : "off"}${environmentText}${marketplaceText}`);
-    return { count: 0, etag: null, ...bridgeResult, ...environmentResult, ...marketplaceResult };
+    return { count: 0, etag: null, ...owlResult, ...bridgeResult, ...environmentResult, ...marketplaceResult };
   }
 
   if (!fs.existsSync(targetCatalogPath)) {
@@ -1374,7 +1815,7 @@ export function validateRuizhiRuntimeBundle(appRoot, config, options = {}) {
   const environmentText = environmentResult.environment ? `，env=${environmentResult.environment}` : "";
   const marketplaceText = marketplaceResult.marketplaces ? `，marketplaces=${marketplaceResult.marketplaces}` : "";
   log(`已校验运行态产物：${label}，models=${catalogResult.count}，etag=${catalogResult.etag}，bridge=${bridgeResult.bridge ? "on" : "off"}${environmentText}${marketplaceText}`);
-  return { ...catalogResult, ...bridgeResult, ...environmentResult, ...marketplaceResult };
+  return { ...catalogResult, ...owlResult, ...bridgeResult, ...environmentResult, ...marketplaceResult };
 }
 
 export function applyWindowsAsarOverrides(targetDir, options = {}) {
@@ -1408,7 +1849,9 @@ export function copyWindowsResourceOverrides(resourcesDir, options = {}) {
     log(`已应用 Windows 资源覆盖层：${files.length} 个文件`);
   }
 
-  const enhanceFiles = copyPageEnhanceRuntimeResources(resourcesDir, { log });
+  const enhanceFiles = options.pageEnhanceEnabled === false
+    ? (log("已跳过页面增强 renderer 与服务脚本"), { files: 0 })
+    : copyPageEnhanceRuntimeResources(resourcesDir, { log });
   return { files: files.length + enhanceFiles.files };
 }
 
@@ -1630,12 +2073,14 @@ export function patchOpenAIBundledPluginDescriptions(resourcesDir, options = {})
     return plugin;
   });
 
-  writeTranslatedOpenAIPluginSkill(
+  if (!writeTranslatedOpenAIPluginSkill(
     path.join(pluginsRoot, "chrome", "skills", "chrome", "SKILL.md"),
     "Chrome",
     "用户 Chrome 浏览器自动化。适用于需要 cookies、登录态、已有标签页、扩展，或远程认证网站的浏览器任务。",
     "/openai-bundled/plugins/chrome/skills/chrome/SKILL.md"
-  );
+  )) {
+    log("已跳过 Chrome skill markdown 文案补丁，目标文件不存在");
+  }
   patchSkillDescription(
     path.join(pluginsRoot, "latex", "skills", "latex-compile", "SKILL.md"),
     "使用内置 Tectonic、系统 TeX Live 或 MacTeX 编译 LaTeX 和 TeX 文档。"
@@ -2118,7 +2563,7 @@ function translatedOpenAIPluginSkillMarkdown(previewPath) {
 
 function writeTranslatedOpenAIPluginSkill(skillPath, name, description, previewPath) {
   if (!fs.existsSync(skillPath)) {
-    throw new Error(`skill 文案补丁目标不存在：${skillPath}`);
+    return false;
   }
 
   const body = translatedOpenAIPluginSkillMarkdown(previewPath).trim();
@@ -2127,6 +2572,7 @@ function writeTranslatedOpenAIPluginSkill(skillPath, name, description, previewP
     `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`,
     "utf8"
   );
+  return true;
 }
 
 function patchPluginDescriptionDisplayBundle(filePath) {
@@ -2463,9 +2909,29 @@ function replaceInFile(filePath, pattern, replacement, label) {
 
 function preloadPageEnhanceIntegrationSnippet(config, appVersion = config.version) {
   const enhanceConfig = pageEnhanceBootstrapConfig(config, appVersion);
+  const locale = config.locale ?? "zh-CN";
+  const localeLanguage = locale.split("-")[0] || locale;
   return `
   /* ruizhi-page-enhance-preload:start */
 ${pageEnhanceRendererInstallerSource()}
+  const ruizhiForcedLocale=${jsonLiteral(locale)};
+  const ruizhiForcedLanguage=${jsonLiteral(localeLanguage)};
+  function forceRuizhiLocale(){
+    try{
+      Object.defineProperty(Navigator.prototype,"language",{configurable:true,get(){return ruizhiForcedLocale}});
+      Object.defineProperty(Navigator.prototype,"languages",{configurable:true,get(){return [ruizhiForcedLocale,ruizhiForcedLanguage]}});
+    }catch{}
+    try{document.documentElement.lang=ruizhiForcedLocale}catch{}
+    try{
+      for(const storage of [globalThis.localStorage,globalThis.sessionStorage]){
+        if(!storage)continue;
+        for(const key of ["locale","language","i18nextLng","chatgpt.locale","chatgpt.language","oai/apps/locale","oai/apps/language"]){
+          try{storage.setItem(key,ruizhiForcedLocale)}catch{}
+        }
+      }
+    }catch{}
+  }
+  forceRuizhiLocale();
   const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
   api.enhance={
     call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
@@ -2489,17 +2955,120 @@ ${pageEnhanceRendererInstallerSource()}
 `;
 }
 
+function preloadPageEnhanceFallbackSnippet(config, appVersion = config.version) {
+  const enhanceConfig = pageEnhanceBootstrapConfig(config, appVersion);
+  const locale = config.locale ?? "zh-CN";
+  const localeLanguage = locale.split("-")[0] || locale;
+  return `
+/* ruizhi-page-enhance-preload:start */
+(()=>{try{
+${pageEnhanceRendererInstallerSource()}
+  const ruizhiForcedLocale=${jsonLiteral(locale)};
+  const ruizhiForcedLanguage=${jsonLiteral(localeLanguage)};
+  function forceRuizhiLocale(){
+    try{
+      Object.defineProperty(Navigator.prototype,"language",{configurable:true,get(){return ruizhiForcedLocale}});
+      Object.defineProperty(Navigator.prototype,"languages",{configurable:true,get(){return [ruizhiForcedLocale,ruizhiForcedLanguage]}});
+    }catch{}
+    try{document.documentElement.lang=ruizhiForcedLocale}catch{}
+    try{
+      for(const storage of [globalThis.localStorage,globalThis.sessionStorage]){
+        if(!storage)continue;
+        for(const key of ["locale","language","i18nextLng","chatgpt.locale","chatgpt.language","oai/apps/locale","oai/apps/language"]){
+          try{storage.setItem(key,ruizhiForcedLocale)}catch{}
+        }
+      }
+    }catch{}
+  }
+  forceRuizhiLocale();
+  const pageEnhanceConfig=${jsonLiteral(enhanceConfig)};
+  const ipcRenderer=e.ipcRenderer;
+  const contextBridge=e.contextBridge;
+  const api={enhance:{
+    call:(route,payload)=>ipcRenderer.invoke("ruizhi:enhance:call",route,payload||{}),
+    getSettings:()=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/get",{}),
+    setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
+  }};
+  try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
+  function injectRuizhiPageEnhance(){
+    if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
+    window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
+    try{
+      const installer=globalThis.__RUIZHI_INSTALL_PAGE_ENHANCE__;
+      if(typeof installer!=="function")throw new Error("页面增强 installer 不可用");
+      installer({window,document,ruizhiDesktop:api,config:pageEnhanceConfig});
+    }catch(error){console.error("ruizhi page enhance inject failed",error);}
+  }
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",injectRuizhiPageEnhance,{once:true});else injectRuizhiPageEnhance();
+}catch(error){console.error("ruizhi preload fallback integration failed",error)}})();
+/* ruizhi-page-enhance-preload:end */
+`;
+}
+
+function preloadForcedLocaleSnippet(config) {
+  const locale = config.locale ?? "zh-CN";
+  const localeLanguage = locale.split("-")[0] || locale;
+  return `
+/* ruizhi-page-enhance-preload:start */
+(()=>{try{
+  const ruizhiForcedLocale=${jsonLiteral(locale)};
+  const ruizhiForcedLanguage=${jsonLiteral(localeLanguage)};
+  function forceRuizhiLocale(){
+    try{
+      Object.defineProperty(Navigator.prototype,"language",{configurable:true,get(){return ruizhiForcedLocale}});
+      Object.defineProperty(Navigator.prototype,"languages",{configurable:true,get(){return [ruizhiForcedLocale,ruizhiForcedLanguage]}});
+    }catch{}
+    try{document.documentElement.lang=ruizhiForcedLocale}catch{}
+    try{
+      for(const storage of [globalThis.localStorage,globalThis.sessionStorage]){
+        if(!storage)continue;
+        for(const key of ["locale","language","i18nextLng","chatgpt.locale","chatgpt.language","oai/apps/locale","oai/apps/language"]){
+          try{storage.setItem(key,ruizhiForcedLocale)}catch{}
+        }
+      }
+    }catch{}
+  }
+  forceRuizhiLocale();
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",forceRuizhiLocale,{once:true});
+}catch(error){console.error("ruizhi locale preload failed",error)}})();
+/* ruizhi-page-enhance-preload:end */
+`;
+}
+
 function ensurePreloadPageEnhanceIntegration(preloadPath, config, options = {}) {
   const log = options.log ?? (() => {});
   const appVersion = options.appVersion ?? config.version;
   let source = fs.readFileSync(preloadPath, "utf8");
   let next = source.replace(/\/\* ruizhi-page-enhance-preload:start \*\/[\s\S]*?\/\* ruizhi-page-enhance-preload:end \*\/\r?\n?/g, "");
+  if (!pageEnhanceEnabled(config)) {
+    const sourceMapAnchor = "\n//# sourceMappingURL=preload.js.map";
+    if (!next.includes("function forceRuizhiLocale")) {
+      if (!next.includes(sourceMapAnchor)) {
+        throw new Error("preload 中文 locale 注入点不存在");
+      }
+      next = next.replace(sourceMapAnchor, `${preloadForcedLocaleSnippet(config)}${sourceMapAnchor}`);
+    }
+    if (next !== source) {
+      fs.writeFileSync(preloadPath, next, "utf8");
+      log("已注入中文 locale preload，跳过页面增强 bridge");
+    }
+    return;
+  }
   if (next.includes("enhance:{") || next.includes("enhance={")) {
     return;
   }
   const exposeAnchor = '  try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}';
   if (!next.includes(exposeAnchor)) {
-    throw new Error("preload 增强 bridge 注入点不存在");
+    const sourceMapAnchor = "\n//# sourceMappingURL=preload.js.map";
+    if (!next.includes(sourceMapAnchor)) {
+      throw new Error("preload 增强 bridge 注入点不存在");
+    }
+    next = next.replace(sourceMapAnchor, `${preloadPageEnhanceFallbackSnippet(config, appVersion)}${sourceMapAnchor}`);
+    if (next !== source) {
+      fs.writeFileSync(preloadPath, next, "utf8");
+      log("已注入页面增强 preload fallback bridge");
+    }
+    return;
   }
   next = next.replace(exposeAnchor, `${preloadPageEnhanceIntegrationSnippet(config, appVersion)}${exposeAnchor}`);
   if (next !== source) {
@@ -2518,7 +3087,8 @@ export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
   });
 
   if (!targetPath) {
-    throw new Error("未找到启动错误页补丁目标");
+    log("已跳过 VC++ 运行库错误页补丁：未找到启动错误页目标");
+    return { file: null, changed: false };
   }
 
   const originalStart = "function _j(e){let n=(0,Z.c)(27),{fatalError:r,onReset:i}=e,a=No(),{data:o}=gc(),s=o?.platform===`win32`,{errorMessage:c,cliErrorMessage:l}=r,u;";
@@ -2554,6 +3124,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
   const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
   const chatGptBackendApiBaseUrl = "https://gptauth.ruijie.com.cn";
+  const modelCatalogEnabledValue = modelCatalogEnabled(config);
   const preludeStart = "/* ruizhi-early-env:start */";
   const preludeEnd = "/* ruizhi-early-env:end */";
   const prelude = `${preludeStart}
@@ -2562,11 +3133,15 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const path=require("node:path");
   const fs=require("node:fs");
   const home=os.homedir();
+  const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
   const productName=${JSON.stringify(productName)};
   const ruizhiHomeEnvName=${JSON.stringify(ruizhiHomeEnvName)};
   const ruizhiDefaultHomeDirName=${JSON.stringify(ruizhiDefaultHomeDirName)};
   const electronUserDataDirName=${JSON.stringify(electronUserDataDirName)};
   const chatGptBackendApiBaseUrl=${JSON.stringify(chatGptBackendApiBaseUrl)};
+  const modelCatalogEnabled=${JSON.stringify(modelCatalogEnabledValue)};
+  const modelCatalogFile="ruizhi-model-catalog.json";
+  const userModelCatalogFile="models_cache.json";
   const codexHome=(process.env[ruizhiHomeEnvName]||path.join(home,ruizhiDefaultHomeDirName)).trim();
   const appData=process.env.APPDATA||path.join(home,"AppData","Roaming");
   const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||path.join(appData,electronUserDataDirName)).trim();
@@ -2576,6 +3151,44 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
   fs.mkdirSync(codexHome,{recursive:true});
   fs.mkdirSync(userData,{recursive:true});
+  function ruizhiIsNonChatModel(model){
+    const id=[model&&model.slug,model&&model.id,model&&model.name,model&&model.display_name,model&&model.displayName].map(value=>String(value??"").trim().toLowerCase()).filter(Boolean).join(" ");
+    if(!id)return false;
+    return /(^|[\\s/_-])(?:gpt-)?image\\d*(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])dall-e(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])(?:text-)?embedding(?=$|[\\s/_-])/.test(id)||/(^|[\\s/_-])(?:realtime|rerank|reranker)(?=$|[\\s/_-])/.test(id);
+  }
+  function ruizhiNormalizeModelCatalog(catalog){
+    if(!catalog||typeof catalog!=="object"||!Array.isArray(catalog.models))return catalog;
+    catalog.models=catalog.models.filter(model=>!ruizhiIsNonChatModel(model));
+    for(const model of catalog.models){
+      if(!model||typeof model!=="object")continue;
+      model.input_modalities=["text","image"];
+      model.inputModalities=model.input_modalities;
+      if(!Array.isArray(model.supported_reasoning_efforts)||model.supported_reasoning_efforts.length===0)model.supported_reasoning_efforts=["minimal","low","medium","high","xhigh"];
+    }
+    return catalog;
+  }
+  function ruizhiSyncBundledModelCatalogCache(){
+    if(!modelCatalogEnabled)return;
+    const source=path.join(resourcesRoot,"models",modelCatalogFile);
+    const target=path.join(codexHome,userModelCatalogFile);
+    try{
+      if(!fs.existsSync(source))return;
+      const catalog=JSON.parse(fs.readFileSync(source,"utf8"));
+      ruizhiNormalizeModelCatalog(catalog);
+      catalog.fetched_at=new Date().toISOString();
+      const next=JSON.stringify(catalog,null,2)+"\\n";
+      const changed=!fs.existsSync(target)||fs.readFileSync(target,"utf8")!==next;
+      if(!changed)return;
+      if(fs.existsSync(target)){
+        const stamp=new Date().toISOString().replace(/[:.]/g,"-");
+        fs.copyFileSync(target,target+".bak-early-"+stamp);
+      }
+      fs.writeFileSync(target,next,"utf8");
+    }catch(error){
+      console.warn("ruizhi early bundled model catalog sync failed",error);
+    }
+  }
+  ruizhiSyncBundledModelCatalogCache();
 }catch(e){console.error("ruizhi early env init failed",e)}})();
 ${preludeEnd}
 `;
@@ -2588,6 +3201,48 @@ ${preludeEnd}
 
   fs.writeFileSync(bootstrapPath, `${prelude}${withoutExistingPrelude}`, "utf8");
   log("已注入 Windows bootstrap 早期锐捷环境初始化");
+}
+
+function ruijieProviderBootstrapBlock() {
+  return `/* ruizhi-provider-config:start */
+    function tomlLines(source){return String(source??"").split("\\n");}
+    function joinTomlLines(lines){return lines.join("\\n").replace(/\\n*$/,"\\n");}
+    function tomlKeyLine(key,value){return key+" = "+JSON.stringify(String(value));}
+    function isTomlHeader(line){const trimmed=String(line??"").trim();return trimmed.startsWith("[")&&trimmed.endsWith("]");}
+    function tomlKey(line){const trimmed=String(line??"").trimStart();const match=trimmed.match(/^([A-Za-z0-9_.-]+)\\s*=/);return match?match[1]:null;}
+    function findTomlTable(lines,header){let start=-1;for(let index=0;index<lines.length;index+=1){if(String(lines[index]).trim()===header){start=index;break;}}if(start<0)return null;let end=lines.length;for(let index=start+1;index<lines.length;index+=1){if(isTomlHeader(lines[index])){end=index;break;}}return {start,end};}
+    function upsertTopLevelTomlKey(source,key,value){const lines=tomlLines(source);const next=tomlKeyLine(key,value);let firstTable=lines.length;for(let index=0;index<lines.length;index+=1){if(isTomlHeader(lines[index])){firstTable=index;break;}}for(let index=0;index<firstTable;index+=1){if(tomlKey(lines[index])===key){if(lines[index]!==next)lines[index]=next;return joinTomlLines(lines);}}let insertAt=firstTable;while(insertAt>0&&String(lines[insertAt-1]).trim()==="")insertAt-=1;lines.splice(insertAt,0,next);return joinTomlLines(lines);}
+    function patchRuijieProviderConfig(source){
+      const header="[model_providers.ruijie-uniapi]";
+      const lines=tomlLines(source);
+      let table=findTomlTable(lines,header);
+      if(!table){
+        const block=[header,tomlKeyLine("name","ruijie-uniapi"),tomlKeyLine("env_key","RUIJIE_UNIAPI_KEY"),tomlKeyLine("base_url",ruijieProviderBaseUrl),tomlKeyLine("wire_api","responses"),"requires_openai_auth = true","chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))),""].join("\\n");
+        const prefix=String(source??"").replace(/\\n*$/,"\\n");
+        return prefix+(prefix.trim().length>0?"\\n":"")+block;
+      }
+      let {start,end}=table;
+      const requiredFields={name:tomlKeyLine("name","ruijie-uniapi"),env_key:tomlKeyLine("env_key","RUIJIE_UNIAPI_KEY"),wire_api:tomlKeyLine("wire_api","responses"),requires_openai_auth:"requires_openai_auth = true"};
+      for(const [key,line] of Object.entries(requiredFields)){let found=false;for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])===key){found=true;break;}}if(!found){lines.splice(end,0,line);end+=1;}}
+      let baseUrlPatched=false;
+      for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])==="base_url"){const replacement=tomlKeyLine("base_url",ruijieProviderBaseUrl);if(lines[index]!==replacement)lines[index]=replacement;baseUrlPatched=true;break;}}
+      if(!baseUrlPatched){let insertAt=end;for(let index=start+1;index<end;index+=1){const key=tomlKey(lines[index]);if(key==="api_key"||key==="env_key")insertAt=index+1;}lines.splice(insertAt,0,tomlKeyLine("base_url",ruijieProviderBaseUrl));end+=1;}
+      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return joinTomlLines(lines);
+      for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])==="chat_model_prefixes")return joinTomlLines(lines);}
+      let insertAt=end;for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])==="wire_api"){insertAt=index;break;}}
+      lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
+      return joinTomlLines(lines);
+    }
+    function syncRuijieProviderConfig(){
+      const configPath=path.join(codexHome,"config.toml");
+      const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+      const withLoginBase=upsertTopLevelTomlKey(existing,"chatgpt_login_base_url",chatGptBackendApiBaseUrl);
+      const next=patchRuijieProviderConfig(withLoginBase);
+      if(next!==existing){fs.mkdirSync(path.dirname(configPath),{recursive:true});fs.writeFileSync(configPath,next,"utf8");}
+    }
+    syncRuijieProviderConfig();
+/* ruizhi-provider-config:end */
+`;
 }
 
 function bridgeBootstrapBlock(config) {
@@ -2681,10 +3336,11 @@ function bridgeBootstrapBlock(config) {
       };
       for(const model of catalog.models){
         if(!model||typeof model!=="object")continue;
-        model.input_modalities=ensureTextAndImageInputModalities(model.input_modalities);
+        model.input_modalities=["text","image"];
         model.inputModalities=model.input_modalities;
         if(!Array.isArray(model.supported_reasoning_levels)||model.supported_reasoning_levels.length===0)model.supported_reasoning_levels=defaultReasoningLevels();
         if(typeof model.default_reasoning_level!=="string"||model.default_reasoning_level.length===0)model.default_reasoning_level="medium";
+        if(!Array.isArray(model.supported_reasoning_efforts)||model.supported_reasoning_efforts.length===0)model.supported_reasoning_efforts=["minimal","low","medium","high","xhigh"];
         model.supportedReasoningEfforts=model.supported_reasoning_levels.map(entry=>({reasoningEffort:entry.effort,description:entry.description??entry.effort}));
         model.defaultReasoningEffort=model.default_reasoning_level;
         if(typeof model.slug==="string"&&/^qwen/i.test(model.slug)){
@@ -2776,24 +3432,29 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
   const providerBaseUrl = modelProviderBaseUrl(config);
   const bridgeConfig = modelBridgeBootstrapConfig(config);
   const modelCatalogEnabledValue = modelCatalogEnabled(config);
+  const runtimeConfig = config.runtime ?? {};
+  const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
+  const locale = config.locale ?? "zh-CN";
   let source = fs.readFileSync(bootstrapPath, "utf8");
   let next = source;
 
   const constantsPattern = /const openaiBaseUrl="[^"]*";(?:\s*const chatGptBackendApiBaseUrl=[^;]+;)?(?:\s*const modelProviderBaseUrl=[^;]+;)?(?:\s*const modelBridgeConfig=\{[\s\S]*?\};)?(?:\s*const pageEnhanceConfig=\{[\s\S]*?\};)?/;
-  if (!constantsPattern.test(next)) {
-    throw new Error("Windows bootstrap openaiBaseUrl 补丁点不存在");
+  const hasLegacyRuizhiRuntimeBlock = constantsPattern.test(next);
+  if (!hasLegacyRuizhiRuntimeBlock) {
+    log("已跳过 Windows bootstrap provider 常量补丁：新版 bootstrap 未包含旧锐智常量块");
+  } else {
+    next = next.replace(
+      constantsPattern,
+      [
+        `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
+        `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.ruijie.com.cn")};`,
+        `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
+        `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
+        `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
+        `const modelBridgeConfig=${jsonLiteral(bridgeConfig)};`
+      ].join("\n    ")
+    );
   }
-  next = next.replace(
-    constantsPattern,
-    [
-      `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
-      `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.ruijie.com.cn")};`,
-      `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
-      `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
-      `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
-      `const modelBridgeConfig=${jsonLiteral(bridgeConfig)};`
-    ].join("\n    ")
-  );
 
   const modelCatalogEnabledPattern = /const modelCatalogEnabled=(?:true|false);/;
   if (modelCatalogEnabledPattern.test(next)) {
@@ -2813,16 +3474,19 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
 
   const bridgeMarkerPattern = /\/\* ruizhi-model-bridge:start \*\/[\s\S]*?\/\* ruizhi-model-bridge:end \*\/\r?\n?/g;
   next = next.replace(bridgeMarkerPattern, "");
+  const providerConfigMarkerPattern = /\/\* ruizhi-provider-config:start \*\/[\s\S]*?\/\* ruizhi-provider-config:end \*\/\r?\n?/g;
+  next = next.replace(providerConfigMarkerPattern, "");
   const pageEnhanceMarkerPattern = /\/\* ruizhi-page-enhance:start \*\/[\s\S]*?\/\* ruizhi-page-enhance:end \*\/\r?\n?/g;
   next = next.replace(pageEnhanceMarkerPattern, "");
   const oldEnvAnchor = "process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;\n    process.env.RUIZHI_IMAGEGEN_EXE=";
   const imageEnvAnchor = "    process.env.RUIZHI_IMAGEGEN_EXE=";
+  const pageEnhanceBlock = pageEnhanceEnabled(config) ? pageEnhanceBootstrapBlock(config, appVersion) : "";
   if (next.includes(oldEnvAnchor)) {
-    next = next.replace(oldEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config, appVersion)}    process.env.RUIZHI_IMAGEGEN_EXE=`);
+    next = next.replace(oldEnvAnchor, `${ruijieProviderBootstrapBlock()}${bridgeBootstrapBlock(config)}${pageEnhanceBlock}    process.env.RUIZHI_IMAGEGEN_EXE=`);
   } else if (next.includes(imageEnvAnchor)) {
-    next = next.replace(imageEnvAnchor, `${bridgeBootstrapBlock(config)}${pageEnhanceBootstrapBlock(config, appVersion)}${imageEnvAnchor}`);
+    next = next.replace(imageEnvAnchor, `${ruijieProviderBootstrapBlock()}${bridgeBootstrapBlock(config)}${pageEnhanceBlock}${imageEnvAnchor}`);
   } else {
-    throw new Error("Windows bootstrap RUIZHI_IMAGEGEN_EXE 补丁点不存在");
+    log("已跳过 Windows bootstrap provider/page enhance 主进程补丁：新版 bootstrap 未包含 RUIZHI_IMAGEGEN_EXE 锚点");
   }
 
   const sandboxConfigMarkerPattern = /\/\* ruizhi-windows-sandbox-config:start \*\/[\s\S]*?\/\* ruizhi-windows-sandbox-config:end \*\/\r?\n?/g;
@@ -2847,9 +3511,56 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
       break;
     }
   }
-  if (!replacedConfigWrite && !next.includes(readOnlyConfigCheck)) {
-    throw new Error("Windows bootstrap 锐捷 config.toml 只读检查补丁点不存在");
+  if (!replacedConfigWrite && !next.includes(readOnlyConfigCheck) && hasLegacyRuizhiRuntimeBlock) {
+    throw new Error("Windows bootstrap 锐智 config.toml 只读检查补丁点不存在");
+  } else if (!replacedConfigWrite && !next.includes(readOnlyConfigCheck)) {
+    log("已跳过 Windows bootstrap config.toml 只读检查补丁：新版 bootstrap 未包含旧锐智配置写入块");
   }
+
+  if (!next.includes(".app.commandLine.appendSwitch(`lang`") && !next.includes(".app.commandLine.appendSwitch(\"lang\"")) {
+    next = replaceRegex(
+      next,
+      /for\(let ([A-Za-z_$][\w$]*) of C\(\{buildFlavor:([A-Za-z_$][\w$]*),env:process\.env\}\)\)([A-Za-z_$][\w$]*)\.app\.commandLine\.appendSwitch\(\1\.name,\1\.value\)/,
+      (match, _switchVar, _buildFlavorVar, electronName) =>
+        `${match};try{${electronName}.app.commandLine.appendSwitch(\`lang\`,${jsonLiteral(locale)})}catch{};process.env.LANG=${jsonLiteral(`${locale.replace("-", "_")}.UTF-8`)};process.env.LANGUAGE=${jsonLiteral(locale)}`,
+      "Windows bootstrap default locale"
+    );
+  }
+
+  next = replaceRegex(
+    next,
+    /[A-Za-z_$][\w$]*\.app\.setName\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*(?:,[A-Za-z_$][\w$]*)?\)\)/,
+    (match) => {
+      const electronName = match.slice(0, match.indexOf(".app.setName"));
+      return `${electronName}.app.setName(${jsonLiteral(windowsTaskManagerName(config))})`;
+    },
+    "Windows bootstrap app name"
+  );
+  next = replaceRegex(
+    next,
+    /[A-Za-z_$][\w$]*\.app\.setPath\(`userData`,[A-Za-z_$][\w$]*\(\{appDataPath:[A-Za-z_$][\w$]*\.app\.getPath\(`appData`\),buildFlavor:[A-Za-z_$][\w$]*,env:process\.env\}\)\)/,
+    (match) => {
+      const electronName = match.slice(0, match.indexOf(".app.setPath"));
+      return `${electronName}.app.setPath(\`userData\`,process.env.CODEX_ELECTRON_USER_DATA_PATH?.trim()||o.join(${electronName}.app.getPath(\`appData\`),${jsonLiteral(electronUserDataDirName)}))`;
+    },
+    "Windows bootstrap userData path"
+  );
+  next = replaceRegex(
+    next,
+    /process\.platform===`win32`&&[A-Za-z_$][\w$]*\.app\.setAppUserModelId\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)/,
+    (match) => {
+      const appMatch = match.match(/&&([A-Za-z_$][\w$]*)\.app\.setAppUserModelId/);
+      const electronName = appMatch?.[1] ?? "a";
+      return `process.platform===\`win32\`&&${electronName}.app.setAppUserModelId(\`cn.ruizhi.desktop\`)`;
+    },
+    "Windows bootstrap AppUserModelID"
+  );
+  next = replaceRegex(
+    next,
+    /if\(!\(![A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\.app\.requestSingleInstanceLock\(\)\)\)/,
+    "if(!1)",
+    "Windows bootstrap single-instance lock"
+  );
 
   if (next !== source) {
     fs.writeFileSync(bootstrapPath, next, "utf8");
@@ -2864,7 +3575,14 @@ function findWindowsNativeMenuBundle(extractedAppDir) {
       return false;
     }
     const source = fs.readFileSync(filePath, "utf8");
-    return source.includes("Menu.setApplicationMenu") && (source.includes("let Xe=[],Ze=[") || source.includes("function ruizhiEnsureNativeMenuItems("));
+    return (
+      source.includes(".Menu.setApplicationMenu(") &&
+      (
+        source.includes("let Xe=[],Ze=[") ||
+        source.includes("function ruizhiEnsureNativeMenuItems(") ||
+        source.includes("`/settings/general-settings`")
+      )
+    );
   });
 
   if (candidates.length !== 1) {
@@ -2881,11 +3599,17 @@ function windowsNativeMenuPatchSource() {
 function patchWindowsBrowserWindowNativeMenuVisibility(source) {
   const hiddenMenuBar = "process.platform===`win32`?{autoHideMenuBar:!0}:{}";
   const visibleMenuBar = "process.platform===`win32`?{autoHideMenuBar:!1}:{}";
+  const hiddenCrossPlatformMenuBar = "process.platform===`win32`||process.platform===`linux`?{autoHideMenuBar:!0}:{}";
+  const visibleCrossPlatformMenuBar = "process.platform===`win32`||process.platform===`linux`?{autoHideMenuBar:!1}:{}";
   let next = source;
 
   if (next.includes(hiddenMenuBar)) {
     next = next.replaceAll(hiddenMenuBar, visibleMenuBar);
-  } else if (!next.includes(visibleMenuBar)) {
+  } else if (next.includes(hiddenCrossPlatformMenuBar)) {
+    next = next.replaceAll(hiddenCrossPlatformMenuBar, visibleCrossPlatformMenuBar);
+  } else if (next.includes("autoHideMenuBar:!0")) {
+    next = next.replaceAll("autoHideMenuBar:!0", "autoHideMenuBar:!1");
+  } else if (!next.includes(visibleMenuBar) && !next.includes(visibleCrossPlatformMenuBar) && !next.includes("autoHideMenuBar:!1")) {
     throw new Error("顶部菜单窗口可见性补丁点不存在：autoHideMenuBar");
   }
 
@@ -2894,6 +3618,16 @@ function patchWindowsBrowserWindowNativeMenuVisibility(source) {
   next = next.replace(removeMenuPattern, (_match, windowVar) => {
     removeMenuReplacements += 1;
     return `process.platform===\`win32\`&&${windowVar}.setMenuBarVisibility(!0),`;
+  });
+  const removeCrossPlatformMenuPattern = /\(process\.platform===`win32`\|\|process\.platform===`linux`\)&&([A-Za-z_$][\w$]*)\.removeMenu\(\),/g;
+  next = next.replace(removeCrossPlatformMenuPattern, (_match, windowVar) => {
+    removeMenuReplacements += 1;
+    return `(process.platform===\`win32\`||process.platform===\`linux\`)&&${windowVar}.setMenuBarVisibility(!0),`;
+  });
+  const removeNonDarwinMenuPattern = /process\.platform!==`darwin`&&([A-Za-z_$][\w$]*)\.removeMenu\(\),/g;
+  next = next.replace(removeNonDarwinMenuPattern, (_match, windowVar) => {
+    removeMenuReplacements += 1;
+    return `process.platform!==\`darwin\`&&${windowVar}.setMenuBarVisibility(!0),`;
   });
   if (removeMenuReplacements === 0 && !next.includes(".setMenuBarVisibility(!0),")) {
     throw new Error("顶部菜单窗口可见性补丁点不存在：removeMenu");
@@ -2908,7 +3642,7 @@ function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
   const original = fs.readFileSync(mainBundlePath, "utf8");
   let source = original;
 
-  const insertionPoint = "let Xe=[],Ze=[";
+  const insertionPoint = source.includes("let Xe=[],Ze=[") ? "let Xe=[],Ze=[" : "var _8=";
   const insertionIndex = source.indexOf(insertionPoint);
   if (insertionIndex < 0) {
     throw new Error("顶部菜单原生入口补丁点不存在：菜单模板入口");
@@ -2928,13 +3662,19 @@ function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
   if (!settingsRouteVar) {
     throw new Error("顶部菜单设置路由变量不存在：/settings/general-settings");
   }
+  const ensureWindowVar = source.match(/ensurePrimaryWindowVisible:([A-Za-z_$][\w$]*)/)?.[1] ?? "d";
+  const navigateVar = source.match(/navigateToRoute:([A-Za-z_$][\w$]*)/)?.[1] ?? "m";
 
   if (!source.includes("try{ruizhiEnsureNativeMenuItems({menu:")) {
     const menuSetPattern = /\}\}n\.Menu\.setApplicationMenu\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\}/;
-    if (!menuSetPattern.test(source)) {
+    const menuSetPatternCurrent = /([A-Za-z_$][\w$]*)\.Menu\.setApplicationMenu\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\}/;
+    if (menuSetPattern.test(source)) {
+      source = source.replace(menuSetPattern, `}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:${ensureWindowVar},navigate:${navigateVar},settingsRoute:${settingsRouteVar},shell:n.shell});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(\`锐智菜单修复失败\`,e)}n.Menu.setApplicationMenu($1),$2($3)}`);
+    } else if (menuSetPatternCurrent.test(source)) {
+      source = source.replace(menuSetPatternCurrent, `try{ruizhiEnsureNativeMenuItems({menu:$2,MenuItem:$1.MenuItem,ensureWindow:${ensureWindowVar},navigate:${navigateVar},settingsRoute:${settingsRouteVar},shell:$1.shell});ruizhiTranslateApplicationMenu($2)}catch(e){console.error(\`锐智菜单修复失败\`,e)}$1.Menu.setApplicationMenu($2),$3($4)}`);
+    } else {
       throw new Error("顶部菜单中文补丁点不存在：setApplicationMenu");
     }
-    source = source.replace(menuSetPattern, `}}try{ruizhiEnsureNativeMenuItems({menu:$1,MenuItem:n.MenuItem,ensureWindow:d,navigate:m,settingsRoute:${settingsRouteVar},shell:n.shell});ruizhiTranslateApplicationMenu($1)}catch(e){console.error(\`锐捷菜单修复失败\`,e)}n.Menu.setApplicationMenu($1),$2($3)}`);
   }
 
   source = patchWindowsBrowserWindowNativeMenuVisibility(source);
@@ -3009,6 +3749,42 @@ function patchWindowsTrayMenuLabels(extractedAppDir, config, options = {}) {
 
   fs.writeFileSync(mainBundlePath, source, "utf8");
   log(`已补丁 Windows 托盘和顶部菜单中文文案：${path.basename(mainBundlePath)}`);
+}
+
+function patchWindowsTrayIcon(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const candidates = walkFiles(buildDir).filter((filePath) => {
+    if (!filePath.endsWith(".js")) {
+      return false;
+    }
+    const source = fs.readFileSync(filePath, "utf8");
+    return source.includes("new c.Tray(t.defaultIcon)") && source.includes("process.resourcesPath") && source.includes("getFileIcon(process.execPath");
+  });
+
+  if (candidates.length !== 1) {
+    throw new Error(`Windows tray icon bundle match count is ${candidates.length}`);
+  }
+
+  const mainBundlePath = candidates[0];
+  const changed = writePatchedFile(mainBundlePath, (source) => {
+    if (source.includes("ruizhiLoadWindowsTrayIcon(")) {
+      return source;
+    }
+    const fallbackPattern = /let r=K9\(e,t,n\);return r==null\?\{defaultIcon:await c\.app\.getFileIcon\(process\.execPath,\{size:`small`\}\),chronicleRunningIcon:null\}:\{defaultIcon:r,chronicleRunningIcon:null\}/;
+    if (!fallbackPattern.test(source)) {
+      throw new Error("Windows tray icon fallback patch point not found");
+    }
+    return source.replace(
+      fallbackPattern,
+      "let r=K9(e,t,n);if(r!=null)return{defaultIcon:r,chronicleRunningIcon:null};let i=ruizhiLoadWindowsTrayIcon(c,u);return i!=null?{defaultIcon:i,chronicleRunningIcon:null}:{defaultIcon:await c.app.getFileIcon(process.execPath,{size:`small`}),chronicleRunningIcon:null}"
+    ).replace(
+      /function K9\(e,t,n\)\{/,
+      "function ruizhiLoadWindowsTrayIcon(e,t){if(process.platform!==`win32`)return null;let n=e.nativeImage.createFromPath(t.join(process.resourcesPath,`icon.ico`));return n.isEmpty()?null:n}function K9(e,t,n){"
+    );
+  });
+
+  log(`Patched Windows tray icon: ${changed ? "changed" : "already current"}`);
 }
 
 function configuredWebsiteUrl(config, key, label) {
@@ -3132,48 +3908,90 @@ export function patchWindowsAccountSettingsLinks(extractedAppDir, _config, optio
 export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVersion, options = {}) {
   const log = options.log ?? (() => {});
   const packageJsonPath = path.join(extractedAppDir, "package.json");
-  const preloadPath = path.join(extractedAppDir, ".vite", "build", "preload.js");
-  const bootstrapPath = path.join(extractedAppDir, ".vite", "build", "bootstrap.js");
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const preloadPath = path.join(buildDir, "preload.js");
+  const bootstrapPath = fs.existsSync(path.join(buildDir, "bootstrap.js"))
+    ? path.join(buildDir, "bootstrap.js")
+    : fs.existsSync(buildDir)
+      ? path.join(buildDir, fs.readdirSync(buildDir).find((name) => /^bootstrap(?:-[A-Za-z0-9_]+)?\.js$/.test(name)) ?? "")
+      : path.join(buildDir, "bootstrap.js");
 
   if (fs.existsSync(packageJsonPath)) {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-    packageJson.productName = windowsTaskManagerName(config);
     packageJson.version = appVersion;
-    packageJson.description = `${config.productName}桌面端`;
+    const earlyBootstrapMain = ".vite/build/early-bootstrap.js";
+    if (fs.existsSync(path.join(extractedAppDir, earlyBootstrapMain))) {
+      packageJson.main = earlyBootstrapMain;
+    }
+    if (brandingEnabled(config)) {
+      packageJson.productName = windowsTaskManagerName(config);
+      packageJson.description = `${config.productName}桌面端`;
+    }
     fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
   }
 
   if (fs.existsSync(preloadPath)) {
-    replaceInFile(
-      preloadPath,
-      /const appVersion="[^"]*";/,
-      `const appVersion=${JSON.stringify(appVersion)};`,
-      "preload appVersion"
-    );
+    const preloadSource = fs.readFileSync(preloadPath, "utf8");
+    if (/const appVersion="[^"]*";/.test(preloadSource)) {
+      replaceInFile(
+        preloadPath,
+        /const appVersion="[^"]*";/,
+        `const appVersion=${JSON.stringify(appVersion)};`,
+        "preload appVersion"
+      );
+    } else {
+      log("已跳过 preload appVersion 补丁：新版 preload 未内联 appVersion");
+    }
     ensurePreloadPageEnhanceIntegration(preloadPath, config, { log, appVersion });
   }
 
   if (fs.existsSync(bootstrapPath)) {
     ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, { log });
     ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, { log, appVersion });
-    replaceInFile(
-      bootstrapPath,
-      /n\.app\.setName\("[^"]*"\)/,
-      `n.app.setName(${JSON.stringify(windowsTaskManagerName(config))})`,
-      "bootstrap app name"
-    );
+    if (brandingEnabled(config)) {
+      const bootstrapSource = fs.readFileSync(bootstrapPath, "utf8");
+      if (/n\.app\.setName\("[^"]*"\)/.test(bootstrapSource)) {
+        replaceInFile(
+          bootstrapPath,
+          /n\.app\.setName\("[^"]*"\)/,
+          `n.app.setName(${JSON.stringify(windowsTaskManagerName(config))})`,
+          "bootstrap app name"
+        );
+      } else {
+        log("已跳过旧 bootstrap app name 品牌化补丁：补丁点不存在或已由新版逻辑处理");
+      }
+    } else {
+      log("已跳过 bootstrap app name 品牌化补丁");
+    }
   }
 
-  patchWindowsNativeMenuItems(extractedAppDir, config, { log });
-  // patchWindowsTrayMenuLabels(extractedAppDir, config, { log }); // 暂时跳过：Codex 42.x 的托盘 JS 匹配数量有变化
+  patchWindowsDefaultLocale(extractedAppDir, config, { log });
+
+  if (brandingEnabled(config)) {
+    patchWindowsFrontendLocalization(extractedAppDir, config, { log });
+    patchWindowsNativeMenuItems(extractedAppDir, config, { log });
+    patchWindowsTrayIcon(extractedAppDir, { log });
+    // patchWindowsTrayMenuLabels(extractedAppDir, config, { log }); // 暂时跳过：Codex 42.x 的托盘 JS 匹配数量有变化
+  } else {
+    log("已跳过 Windows 原生菜单品牌化补丁");
+  }
+  patchWindowsProductModeLabels(extractedAppDir, { log });
+  patchWindowsProductModeSwitcherVisibility(extractedAppDir, { log });
+  patchWindowsSandboxOnboardingBypass(extractedAppDir, { log });
   patchVcRuntimeErrorPage(extractedAppDir, { log });
-  patchWindowsAccountSettingsLinks(extractedAppDir, config, { log });
-  patchWindowsHelpDocumentationLinks(extractedAppDir, config, { log });
-  if (enableWindowsPluginTextPatches) {
+  if (brandingEnabled(config)) {
+    patchWindowsAccountSettingsLinks(extractedAppDir, config, { log });
+    patchWindowsHelpDocumentationLinks(extractedAppDir, config, { log });
+  }
+  if (brandingEnabled(config) && enableWindowsPluginTextPatches) {
     patchWindowsPluginMarketplaceLabels(extractedAppDir, { log });
   } else {
     log("已跳过插件市场文案补丁");
   }
+  patchWindowsProductModeLabels(extractedAppDir, { log });
+  patchWindowsProductModeSwitcherVisibility(extractedAppDir, { log });
+  patchWindowsSandboxOnboardingBypass(extractedAppDir, { log });
+  patchWindowsTrayIcon(extractedAppDir, { log });
   patchNativeWebviewFeatureGates(extractedAppDir, { log });
   patchNativeStatsigNetwork(extractedAppDir, { log });
   patchNativeStatsigBootstrap(extractedAppDir, { log });
@@ -3183,7 +4001,11 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeProfileDropdownUsageVisibility(extractedAppDir, { log });
   patchNativeProfileUsageFallback(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
-  patchListModelsForHostFromUserCache(extractedAppDir, config, { log });
+  if (modelCatalogEnabled(config)) {
+    patchListModelsForHostFromUserCache(extractedAppDir, config, { log });
+  } else {
+    log("已跳过模型列表优化补丁");
+  }
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });
   patchChatGptAuthExternalBrowser(extractedAppDir, { log });
   patchBrowserNativePipeDiagnostics(extractedAppDir, { log });
@@ -3232,7 +4054,15 @@ export function copyUpdaterRuntimeDependenciesTo(extractedAppDir, options = {}) 
   const log = options.log ?? (() => {});
   const targetNodeModules = path.join(extractedAppDir, "node_modules");
   fs.mkdirSync(targetNodeModules, { recursive: true });
-  copyRuntimeNodePackage("electron-updater", targetNodeModules);
+  try {
+    copyRuntimeNodePackage("electron-updater", targetNodeModules);
+  } catch (error) {
+    if (error?.code !== "MODULE_NOT_FOUND") {
+      throw error;
+    }
+    log("Skipped electron-updater runtime dependency copy: package is not installed in this workspace");
+    return;
+  }
   log("已内置 electron-updater 运行时依赖");
 }
 

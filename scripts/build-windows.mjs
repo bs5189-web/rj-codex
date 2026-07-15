@@ -20,6 +20,7 @@ import {
   patchTrustedBrowserClientHashes,
   refreshWindowsAsarBuildMetadata,
   validateRuizhiRuntimeBundle,
+  writeOwlUserDataDirectoryName,
   writeRuntimeModelCatalog
 } from "./windows-asar-overrides.mjs";
 
@@ -107,12 +108,22 @@ function windowsIconPath() {
 }
 
 function electronBuilderCliPath() {
-  return path.join(projectRoot, "node_modules", "electron-builder", "cli.js");
+  return require.resolve("electron-builder/cli.js");
 }
 
 function electronRuntimeVersion() {
   const versionPath = path.join(appOutRoot, "version");
   if (!fs.existsSync(versionPath)) {
+    const manifestName = fs.readdirSync(appOutRoot).find((name) => /^\d+\.\d+\.\d+\.\d+\.manifest$/.test(name));
+    if (manifestName) {
+      const chromiumMajor = Number(manifestName.split(".")[0]);
+      const electronMajor = chromiumMajor - 116;
+      if (Number.isInteger(electronMajor) && electronMajor > 0) {
+        const inferred = `${electronMajor}.0.0`;
+        log(`缺少 Electron version 文件，按 Chromium ${chromiumMajor} 推断 Electron ${inferred}`);
+        return inferred;
+      }
+    }
     throw new Error(`缺少 Electron runtime version 文件：${versionPath}`);
   }
   const version = fs.readFileSync(versionPath, "utf8").trim();
@@ -140,6 +151,10 @@ function modelCatalogEnabled() {
 
 function modelBridgeEnabled() {
   return modelCatalogEnabled() && modelBridgeConfig.enabled === true;
+}
+
+function brandingEnabled() {
+  return config.branding?.enabled !== false;
 }
 
 function modelBridgeHost() {
@@ -1291,10 +1306,11 @@ function ruizhiInit(){
       };
       for(const model of catalog.models){
         if(!model||typeof model!=="object")continue;
-        model.input_modalities=ensureTextAndImageInputModalities(model.input_modalities);
+        model.input_modalities=["text","image"];
         model.inputModalities=model.input_modalities;
         if(!Array.isArray(model.supported_reasoning_levels)||model.supported_reasoning_levels.length===0)model.supported_reasoning_levels=defaultReasoningLevels();
         if(typeof model.default_reasoning_level!=="string"||model.default_reasoning_level.length===0)model.default_reasoning_level="medium";
+        if(!Array.isArray(model.supported_reasoning_efforts)||model.supported_reasoning_efforts.length===0)model.supported_reasoning_efforts=["minimal","low","medium","high","xhigh"];
         model.supportedReasoningEfforts=model.supported_reasoning_levels.map(entry=>({reasoningEffort:entry.effort,description:entry.description??entry.effort}));
         model.defaultReasoningEffort=model.default_reasoning_level;
         if(typeof model.slug==="string"&&/^qwen/i.test(model.slug)){
@@ -1609,11 +1625,13 @@ function ruizhiInit(){
     }
     function syncRuijieProviderConfig(){
       const configPath=path.join(codexHome,"config.toml");
-      if(!fs.existsSync(configPath))return;
-      const existing=fs.readFileSync(configPath,"utf8");
+      const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
       const withLoginBase=upsertTopLevelTomlKey(existing,"chatgpt_login_base_url",ruijieChatGptLoginBaseUrl);
       const next=patchRuijieProviderConfig(withLoginBase);
-      if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
+      if(next!==existing){
+        fs.mkdirSync(path.dirname(configPath),{recursive:true});
+        fs.writeFileSync(configPath,next,"utf8");
+      }
     }
     function readPluginVersion(root){
       const manifestPath=path.join(root,".codex-plugin","plugin.json");
@@ -3106,17 +3124,27 @@ function applyLegacyAsarPatches() {
   patchBrowserNativePipeDiagnostics(extractedDir, { log });
   patchBrowserUseIabOpenStability(extractedDir, { log });
   patchTrustedBrowserClientHashes(extractedDir, path.join(appOutRoot, "resources"), { log });
-  patchWebviewLocales();
-  patchPackageMetadata();
-  patchWebviewHtml();
-  patchDefaultLocale();
-  patchFrontendDefaultMessages();
+  if (brandingEnabled()) {
+    patchWebviewLocales();
+    patchPackageMetadata();
+    patchWebviewHtml();
+    patchDefaultLocale();
+    patchFrontendDefaultMessages();
+  } else {
+    log("已跳过界面品牌化补丁");
+  }
   patchAppSunsetGate();
-  patchModelAvailabilityAllowlist();
-  patchListModelsForHostFromUserCache();
+  if (modelCatalogEnabled()) {
+    patchModelAvailabilityAllowlist();
+    patchListModelsForHostFromUserCache();
+  } else {
+    log("已跳过模型优化补丁");
+  }
   patchOfficialUpdateLogic();
   patchOnboardingWindowMode();
-  patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
+  if (brandingEnabled()) {
+    patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
+  }
   patchBootstrap();
   patchPreloadIntegration();
 }
@@ -3135,9 +3163,15 @@ async function repackAppAsar() {
     log("使用旧版字符串补丁生成 asar");
     applyLegacyAsarPatches();
   } else {
-    applyWindowsAsarOverrides(extractedDir, { log });
+    if (brandingEnabled()) {
+      applyWindowsAsarOverrides(extractedDir, { log });
+    } else {
+      log("已跳过 Windows asar 品牌化覆盖层");
+    }
     refreshWindowsAsarBuildMetadata(extractedDir, config, appVersion, { log, resourcesDir });
-    patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
+    if (brandingEnabled()) {
+      patchWindowsHelpDocumentationLinks(extractedDir, config, { log });
+    }
   }
 
   fs.rmSync(patchedAsarPath, { force: true });
@@ -3154,18 +3188,26 @@ async function patchFuses() {
   fs.chmodSync(exePath, 0o755);
 
   log("关闭 app.asar 完整性校验 fuse");
-  await flipFuses(exePath, {
-    version: FuseVersion.V1,
-    [FuseV1Options.RunAsNode]: false,
-    [FuseV1Options.EnableCookieEncryption]: true,
-    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
-    [FuseV1Options.EnableNodeCliInspectArguments]: false,
-    [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: false,
-    [FuseV1Options.OnlyLoadAppFromAsar]: true,
-    [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
-    [FuseV1Options.GrantFileProtocolExtraPrivileges]: true,
-    [FuseV1Options.WasmTrapHandlers]: true
-  });
+  try {
+    await flipFuses(exePath, {
+      version: FuseVersion.V1,
+      [FuseV1Options.RunAsNode]: false,
+      [FuseV1Options.EnableCookieEncryption]: true,
+      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+      [FuseV1Options.EnableNodeCliInspectArguments]: false,
+      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: false,
+      [FuseV1Options.OnlyLoadAppFromAsar]: true,
+      [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
+      [FuseV1Options.GrantFileProtocolExtraPrivileges]: true,
+      [FuseV1Options.WasmTrapHandlers]: true
+    });
+  } catch (error) {
+    if (String(error?.message || error).includes("Could not find sentinel")) {
+      log("跳过 Electron fuse 补丁：主程序不包含 Electron fuse sentinel");
+      return;
+    }
+    throw error;
+  }
 }
 
 function ensureCodexSource() {
@@ -3343,8 +3385,15 @@ function copyPluginMarketplaces() {
 
 function patchRuntimeResourceText() {
   const resourcesDir = path.join(appOutRoot, "resources");
-  copyWindowsResourceOverrides(resourcesDir, { log });
-  patchOpenAIBundledPluginDescriptions(resourcesDir, { log, sourceAppRoot: pinnedCodexAppRoot });
+  copyWindowsResourceOverrides(resourcesDir, {
+    log,
+    pageEnhanceEnabled: pageEnhanceEnabled()
+  });
+  if (brandingEnabled()) {
+    patchOpenAIBundledPluginDescriptions(resourcesDir, { log, sourceAppRoot: pinnedCodexAppRoot });
+  } else {
+    log("已跳过插件资源品牌化文案补丁");
+  }
 }
 
 function copyRuntimeOverrides() {
@@ -3355,8 +3404,18 @@ function copyRuntimeOverrides() {
 
   const modelTargetDir = path.join(resourcesDir, "models");
   if (modelCatalogEnabled()) {
-    const codexClientVersion = process.env.RUIZHI_CODEX_CLIENT_VERSION
-      ?? codexClientVersionFromExe(path.join(pinnedCodexAppRoot, "resources", "codex.exe"));
+    let codexClientVersion = process.env.RUIZHI_CODEX_CLIENT_VERSION;
+    if (!codexClientVersion) {
+      const existingCatalogPath = path.join(modelTargetDir, "ruizhi-model-catalog.json");
+      if (fs.existsSync(existingCatalogPath)) {
+        try {
+          const existingCatalog = JSON.parse(fs.readFileSync(existingCatalogPath, "utf8"));
+          codexClientVersion = existingCatalog.codexClientVersion ?? existingCatalog.client_version;
+        } catch {
+        }
+      }
+    }
+    codexClientVersion ??= codexClientVersionFromExe(path.join(pinnedCodexAppRoot, "resources", "codex.exe"));
     writeRuntimeModelCatalog(
       modelCatalogPath(),
       path.join(modelTargetDir, "ruizhi-model-catalog.json"),
@@ -3810,6 +3869,9 @@ function createInstallerExe() {
   const builderConfigPath = path.join(workRoot, "electron-builder.json");
   fs.writeFileSync(builderConfigPath, `${JSON.stringify(electronBuilderConfig(), null, 2)}\n`);
 
+  const electronBuilderCache = process.env.ELECTRON_BUILDER_CACHE || path.join(workRoot, "electron-builder-cache");
+  fs.mkdirSync(electronBuilderCache, { recursive: true });
+
   log("生成 NSIS 安装包");
   execLogged(process.execPath, [
     electronBuilderCliPath(),
@@ -3822,7 +3884,9 @@ function createInstallerExe() {
     builderConfigPath,
     "--publish",
     "never"
-  ]);
+  ], {
+    env: { ...process.env, ELECTRON_BUILDER_CACHE: electronBuilderCache }
+  });
 
   const versionedInstallerPath = path.join(installerOutDir, updateArtifactName());
   if (!fs.existsSync(versionedInstallerPath)) {
@@ -3845,9 +3909,6 @@ function cleanDistCopyLogs(appRoot) {
 function shouldCopyPinnedCodexAppEntry(sourcePath) {
   const relativeParts = path.relative(pinnedCodexAppRoot, sourcePath).split(path.sep).filter(Boolean);
   if (relativeParts.length > 0 && relativeParts[0].toLowerCase() === "logs") {
-    return false;
-  }
-  if (relativeParts.join("/").toLowerCase() === "resources/plugins/openai-bundled") {
     return false;
   }
   return true;
@@ -3885,6 +3946,7 @@ async function main() {
   cleanDir(distRoot);
   log("复制 Codex Desktop 文件");
   await fsExtra.copy(installedAppRoot, appOutRoot, { filter: shouldCopyPinnedCodexAppEntry });
+  writeOwlUserDataDirectoryName(appOutRoot, config, { log });
 
   cleanDistCopyLogs(appOutRoot);
   validateDistCopyNoAbsolutePaths(appOutRoot, installedAppRoot);

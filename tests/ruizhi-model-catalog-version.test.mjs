@@ -70,11 +70,12 @@ test("Qwen Responses models keep Codex desktop plugin-control guidance", () => {
   }
 });
 
-test("model catalog compatibility defaults missing modalities to text and image", () => {
+test("model catalog compatibility defaults all Codex model entries to image-capable", () => {
   const catalog = {
     models: [
       { slug: "api-model-without-modalities", visibility: "list" },
       { slug: "api-model-text-only", visibility: "list", input_modalities: ["text"] },
+      { slug: "api-model-extra-modality", visibility: "list", input_modalities: ["audio"] },
     ],
   };
 
@@ -82,8 +83,10 @@ test("model catalog compatibility defaults missing modalities to text and image"
 
   assert.deepEqual(catalog.models[0].input_modalities, ["text", "image"]);
   assert.deepEqual(catalog.models[0].inputModalities, ["text", "image"]);
-  assert.deepEqual(catalog.models[1].input_modalities, ["text"]);
-  assert.deepEqual(catalog.models[1].inputModalities, ["text"]);
+  assert.deepEqual(catalog.models[1].input_modalities, ["text", "image"]);
+  assert.deepEqual(catalog.models[1].inputModalities, ["text", "image"]);
+  assert.deepEqual(catalog.models[2].input_modalities, ["audio", "text", "image"]);
+  assert.deepEqual(catalog.models[2].inputModalities, ["audio", "text", "image"]);
 });
 
 test("model catalog compatibility removes non-chat API models from picker cache", () => {
@@ -185,7 +188,8 @@ test("desktop bootstrap refreshes the Codex models cache only from the bundled c
     assert.match(source, /isNonChatModelCatalogEntry/);
     assert.match(source, /catalog\.models=catalog\.models\.filter/);
     assert.match(source, /\(\?:gpt-\)\?image/);
-    assert.match(source, /model\.input_modalities=\["text","image"\]/);
+    assert.match(source, /ensureTextAndImageInputModalities/);
+    assert.match(source, /model\.input_modalities=ensureTextAndImageInputModalities\(model\.input_modalities\)/);
     assert.match(source, /model\.inputModalities=model\.input_modalities/);
     assert.match(source, /model\.supportedReasoningEfforts=model\.supported_reasoning_levels\.map/);
     assert.match(source, /model\.defaultReasoningEffort=model\.default_reasoning_level/);
@@ -213,6 +217,7 @@ test("desktop bootstrap refreshes the Codex models cache only from the bundled c
   assert.match(asarPatchSource, /isNonChatModelCatalogEntry/);
   assert.match(asarPatchSource, /catalog\.models=catalog\.models\.filter/);
   assert.match(asarPatchSource, /\(\?:gpt-\)\?image/);
+  assert.match(asarPatchSource, /ensureTextAndImageInputModalities/);
   assert.match(asarPatchSource, /catalog\.fetched_at=new Date\(\)\.toISOString\(\);/);
   assert.match(asarPatchSource, /catalogPath:path\.join\(codexHome,userModelCatalogFile\)/);
   assert.doesNotMatch(asarPatchSource, /remoteCatalogUrl/);

@@ -141,7 +141,7 @@ function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
   ];
   for (const model of catalog.models) {
     if (!model || typeof model !== "object") continue;
-    if (!Array.isArray(model.input_modalities)) model.input_modalities = ["text", "image"];
+    model.input_modalities = ensureTextAndImageInputModalities(model.input_modalities);
     model.inputModalities = model.input_modalities;
     if (!Array.isArray(model.supported_reasoning_levels) || model.supported_reasoning_levels.length === 0) model.supported_reasoning_levels = defaultReasoningLevels();
     if (typeof model.default_reasoning_level !== "string" || model.default_reasoning_level.length === 0) model.default_reasoning_level = "medium";
@@ -152,6 +152,14 @@ function applyRuizhiModelCatalogCompatibilityPatches(catalog) {
     model.defaultReasoningEffort = model.default_reasoning_level;
   }
   return catalog;
+}
+
+function ensureTextAndImageInputModalities(value) {
+  const modalities = Array.isArray(value) ? value.filter((item) => typeof item === "string" && item.length > 0) : [];
+  for (const modality of ["text", "image"]) {
+    if (!modalities.includes(modality)) modalities.push(modality);
+  }
+  return modalities;
 }
 
 function normalizeConfig(config) {

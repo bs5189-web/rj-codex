@@ -444,6 +444,42 @@ function patchNativeUsageSettingsVisibility(extractedAppDir, options = {}) {
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
 }
 
+function patchNativeProfileDropdownUsageVisibility(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const profileDropdownFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /\{isUsageSettingsVisible:[A-Za-z_$][\w$]*,isUsageSettingsAccessLoading:[A-Za-z_$][\w$]*\}=[A-Za-z_$][\w$]*\(\)[\s\S]*codex\.profileDropdown\.apiKeyAuth[\s\S]*codex\.profileDropdown\.usage/,
+    "profile dropdown usage bundle"
+  );
+  let source = fs.readFileSync(profileDropdownFile, "utf8");
+  if (source.includes("ruizhiProfileDropdownUsageForApiKey")) {
+    log("已存在 Codex 头像菜单使用情况入口补丁");
+    return;
+  }
+
+  const usageAccessMatch = source.match(/\{isUsageSettingsVisible:([A-Za-z_$][\w$]*),isUsageSettingsAccessLoading:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\)/);
+  const apiKeyAuthMatch = source.match(/else if\(([A-Za-z_$][\w$]*)\)\{[\s\S]{0,900}?codex\.profileDropdown\.apiKeyAuth/);
+  if (!usageAccessMatch || !apiKeyAuthMatch) {
+    throw new Error("Codex 头像菜单使用情况入口补丁点不存在：账号态变量");
+  }
+  const [, usageVisibleVar, usageLoadingVar] = usageAccessMatch;
+  const apiKeyAuthVar = apiKeyAuthMatch[1];
+  const usageConditionPattern = new RegExp(
+    `,([A-Za-z_$][\\w$]*)=([^,;]*&&${escapeRegExp(usageVisibleVar)}&&[^,;]*),([A-Za-z_$][\\w$]*=[A-Za-z_$][\\w$]*\\(\\),)`
+  );
+  source = source.replace(
+    usageConditionPattern,
+    `,$1=($2)||${apiKeyAuthVar}&&${usageVisibleVar}&&!${usageLoadingVar}/*ruizhiProfileDropdownUsageForApiKey*/,$3`
+  );
+  if (!source.includes("ruizhiProfileDropdownUsageForApiKey")) {
+    throw new Error("Codex 头像菜单使用情况入口补丁点不存在：显示条件");
+  }
+  fs.writeFileSync(profileDropdownFile, source, "utf8");
+  log(`已打开 Codex 头像菜单使用情况入口：${path.basename(profileDropdownFile)}`);
+}
+
 function patchNativeProfileUsageFallback(extractedAppDir, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
@@ -2824,7 +2860,7 @@ function findWindowsNativeMenuBundle(extractedAppDir) {
 }
 
 function windowsNativeMenuPatchSource() {
-  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Check for Updates":"检查更新","Check for Updates…":"检查更新…","Install Update":"安装更新","Quit":"退出","Exit":"退出","New Thread":"新聊天","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder":"打开文件夹","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Reset Zoom":"重置缩放","Toggle Full Screen":"切换全屏","Toggle Developer Tools":"切换开发者工具","Developer Tools":"开发者工具","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Plugins":"插件","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=e?.items?.[0]?.submenu,d=e=>e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))??null,f=()=>d(e)?.submenu??u,p=async()=>{let e=await n();e&&r(e,i)},m=async()=>{let e=await n();e&&r(e,\`/plugins\`)},g=async()=>{let e=await n();e&&r(e,\`/automations\`)},A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐捷账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}function ensureSettingsMenu(){let n=e?.items?.find(e=>/^(Settings|设置)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`设置\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function ensurePluginsMenu(){let n=e?.items?.find(e=>/^(Plugins|插件)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`插件\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function h(e,n,r,i,o){let s=e?.items?.find(e=>n.test(a(e)));if(s)return c(s),s.click=i,s;if(e?.insert){let n=new t({label:r,accelerator:o?.accelerator,click:i});e.insert(Math.min(o?.index??e.items.length,e.items.length),n);return n}return null}let y=ensureSettingsMenu(),b=ensurePluginsMenu();h(y,/^(Settings|设置|Preferences|偏好设置)/,\`设置…\`,p,{accelerator:\`CmdOrCtrl+,\`,index:0});h(y,/^(Plugins|插件)$/,\`插件\`,m,{index:1});h(y,/^(Automations|自动化)$/,\`自动化\`,g,{index:2});h(b,/^(Plugins|插件)$/,\`插件\`,m,{index:0});let x=l(/^(Settings|设置|Preferences|偏好设置)/);x&&(x.click=p);let S=l(/^(Plugins|插件)$/);S&&(S.click=m);let C=l(/^(Automations|自动化)$/);C&&(C.click=g);let T=l(/^(Account|账户)$/);T&&(T.click=A);q()}`;
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Check for Updates":"检查更新","Check for Updates…":"检查更新…","Install Update":"安装更新","Quit":"退出","Exit":"退出","New Thread":"新聊天","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder":"打开文件夹","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Reset Zoom":"重置缩放","Toggle Full Screen":"切换全屏","Toggle Developer Tools":"切换开发者工具","Developer Tools":"开发者工具","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Usage":"使用情况","Plugins":"插件","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=e?.items?.[0]?.submenu,d=e=>e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))??null,f=()=>d(e)?.submenu??u,p=async()=>{let e=await n();e&&r(e,i)},m=async()=>{let e=await n();e&&r(e,\`/plugins\`)},g=async()=>{let e=await n();e&&r(e,\`/automations\`)},U=async()=>{let e=await n();e&&r(e,\`/settings/usage\`)},A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐捷账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}function ensureSettingsMenu(){let n=e?.items?.find(e=>/^(Settings|设置)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`设置\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function ensurePluginsMenu(){let n=e?.items?.find(e=>/^(Plugins|插件)$/.test(a(e))&&e.submenu);if(n)return c(n),n.submenu;if(!e?.insert)return f();let r=new t({label:\`插件\`,submenu:[]}),i=e.items?.findIndex(e=>/^(Help|帮助)$/.test(a(e)));e.insert(i>=0?i:e.items.length,r);return r.submenu}function h(e,n,r,i,o){let s=e?.items?.find(e=>n.test(a(e)));if(s)return c(s),s.click=i,s;if(e?.insert){let n=new t({label:r,accelerator:o?.accelerator,click:i});e.insert(Math.min(o?.index??e.items.length,e.items.length),n);return n}return null}let y=ensureSettingsMenu(),b=ensurePluginsMenu();h(y,/^(Settings|设置|Preferences|偏好设置)/,\`设置…\`,p,{accelerator:\`CmdOrCtrl+,\`,index:0});h(y,/^(Usage|使用情况)$/,\`使用情况\`,U,{index:1});h(y,/^(Plugins|插件)$/,\`插件\`,m,{index:2});h(y,/^(Automations|自动化)$/,\`自动化\`,g,{index:3});h(b,/^(Plugins|插件)$/,\`插件\`,m,{index:0});let x=l(/^(Settings|设置|Preferences|偏好设置)/);x&&(x.click=p);let R=l(/^(Usage|使用情况)$/);R&&(R.click=U);let S=l(/^(Plugins|插件)$/);S&&(S.click=m);let C=l(/^(Automations|自动化)$/);C&&(C.click=g);let T=l(/^(Account|账户)$/);T&&(T.click=A);q()}`;
 }
 
 function patchWindowsBrowserWindowNativeMenuVisibility(source) {
@@ -3129,6 +3165,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeCesAnalyticsNetwork(extractedAppDir, { log });
   patchNativeProfileVisibility(extractedAppDir, { log });
   patchNativeUsageSettingsVisibility(extractedAppDir, { log });
+  patchNativeProfileDropdownUsageVisibility(extractedAppDir, { log });
   patchNativeProfileUsageFallback(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   patchListModelsForHostFromUserCache(extractedAppDir, config, { log });

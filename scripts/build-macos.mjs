@@ -979,6 +979,41 @@ function patchNativeUsageSettingsVisibility() {
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
 }
 
+function patchNativeProfileDropdownUsageVisibility() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const profileDropdownFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /\{isUsageSettingsVisible:[A-Za-z_$][\w$]*,isUsageSettingsAccessLoading:[A-Za-z_$][\w$]*\}=[A-Za-z_$][\w$]*\(\)[\s\S]*codex\.profileDropdown\.apiKeyAuth[\s\S]*codex\.profileDropdown\.usage/,
+    "profile dropdown usage bundle"
+  );
+  const source = fs.readFileSync(profileDropdownFile, "utf8");
+  if (source.includes("ruizhiProfileDropdownUsageForApiKey")) {
+    log("已存在 Codex 头像菜单使用情况入口补丁");
+    return;
+  }
+
+  const usageAccessMatch = source.match(/\{isUsageSettingsVisible:([A-Za-z_$][\w$]*),isUsageSettingsAccessLoading:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\)/);
+  const apiKeyAuthMatch = source.match(/else if\(([A-Za-z_$][\w$]*)\)\{[\s\S]{0,900}?codex\.profileDropdown\.apiKeyAuth/);
+  if (!usageAccessMatch || !apiKeyAuthMatch) {
+    throw new Error("Codex 头像菜单使用情况入口补丁点不存在：账号态变量");
+  }
+  const [, usageVisibleVar, usageLoadingVar] = usageAccessMatch;
+  const apiKeyAuthVar = apiKeyAuthMatch[1];
+  const usageConditionPattern = new RegExp(
+    `,([A-Za-z_$][\\w$]*)=([^,;]*&&${escapeRegExp(usageVisibleVar)}&&[^,;]*),([A-Za-z_$][\\w$]*=[A-Za-z_$][\\w$]*\\(\\),)`
+  );
+  const patched = source.replace(
+    usageConditionPattern,
+    `,$1=($2)||${apiKeyAuthVar}&&${usageVisibleVar}&&!${usageLoadingVar}/*ruizhiProfileDropdownUsageForApiKey*/,$3`
+  );
+  if (!patched.includes("ruizhiProfileDropdownUsageForApiKey")) {
+    throw new Error("Codex 头像菜单使用情况入口补丁点不存在：显示条件");
+  }
+  fs.writeFileSync(profileDropdownFile, patched, "utf8");
+  log(`已打开 Codex 头像菜单使用情况入口：${path.basename(profileDropdownFile)}`);
+}
+
 function patchNativeProfileUsageFallback() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileQueriesFile = findOneFileByContent(
@@ -1620,7 +1655,7 @@ function patchOfficialUpdateLogic() {
 }
 
 function applicationMenuPatchSource() {
-  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{try{let e=await n();if(!e)return;try{await r(e,i)}catch(t){console.error(\`锐捷设置菜单跳转失败\`,t);await r(e,\`/settings/general-settings\`)}}catch(e){console.error(\`锐捷设置菜单打开失败\`,e)}},f=e?.items?.[0]?.submenu,A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐捷账户菜单跳转失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}let g=l(/^(Account|账户)$/);g&&(g.click=A);q()}`;
+  return `function ruizhiTranslateApplicationMenu(e){const t=new Map(Object.entries({"File":"文件","Edit":"编辑","View":"视图","Window":"窗口","Help":"帮助","Settings":"设置","Settings…":"设置…","Preferences":"偏好设置","Account":"账户","Log Out":"退出登录","Quit":"退出","About":"关于","Services":"服务","Hide":"隐藏","Hide Others":"隐藏其他","Show All":"全部显示","New Chat":"新聊天","Quick Chat":"快速对话","New Window":"新窗口","Open Folder…":"打开文件夹…","Close":"关闭","Reload Window":"重新加载窗口","Toggle Sidebar":"切换侧边栏","Toggle Terminal":"切换终端","Toggle File Tree":"切换文件树","Open Browser Tab":"打开浏览器标签页","Toggle Browser Panel":"切换浏览器面板","Toggle Side Panel":"切换侧边面板","Find":"查找","Previous Chat":"上一个对话","Next Chat":"下一个对话","Back":"后退","Forward":"前进","Zoom In":"放大","Zoom Out":"缩小","Actual Size":"实际大小","Toggle Full Screen":"切换全屏","Codex Documentation":"帮助首页","What's new":"更新内容","Automations":"自动化","Usage":"使用情况","Library":"资料库","Pull Request":"拉取请求","Pull Requests":"拉取请求","Local Environments":"本地环境","Worktrees":"工作树","Skills":"技能","Model Context Protocol":"MCP","Troubleshooting":"故障排查","Send Feedback":"发送反馈","Keyboard Shortcuts":"键盘快捷键"}));function r(e){let r=String(e||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim();if(t.has(r))return t.get(r);let n=r.replace(/…$/,"").trim();if(t.has(n))return t.get(n);if(r.startsWith("About "))return r.replace(/^About /,"关于 ");if(r.startsWith("Hide "))return r.replace(/^Hide /,"隐藏 ");if(r.startsWith("Quit "))return r.replace(/^Quit /,"退出 ");return e}function i(e){if(!e)return;if(typeof e.label==="string"&&e.label.length>0)e.label=r(e.label);let t=e.submenu?.items;if(Array.isArray(t))for(const e of t)i(e)}if(Array.isArray(e?.items))for(const t of e.items)i(t);return e}function ruizhiEnsureNativeMenuItems({menu:e,MenuItem:t,ensureWindow:n,navigate:r,settingsRoute:i,shell:j}){let a=o=>String(o?.label||"").replace(/&/g,"").replace(/\\.\\.\\.$/,"…").trim(),o=[];function s(e){if(!e)return;let t=e.items??e.submenu?.items;if(!Array.isArray(t))return;for(const e of t)o.push(e),s(e.submenu)}s(e);let c=e=>{if(e){e.visible=!0;e.enabled=!0}},v=e=>{if(e){e.visible=!1;e.enabled=!1}},l=e=>{let t=o.find(t=>e.test(a(t)));return t&&c(t),t},u=l(/^(Settings|设置|Preferences|偏好设置)/),d=async()=>{try{let e=await n();if(!e)return;try{await r(e,i)}catch(t){console.error(\`锐捷设置菜单跳转失败\`,t);await r(e,\`/settings/general-settings\`)}}catch(e){console.error(\`锐捷设置菜单打开失败\`,e)}},f=e?.items?.[0]?.submenu,A=async()=>{try{await j?.openExternal?.(\`https://gptauth.ruijie.com.cn/\`)}catch(e){console.error(\`锐捷账户菜单跳转失败\`,e)}},B=async()=>{try{let e=await n();e&&await r(e,\`/settings/usage\`)}catch(e){console.error(\`锐捷使用情况菜单打开失败\`,e)}};function q(){for(const e of o)if(/^(Library|Libraries|资料库|Pull Request|Pull Requests|拉取请求)$/.test(a(e)))v(e)}if(u)u.click=d;else if(f?.insert){let e=new t({label:\`设置…\`,accelerator:\`CmdOrCtrl+,\`,click:d});f.insert(Math.min(2,f.items.length),e)}let U=l(/^(Usage|使用情况)$/);if(U)U.click=B;else if(f?.insert){let e=new t({label:\`使用情况\`,click:B});f.insert(Math.min(3,f.items.length),e)}let p=l(/^(Automations|自动化)$/),m=async()=>{let e=await n();e&&r(e,\`/automations\`)};if(p)p.click=m;else{let n=e?.items?.find(e=>/^(Help|帮助)$/.test(a(e)))?.submenu??f;if(n?.insert){let e=new t({label:\`自动化\`,click:m});n.insert(Math.min(2,n.items.length),e)}}let g=l(/^(Account|账户)$/);g&&(g.click=A);q()}`;
 }
 
 function patchApplicationMenu() {
@@ -1635,6 +1670,18 @@ function patchApplicationMenu() {
         `${applicationMenuPatchSource()}function $1({buildFlavor:`,
         "注入 macOS 顶部菜单修复函数"
       );
+    } else {
+      const helperStart = next.indexOf("function ruizhiTranslateApplicationMenu(");
+      const afterHelper = next.slice(helperStart + 1);
+      const helperEndMatch = afterHelper.match(/function [A-Za-z_$][\w$]*\(\{buildFlavor:/);
+      if (!helperEndMatch) {
+        throw new Error("补丁点不存在：刷新 macOS 顶部菜单修复函数");
+      }
+      const helperEnd = helperStart + 1 + helperEndMatch.index;
+      const helperSource = next.slice(helperStart, helperEnd);
+      if (!helperSource.includes("/settings/usage") || !helperSource.includes('"Usage":"使用情况"')) {
+        next = `${next.slice(0, helperStart)}${applicationMenuPatchSource()}${next.slice(helperEnd)}`;
+      }
     }
 
     const settingsMenuMatch = next.match(/\{\.\.\.[A-Za-z_$][\w$]*\(`settings`\),click:async\(\)=>\{let e=await ([A-Za-z_$][\w$]*)\(\);e&&([A-Za-z_$][\w$]*)\(e,([A-Za-z_$][\w$]*)\)\}\}/);
@@ -2837,6 +2884,7 @@ async function repackAppAsar() {
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeUsageSettingsVisibility();
+  patchNativeProfileDropdownUsageVisibility();
   patchNativeProfileUsageFallback();
   patchNativeProfileApiCallLogging();
   patchPluginSkillLocalListFallback(extractedDir, { log });

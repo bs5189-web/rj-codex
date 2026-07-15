@@ -378,7 +378,7 @@ test("application menu translation preserves Codex Automations", () => {
 
   assert.match(source, /"Automations":"自动化"/);
   assert.match(source, /ruizhiEnsureNativeMenuItems/);
-  assert.match(source, /\\`自动化\\`,g,\{index:2\}/);
+  assert.match(source, /\\`自动化\\`,g,\{index:3\}/);
   assert.match(source, /[mr]\(e,\\?`\/automations\\?`\)/);
   assert.match(source, /\\`设置…\\`,p,\{accelerator:\\`CmdOrCtrl\+,\\`,index:0\}/);
   assert.match(source, /visible=!0/);
@@ -412,6 +412,8 @@ test("macOS application menu keeps native Settings and Automations actions visib
   assert.match(source, /label:\\?`设置…\\?`/);
   assert.match(source, /settingsRoute:i/);
   assert.match(source, /[mr]\(e,i\)/);
+  assert.match(source, /helperStart/, "macOS native menu patch should detect stale injected helpers");
+  assert.match(source, /applicationMenuPatchSource\(\).*next\.slice\(helperEnd\)/s, "macOS native menu patch should replace stale injected helpers in rebuilt asars");
   assert.match(source, /visible=!0/);
   assert.match(source, /enabled=!0/);
 });
@@ -519,9 +521,13 @@ test("packaging keeps Usage settings visible for API key mode", () => {
   ]) {
     const source = read(scriptPath);
     assert.match(source, /patchNativeUsageSettingsVisibility/, `${scriptPath} should patch the native Usage settings visibility bundle`);
+    assert.match(source, /patchNativeProfileDropdownUsageVisibility/, `${scriptPath} should patch the profile dropdown Usage entry`);
     assert.match(source, /enable_free_go_usage_settings/, `${scriptPath} should locate the Usage settings access bundle by code shape`);
     assert.match(source, /isUsageSettingsVisible/, `${scriptPath} should patch the Usage settings visibility result`);
     assert.match(source, /ruizhiUsageSettingsVisibleForApiKey/, `${scriptPath} should keep Usage settings visible in API key mode`);
+    assert.match(source, /ruizhiProfileDropdownUsageForApiKey/, `${scriptPath} should keep the profile dropdown Usage item visible in API key mode`);
+    assert.match(source, /codex\\\.profileDropdown\\\.apiKeyAuth/, `${scriptPath} should locate the API key profile dropdown branch`);
+    assert.match(source, /codex\\\.profileDropdown\\\.usage/, `${scriptPath} should locate the profile dropdown Usage item`);
     assert.match(source, /===`apikey`/, `${scriptPath} should explicitly allow API key auth mode`);
   }
 
@@ -739,9 +745,20 @@ test("windows packaging patches the native Plugins menu independently from tray 
   assert.match(source, /helperStart/, "Windows native menu patch should detect stale injected helpers");
   assert.match(source, /source\.slice\(0, helperStart\).*windowsNativeMenuPatchSource\(\).*source\.slice\(insertionIndex\)/s, "Windows native menu patch should replace stale injected helpers in rebuilt asars");
   assert.match(source, /Plugins":"插件"/, "Windows native menu translator should localize Plugins");
-  assert.match(source, /\\`插件\\`,m,\{index:1\}/, "Windows native menu patch should add a Plugins label under Settings");
+  assert.match(source, /Usage":"使用情况"/, "Windows native menu translator should localize Usage");
+  assert.match(source, /r\(e,\\`\/settings\/usage\\`\)/, "Windows native menu patch should open /settings/usage");
+  assert.match(source, /\\`使用情况\\`,U,\{index:1\}/, "Windows native menu patch should add Usage under Settings");
+  assert.match(source, /\\`插件\\`,m,\{index:2\}/, "Windows native menu patch should add a Plugins label under Settings");
   assert.match(source, /label:\\`插件\\`,submenu:\[\]/, "Windows native menu patch should add a top-level Plugins menu");
   assert.match(source, /r\(e,\\`\/plugins\\`\)/, "Windows native menu patch should open /plugins");
+});
+
+test("macOS packaging adds a native Usage menu entry", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /Usage":"使用情况"/, "macOS native menu translator should localize Usage");
+  assert.match(source, /\/settings\/usage/, "macOS native menu patch should open /settings/usage");
+  assert.match(source, /label:\\`使用情况\\`/, "macOS native menu patch should add a Usage label");
 });
 
 test("windows packaging keeps the native menu bar visible on BrowserWindow", () => {

@@ -600,6 +600,41 @@ function patchNativeUsageSettingsVisibility() {
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
 }
 
+function patchNativeProfileDropdownUsageVisibility() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const profileDropdownFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /\{isUsageSettingsVisible:[A-Za-z_$][\w$]*,isUsageSettingsAccessLoading:[A-Za-z_$][\w$]*\}=[A-Za-z_$][\w$]*\(\)[\s\S]*codex\.profileDropdown\.apiKeyAuth[\s\S]*codex\.profileDropdown\.usage/,
+    "profile dropdown usage bundle"
+  );
+  const source = fs.readFileSync(profileDropdownFile, "utf8");
+  if (source.includes("ruizhiProfileDropdownUsageForApiKey")) {
+    log("已存在 Codex 头像菜单使用情况入口补丁");
+    return;
+  }
+
+  const usageAccessMatch = source.match(/\{isUsageSettingsVisible:([A-Za-z_$][\w$]*),isUsageSettingsAccessLoading:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\)/);
+  const apiKeyAuthMatch = source.match(/else if\(([A-Za-z_$][\w$]*)\)\{[\s\S]{0,900}?codex\.profileDropdown\.apiKeyAuth/);
+  if (!usageAccessMatch || !apiKeyAuthMatch) {
+    throw new Error("Codex 头像菜单使用情况入口补丁点不存在：账号态变量");
+  }
+  const [, usageVisibleVar, usageLoadingVar] = usageAccessMatch;
+  const apiKeyAuthVar = apiKeyAuthMatch[1];
+  const usageConditionPattern = new RegExp(
+    `,([A-Za-z_$][\\w$]*)=([^,;]*&&${escapeRegExp(usageVisibleVar)}&&[^,;]*),([A-Za-z_$][\\w$]*=[A-Za-z_$][\\w$]*\\(\\),)`
+  );
+  const patched = source.replace(
+    usageConditionPattern,
+    `,$1=($2)||${apiKeyAuthVar}&&${usageVisibleVar}&&!${usageLoadingVar}/*ruizhiProfileDropdownUsageForApiKey*/,$3`
+  );
+  if (!patched.includes("ruizhiProfileDropdownUsageForApiKey")) {
+    throw new Error("Codex 头像菜单使用情况入口补丁点不存在：显示条件");
+  }
+  fs.writeFileSync(profileDropdownFile, patched, "utf8");
+  log(`已打开 Codex 头像菜单使用情况入口：${path.basename(profileDropdownFile)}`);
+}
+
 function patchNativeProfileUsageFallback() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileQueriesFile = findOneFileByContent(
@@ -3055,6 +3090,7 @@ function applyLegacyAsarPatches() {
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeUsageSettingsVisibility();
+  patchNativeProfileDropdownUsageVisibility();
   patchNativeProfileUsageFallback();
   patchNativeProfileApiCallLogging();
   patchPluginSkillLocalListFallback(extractedDir, { log });

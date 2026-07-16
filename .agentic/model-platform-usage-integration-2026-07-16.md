@@ -78,7 +78,7 @@ flowchart LR
 | P0 | 多个 `/wham/*` 请求仍被 Electron 判定为“非 OpenAI URL”而拒绝附带认证 | 在服务端或可信域配置中正式支持 `gptauth.ruijie.com.cn`，避免每个功能单独做桌面回退 | 账户、任务、onboarding、profile、usage 请求不再出现 `Refusing to attach authentication` |
 | P0 | 网页 New API 用户与 Codex OAuth 用户缺少明确映射 | 后端以 OAuth `sub/account_id/email` 映射 New API 用户，提供只读 usage 汇总接口 | 同一用户在网页和桌面端的余额、请求数、Token 数一致 |
 | P1 | 服务端缺少 Codex 原生资料和用量契约 | 实现 `/wham/profiles/me`、`/wham/usage`，并增加契约测试 | 桌面端移除本地回退后仍能正常显示 |
-| P1 | 全量测试存在 19 个历史失败 | 更新旧版本断言、补齐 Windows 生成型 override fixture、删除失效域名假设 | `npm test` 107/107 通过 |
+| P1 | 全量测试存在 17 个历史失败 | 更新旧版本断言、补齐 Windows 生成型 override fixture、删除失效域名假设 | `npm test` 全部通过 |
 | P1 | 发布基包缓存缺少远端版本指纹 | 在现有断点缓存上增加 ETag/Last-Modified 或 SHA256 校验 | 同版本重打不下载，新版本不会误用旧缓存 |
 | P2 | 启动日志存在旧 skill 缺失、GCM/Statsig 噪声 | 迁移时跳过不存在的软链接；关闭企业版不使用的 GCM/Statsig 请求 | 干净启动日志中不再出现相关错误 |
 
@@ -87,7 +87,7 @@ flowchart LR
 | 验证 | 结果 |
 |---|---|
 | 定向测试 | `5/5` 通过 |
-| 全量测试 | `108` 项中 `89` 通过、`19` 个历史失败；本次新增用例全部通过 |
+| 全量测试 | `114` 项中 `97` 通过、`17` 个历史失败；本次新增用例全部通过 |
 | JavaScript 语法检查 | bridge、macOS、Windows 三类脚本全部通过 |
 | Git diff 格式检查 | 通过 |
 | 真实应用启动 | Codex CLI `0.144.2` 初始化成功；未再出现 bridge 注册失败 |

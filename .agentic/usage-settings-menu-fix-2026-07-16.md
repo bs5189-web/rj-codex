@@ -65,7 +65,7 @@ flowchart LR
 | ZIP 安装包 | 通过 | 解压后的 App 深度签名验证通过 |
 | DMG 安装包 | 通过 | `hdiutil verify` 校验有效 |
 | 更新清单 | 通过 | ZIP SHA-256、SHA-512、大小与清单一致 |
-| 全量测试 | 89/108 通过 | 19 个为已有失败，主要是旧版本断言和缺失 Windows fixture；本次新增测试均通过 |
+| 全量测试 | 97/114 通过 | 17 个为已有失败，主要是旧版本断言和缺失 Windows fixture；本次新增测试均通过 |
 
 真机截图：`usage-settings-menu-qa-2026-07-16.png`。
 

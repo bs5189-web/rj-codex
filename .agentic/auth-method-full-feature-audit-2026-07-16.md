@@ -53,7 +53,7 @@ flowchart LR
 | 原生 ChatGPT 功能判断 | `17` 处 | 全部保留 |
 | 插件三类账号精准门禁 | `1` 处 | `chatgpt / apikey / amazonBedrock` |
 | 专项测试 | `6/6` 通过 | 插件认证、Statsig、CES |
-| 完整测试文件 | `41/58` 通过 | 17 项为既有版本断言和缺失 Windows fixture，不是本轮认证回归 |
+| 完整测试文件 | `46/62` 通过 | 16 项为既有版本断言和缺失 Windows fixture，不是本轮认证回归 |
 | macOS 真实页面 | 两路独立 PASS | 六页均无空白、错误态、中文裁切或控件重叠 |
 | ZIP 解包签名 | 通过 | `codesign --verify --deep --strict` |
 | DMG 完整性 | 通过 | `hdiutil verify` |

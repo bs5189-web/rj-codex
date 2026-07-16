@@ -16,6 +16,8 @@ import {
   patchOpenAIBundledPluginDescriptions,
   patchBrowserNativePipeDiagnostics,
   patchBrowserUseIabOpenStability,
+  patchNativePluginAuthCompatibilitySource,
+  patchNativeUsageSettingsVisibilitySource,
   patchPluginSkillLocalListFallback,
   patchTrustedBrowserClientHashes,
   refreshWindowsAsarBuildMetadata,
@@ -458,6 +460,17 @@ function writePatchedFile(filePath, transform) {
   fs.writeFileSync(filePath, patched);
 }
 
+function writePatchedFileIfChanged(filePath, transform) {
+  const original = fs.readFileSync(filePath, "utf8");
+  const patched = transform(original);
+  if (patched === original) {
+    log(`跳过未变化文件：${path.basename(filePath)}`);
+    return false;
+  }
+  fs.writeFileSync(filePath, patched);
+  return true;
+}
+
 function writeUtf8BomFile(filePath, content) {
   fs.writeFileSync(filePath, `\uFEFF${content}`, "utf8");
 }
@@ -485,7 +498,7 @@ function marketplaceSourceToken(name) {
 
 function patchPluginAccountGate() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const pluginAccountGatePattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e!==`chatgpt`\}/;
+  const pluginAccountGatePattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e!==`chatgpt`(?:&&e!==`apikey`&&e!==`amazonBedrock`(?:\/\*ruizhiPluginAuthCompatibility\*\/)?){0,1}\}/;
   const gradientFile = findOneFileByContent(
     assetsDir,
     /\.js$/,
@@ -493,11 +506,14 @@ function patchPluginAccountGate() {
     "插件账号模式 gate bundle"
   );
 
-  writePatchedFile(gradientFile, (source) =>
-    replaceRegex(source, pluginAccountGatePattern, "function $1(e){return !1}", "APIKey 模式插件置灰判断")
-  );
-
-  log(`已补丁插件账号模式 gate：${path.basename(gradientFile)}`);
+  const source = fs.readFileSync(gradientFile, "utf8");
+  const patched = patchNativePluginAuthCompatibilitySource(source);
+  if (patched === source) {
+    log(`插件已原生支持 ChatGPT/API key 账号：${path.basename(gradientFile)}`);
+    return;
+  }
+  fs.writeFileSync(gradientFile, patched, "utf8");
+  log(`已补丁插件账号兼容范围：${path.basename(gradientFile)}`);
 }
 
 function patchNativeWebviewFeatureGates() {
@@ -528,7 +544,12 @@ function patchNativeWebviewFeatureGates() {
 function patchNativeStatsigNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const statsigNetworkPattern = /networkConfig:\{api:([A-Za-z_$][\w$]*),logEventUrl:([A-Za-z_$][\w$]*),sdkExceptionUrl:([A-Za-z_$][\w$]*),networkOverrideFunc:([A-Za-z_$][\w$]*)\}/;
-  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/ab\.chatgpt\.com\/v1/, "Statsig network bundle");
+  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/ab\.chatgpt\.com\/v1|preventAllNetworkTraffic:!0/, "Statsig network bundle");
+  const source = fs.readFileSync(statsigFile, "utf8");
+  if (source.includes("preventAllNetworkTraffic:!0")) {
+    log(`已存在 Codex 原生 Statsig 初始化网络禁用补丁：${path.basename(statsigFile)}`);
+    return;
+  }
   writePatchedFile(statsigFile, (source) =>
     replaceRegex(source, statsigNetworkPattern, "networkConfig:{api:$1,logEventUrl:$2,sdkExceptionUrl:$3,preventAllNetworkTraffic:!0}", "Statsig 初始化网络禁用")
   );
@@ -538,7 +559,12 @@ function patchNativeStatsigNetwork() {
 function patchNativeStatsigBootstrap() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const statsigBootstrapPattern = /async function ([A-Za-z_$][\w$]*)\(\{appSessionId:([A-Za-z_$][\w$]*),appVersion:([A-Za-z_$][\w$]*),buildFlavor:([A-Za-z_$][\w$]*),locale:([A-Za-z_$][\w$]*),stableId:([A-Za-z_$][\w$]*),systemName:([A-Za-z_$][\w$]*),systemVersion:([A-Za-z_$][\w$]*),windowType:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=null;try\{let\{statsigPayload:([A-Za-z_$][\w$]*)\}=await Promise\.race\(\[[\s\S]*?Timed out while fetching post-login Statsig bootstrap[\s\S]*?\]\),\{user:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\.parse\(JSON\.parse\(([A-Za-z_$][\w$]*)\)\);return\{statsigPayload:([A-Za-z_$][\w$]*),user:([A-Za-z_$][\w$]*)\}\}finally\{([A-Za-z_$][\w$]*)!=null&&globalThis\.clearTimeout\(([A-Za-z_$][\w$]*)\)\}\}/;
-  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /Timed out while fetching post-login Statsig bootstrap/, "Statsig bootstrap bundle");
+  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /Timed out while fetching post-login Statsig bootstrap|ruizhiCreateStatsigBootstrapPayload/, "Statsig bootstrap bundle");
+  const source = fs.readFileSync(statsigFile, "utf8");
+  if (source.includes("ruizhiCreateStatsigBootstrapPayload")) {
+    log(`已存在 Codex 原生 Statsig post-login bootstrap 补丁：${path.basename(statsigFile)}`);
+    return;
+  }
   writePatchedFile(statsigFile, (source) => {
     const match = source.match(statsigBootstrapPattern);
     if (!match) {
@@ -563,7 +589,12 @@ function patchNativeCesAnalyticsNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const cesEndpointPattern = /([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1`/;
   const cesEnabledPattern = /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)===`success`&&([A-Za-z_$][\w$]*)===!0/;
-  const cesFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/chatgpt\.com\/ces\/v1/, "CES analytics bundle");
+  const cesFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/chatgpt\.com\/ces\/v1|ruizhi-disabled:\/\/ces\/v1/, "CES analytics bundle");
+  const source = fs.readFileSync(cesFile, "utf8");
+  if (source.includes("ruizhi-disabled://ces/v1")) {
+    log(`已存在 Codex 原生 CES 分析上报禁用补丁：${path.basename(cesFile)}`);
+    return;
+  }
   writePatchedFile(cesFile, (source) => {
     let next = replaceRegex(source, cesEndpointPattern, "$1=`ruizhi-disabled://ces/v1/rgstr`,$2=`ruizhi-disabled://ces/v1`", "CES 分析上报端点禁用");
     next = replaceRegex(next, cesEnabledPattern, "$1=!1&&$2&&$3===`success`&&$4===!0", "CES 分析上报初始化禁用");
@@ -609,18 +640,11 @@ function patchNativeUsageSettingsVisibility() {
     "usage settings access bundle"
   );
   const source = fs.readFileSync(usageAccessFile, "utf8");
-  if (source.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+  if (source.includes("ruizhiUsageSettingsAlwaysVisible")) {
     log("已存在 Codex 使用情况设置入口补丁");
     return;
   }
-  const usageVisibilityPattern = /(function [A-Za-z_$][\w$]*\(\{authMethod:([A-Za-z_$][\w$]*),plan:[\s\S]{0,1400}?return\{canManageCreditSettings:[A-Za-z_$][\w$]*,isUsageSettingsVisible:)([^}]+)(\}\}function )/;
-  const patched = source.replace(
-    usageVisibilityPattern,
-    "$1($3)||$2===`apikey`/*ruizhiUsageSettingsVisibleForApiKey*/$4"
-  );
-  if (!patched.includes("ruizhiUsageSettingsVisibleForApiKey")) {
-    throw new Error("Codex 使用情况设置入口补丁点不存在");
-  }
+  const patched = patchNativeUsageSettingsVisibilitySource(source);
   fs.writeFileSync(usageAccessFile, patched, "utf8");
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
 }
@@ -682,6 +706,30 @@ function patchNativeProfileUsageFallback() {
   }
   fs.writeFileSync(profileQueriesFile, patched, "utf8");
   log(`已补丁 Codex 个人资料 Token 活动本地兜底与调用日志：${path.basename(profileQueriesFile)}`);
+}
+
+function patchNativePlatformUsageFallback() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const usageQueriesFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /safeGet\(`\/wham\/usage`/,
+    "usage queries bundle"
+  );
+  const source = fs.readFileSync(usageQueriesFile, "utf8");
+  if (source.includes("/usage/platform")) {
+    log("已存在锐鉴 API 用量兜底补丁");
+    return;
+  }
+  const patched = source.replace(
+    /queryFn:async\(\)=>\{try\{return await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/usage`,\{parameters:\{query:\{supports_rewardless_invites:!0\}\}\}\)\}catch\(e\)\{if\(e instanceof ([A-Za-z_$][\w$]*)&&\(e\.status===401\|\|e\.status===403\|\|e\.status===404\)\)return null;throw e\}\}/,
+    "queryFn:async()=>{try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`){let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}"
+  );
+  if (!patched.includes("/usage/platform") || !patched.includes("incompatible usage response")) {
+    throw new Error("锐鉴 API 用量兜底补丁点不存在");
+  }
+  fs.writeFileSync(usageQueriesFile, patched, "utf8");
+  log(`已补丁锐鉴 API 真实剩余用量：${path.basename(usageQueriesFile)}`);
 }
 
 function patchNativeProfileApiCallLogging() {
@@ -808,14 +856,14 @@ function patchWebviewLocales() {
   ]);
 
   for (const localeFile of localeFiles) {
-    writePatchedFile(localeFile, (source) => {
+    const changed = writePatchedFileIfChanged(localeFile, (source) => {
       let next = source;
       for (const [key, value] of replacements) {
         next = replaceLocaleMessage(next, key, value);
       }
       return next;
     });
-    log(`已补丁中文翻译：${path.basename(localeFile)}`);
+    if (changed) log(`已补丁中文翻译：${path.basename(localeFile)}`);
   }
 }
 
@@ -2284,7 +2332,7 @@ function ruizhiStartBackgroundUpdateCheck(){
     global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
     try{
       const servicePath=path.join(process.resourcesPath||path.dirname(process.execPath),...pageEnhanceConfig.serviceResourcePath);
-      if(!pageEnhanceConfig.enabled||!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
+      if(!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
       const service=require(servicePath).createRuizhiEnhanceService({
         codexHome:authHome(),
         resourcesRoot:process.resourcesPath||path.dirname(process.execPath),
@@ -2908,7 +2956,7 @@ function ruizhiStartBackgroundUpdateCheck(){
     global.__RUIZHI_ENHANCE_IPC_REGISTERED__=true;
     try{
       const servicePath=path.join(process.resourcesPath||path.dirname(process.execPath),...pageEnhanceConfig.serviceResourcePath);
-      if(!pageEnhanceConfig.enabled||!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
+      if(!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
       const service=require(servicePath).createRuizhiEnhanceService({
         codexHome:authHome(),
         resourcesRoot:process.resourcesPath||path.dirname(process.execPath),
@@ -3197,6 +3245,7 @@ function applyLegacyAsarPatches() {
   patchNativeUsageSettingsVisibility();
   patchNativeProfileDropdownUsageVisibility();
   patchNativeProfileUsageFallback();
+  patchNativePlatformUsageFallback();
   patchNativeProfileApiCallLogging();
   patchPluginSkillLocalListFallback(extractedDir, { log });
   patchNativeBrowserDesktopFeatureAvailability();

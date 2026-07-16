@@ -21,8 +21,13 @@ const DEFAULT_FEATURES = {
   serviceTierControls: false
 };
 
+const DEFAULT_PLATFORM_BASE_URL = "https://gptauth.ruijie.com.cn";
+const MONTHLY_USAGE_WINDOW_SECONDS = 30 * 24 * 60 * 60;
+const PLATFORM_REQUEST_TIMEOUT_MS = 8_000;
+
 function createRuizhiEnhanceService(options = {}) {
   const codexHome = options.codexHome || process.env.RUIZHI_HOME || path.join(os.homedir(), ".ruizhi");
+  const platformBaseUrl = String(options.platformBaseUrl || DEFAULT_PLATFORM_BASE_URL).replace(/\/+$/, "");
   const config = normalizeConfig(options.config);
   const settingsPath = path.join(codexHome, "ruizhi-page-enhance-settings.json");
   const dbPath = path.join(codexHome, "state_5.sqlite");
@@ -80,6 +85,8 @@ function createRuizhiEnhanceService(options = {}) {
           return listModelsFromUserCache(codexHome, payload);
         case "/profile/usage":
           return withStorage(dbPath, backupDir, (storage) => storage.profileUsage());
+        case "/usage/platform":
+          return platformUsage(codexHome, platformBaseUrl);
         default:
           return { status: "failed", message: `Unknown enhance route: ${route}` };
       }
@@ -94,6 +101,94 @@ function createRuizhiEnhanceService(options = {}) {
   }
 
   return { call, settings, writeSettings };
+}
+
+async function platformUsage(codexHome, platformBaseUrl) {
+  const accessToken = readPlatformAccessToken(codexHome);
+  if (!accessToken) {
+    throw new Error("锐捷 Codex 登录令牌不存在，请重新登录");
+  }
+  const headers = { authorization: `Bearer ${accessToken}` };
+  const [usage, subscription] = await Promise.all([
+    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/usage`, headers),
+    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/subscription`, headers)
+  ]);
+  const totalUsageCents = finiteNonNegativeNumber(usage?.total_usage, "模型平台累计用量");
+  const limitUsd = finitePositiveNumber(subscription?.hard_limit_usd ?? subscription?.soft_limit_usd, "模型平台用量上限");
+  const usedUsd = totalUsageCents / 100;
+  const remainingUsd = roundUsage(Math.max(0, limitUsd - usedUsd));
+  const usedPercent = Math.min(100, Math.max(0, (usedUsd / limitUsd) * 100));
+  return {
+    status: "ok",
+    data: {
+      plan_type: "ruijie",
+      rate_limit: {
+        primary_window: {
+          used_percent: usedPercent,
+          limit_window_seconds: MONTHLY_USAGE_WINDOW_SECONDS,
+          reset_at: nextMonthStartEpochSeconds()
+        },
+        secondary_window: null
+      },
+      code_review_rate_limit: null,
+      additional_rate_limits: [],
+      credits: {
+        balance: remainingUsd,
+        has_credits: true,
+        unlimited: false
+      }
+    },
+    metadata: {
+      source: "ruizhi-model-platform",
+      used_usd: roundUsage(usedUsd),
+      limit_usd: roundUsage(limitUsd),
+      remaining_usd: remainingUsd
+    }
+  };
+}
+
+function readPlatformAccessToken(codexHome) {
+  const authPath = path.join(codexHome, "auth.json");
+  if (!fs.existsSync(authPath)) return "";
+  const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
+  const oauthToken = auth?.tokens?.access_token;
+  if (typeof oauthToken === "string" && oauthToken.trim()) return oauthToken.trim();
+  return typeof auth?.OPENAI_API_KEY === "string" ? auth.OPENAI_API_KEY.trim() : "";
+}
+
+async function requestPlatformJson(url, headers) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PLATFORM_REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { headers, signal: controller.signal });
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+    if (!response.ok || !contentType.includes("application/json")) {
+      throw new Error(`模型平台用量接口异常：HTTP ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function finiteNonNegativeNumber(value, label) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) throw new Error(`${label}无效`);
+  return number;
+}
+
+function finitePositiveNumber(value, label) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) throw new Error(`${label}无效`);
+  return number;
+}
+
+function roundUsage(value) {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function nextMonthStartEpochSeconds(now = new Date()) {
+  return Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) / 1000);
 }
 
 function listModelsFromUserCache(codexHome, payload = {}) {

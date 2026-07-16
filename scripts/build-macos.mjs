@@ -9,6 +9,8 @@ import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
 import {
   patchBrowserUseIabOpenStability,
   codexClientVersionFromExe,
+  patchNativePluginAuthCompatibilitySource,
+  patchNativeUsageSettingsVisibilitySource,
   patchPluginSkillLocalListFallback,
   writeRuntimeModelCatalog
 } from "./windows-asar-overrides.mjs";
@@ -46,6 +48,7 @@ const workRoot = path.join(projectRoot, ".work", "macos");
 const codexSourceRoot = path.join(projectRoot, ".work", "codex-source");
 const dmgStagingDir = path.join(workRoot, "dmg");
 const sourceWorkDir = path.join(workRoot, "source");
+const downloadCacheDir = path.join(projectRoot, ".work", "download-cache", "macos");
 const extractedDir = path.join(workRoot, "app");
 const updateManifestPath = path.join(distDir, "ruizhi-latest-macos.json");
 const archUpdateManifestPath = path.join(distDir, `ruizhi-latest-macos-${macosBuildArch}.json`);
@@ -659,7 +662,31 @@ function sourceAppFromLocalInstall() {
 
 function downloadFile(url, targetPath) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  execLogged("curl", ["-L", "--fail", "--retry", "3", "--output", targetPath, url]);
+  const partialPath = `${targetPath}.partial`;
+  const resumeArgs = fs.existsSync(partialPath) ? ["--continue-at", "-"] : [];
+  execLogged("curl", ["-L", "--fail", "--retry", "3", ...resumeArgs, "--output", partialPath, url]);
+  fs.renameSync(partialPath, targetPath);
+}
+
+function downloadCacheMaxAgeMs() {
+  const configured = Number(process.env.RUIZHI_CODEX_DOWNLOAD_CACHE_MAX_AGE_MS ?? 6 * 60 * 60 * 1000);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 6 * 60 * 60 * 1000;
+}
+
+function cachedDownloadPath(url, fileName) {
+  const cacheKey = createHash("sha256").update(url).digest("hex").slice(0, 16);
+  return path.join(downloadCacheDir, `${cacheKey}-${fileName}`);
+}
+
+function canReuseCachedDownload(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  const stat = fs.statSync(filePath);
+  return stat.isFile()
+    && stat.size > 0
+    && downloadCacheMaxAgeMs() > 0
+    && Date.now() - stat.mtimeMs <= downloadCacheMaxAgeMs();
 }
 
 function defaultCodexMacosAppUrl() {
@@ -705,8 +732,13 @@ function sourceAppFromUrl() {
   cleanDir(sourceWorkDir);
   const parsed = new URL(url);
   const fileName = path.basename(parsed.pathname) || "codex-app-download";
-  const downloadPath = path.join(sourceWorkDir, fileName);
-  downloadFile(url, downloadPath);
+  const downloadPath = cachedDownloadPath(url, fileName);
+  if (canReuseCachedDownload(downloadPath)) {
+    log(`复用已缓存的 Codex 基包：${downloadPath}`);
+  } else {
+    fs.rmSync(downloadPath, { force: true });
+    downloadFile(url, downloadPath);
+  }
 
   const extractDir = path.join(sourceWorkDir, "extracted");
   if (/\.zip$/i.test(fileName)) {
@@ -748,39 +780,21 @@ function findSourceAppRoot() {
 
 function patchPluginAccountGate() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-
-  // 旧模式: function NAME(e){return e!==`chatgpt`}
-  const legacyPattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e!==`chatgpt`\}/;
-  const legacyFiles = walkFiles(assetsDir)
-    .filter((filePath) => /\.js$/.test(filePath))
-    .filter((filePath) => legacyPattern.test(fs.readFileSync(filePath, "utf8")));
-
-  if (legacyFiles.length > 0) {
-    for (const gateFile of legacyFiles) {
-      writePatchedFile(gateFile, (source) =>
-        replaceRegex(source, legacyPattern, "function $1(e){return !1}", "APIKey 模式插件置灰判断")
-      );
-      log(`已补丁插件账号模式 gate (legacy)：${path.basename(gateFile)}`);
-    }
+  const pluginAccountGatePattern = /function ([A-Za-z_$][\w$]*)\(e\)\{return e!==`chatgpt`(?:&&e!==`apikey`&&e!==`amazonBedrock`(?:\/\*ruizhiPluginAuthCompatibility\*\/)?){0,1}\}/;
+  const gateFile = findOneFileByContent(
+    assetsDir,
+    /\.js$/,
+    pluginAccountGatePattern,
+    "插件账号兼容 gate bundle"
+  );
+  const source = fs.readFileSync(gateFile, "utf8");
+  const patched = patchNativePluginAuthCompatibilitySource(source);
+  if (patched === source) {
+    log(`插件已原生支持 ChatGPT/API key 账号：${path.basename(gateFile)}`);
     return;
   }
-
-  // 新模式: authMethod===`chatgpt` 替换为 `__ruizhi_never__`（保持 backtick 配对合法，语义上永远为 false）
-  const authCheckPattern = /authMethod===`chatgpt`/g;
-  const jsFiles = walkFiles(assetsDir).filter((filePath) => /\.js$/.test(filePath));
-  let patchedCount = 0;
-  for (const filePath of jsFiles) {
-    const source = fs.readFileSync(filePath, "utf8");
-    if (authCheckPattern.test(source)) {
-      authCheckPattern.lastIndex = 0;
-      const patched = source.replace(authCheckPattern, "authMethod===`__ruizhi_never__`");
-      if (patched !== source) {
-        fs.writeFileSync(filePath, patched, "utf8");
-        patchedCount++;
-      }
-    }
-  }
-  log(`已补丁插件/功能账号模式 gate (authMethod)：${patchedCount} 个文件`);
+  fs.writeFileSync(gateFile, patched, "utf8");
+  log(`已补丁插件账号兼容范围：${path.basename(gateFile)}`);
 }
 
 function patchNativeWebviewFeatureGates() {
@@ -892,7 +906,12 @@ function patchNativeWebviewFeatureGates() {
 function patchNativeStatsigNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const statsigNetworkPattern = /networkConfig:\{api:([A-Za-z_$][\w$]*),logEventUrl:([A-Za-z_$][\w$]*),sdkExceptionUrl:([A-Za-z_$][\w$]*),networkOverrideFunc:([A-Za-z_$][\w$]*)\}/;
-  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/ab\.chatgpt\.com\/v1/, "Statsig network bundle");
+  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/ab\.chatgpt\.com\/v1|preventAllNetworkTraffic:!0/, "Statsig network bundle");
+  const source = fs.readFileSync(statsigFile, "utf8");
+  if (source.includes("preventAllNetworkTraffic:!0")) {
+    log(`已存在 Codex 原生 Statsig 初始化网络禁用补丁：${path.basename(statsigFile)}`);
+    return;
+  }
   writePatchedFile(statsigFile, (source) =>
     replaceRegex(source, statsigNetworkPattern, "networkConfig:{api:$1,logEventUrl:$2,sdkExceptionUrl:$3,preventAllNetworkTraffic:!0}", "Statsig 初始化网络禁用")
   );
@@ -902,8 +921,12 @@ function patchNativeStatsigNetwork() {
 function patchNativeStatsigBootstrap() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const statsigBootstrapPattern = /async function ([A-Za-z_$][\w$]*)\(\{appSessionId:([A-Za-z_$][\w$]*),appVersion:([A-Za-z_$][\w$]*),buildFlavor:([A-Za-z_$][\w$]*),locale:([A-Za-z_$][\w$]*),stableId:([A-Za-z_$][\w$]*),systemName:([A-Za-z_$][\w$]*),systemVersion:([A-Za-z_$][\w$]*),windowType:([A-Za-z_$][\w$]*)\}\)\{let ([A-Za-z_$][\w$]*)=null;try\{let\{statsigPayload:([A-Za-z_$][\w$]*)\}=await Promise\.race\(\[[\s\S]*?Timed out while fetching post-login Statsig bootstrap[\s\S]*?\]\),\{user:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\.parse\(JSON\.parse\(([A-Za-z_$][\w$]*)\)\);return\{statsigPayload:([A-Za-z_$][\w$]*),user:([A-Za-z_$][\w$]*)\}\}finally\{([A-Za-z_$][\w$]*)!=null&&globalThis\.clearTimeout\(([A-Za-z_$][\w$]*)\)\}\}/;
-  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /Timed out while fetching post-login Statsig bootstrap/, "Statsig bootstrap bundle");
+  const statsigFile = findOneFileByContent(assetsDir, /^.+\.js$/, /Timed out while fetching post-login Statsig bootstrap|ruizhiCreateStatsigBootstrapPayload/, "Statsig bootstrap bundle");
   const source = fs.readFileSync(statsigFile, "utf8");
+  if (source.includes("ruizhiCreateStatsigBootstrapPayload")) {
+    log(`已存在 Codex 原生 Statsig post-login bootstrap 补丁：${path.basename(statsigFile)}`);
+    return;
+  }
   const match = source.match(statsigBootstrapPattern);
   if (!match) {
     log("跳过补丁点：Statsig post-login bootstrap（结构已变更）");
@@ -928,7 +951,12 @@ function patchNativeCesAnalyticsNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const cesEndpointPattern = /([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1\/rgstr`,([A-Za-z_$][\w$]*)=`https:\/\/chatgpt\.com\/ces\/v1`/;
   const cesEnabledPattern = /([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)&&([A-Za-z_$][\w$]*)===`success`&&([A-Za-z_$][\w$]*)===!0/;
-  const cesFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/chatgpt\.com\/ces\/v1/, "CES analytics bundle");
+  const cesFile = findOneFileByContent(assetsDir, /^.+\.js$/, /https:\/\/chatgpt\.com\/ces\/v1|ruizhi-disabled:\/\/ces\/v1/, "CES analytics bundle");
+  const source = fs.readFileSync(cesFile, "utf8");
+  if (source.includes("ruizhi-disabled://ces/v1")) {
+    log(`已存在 Codex 原生 CES 分析上报禁用补丁：${path.basename(cesFile)}`);
+    return;
+  }
   writePatchedFile(cesFile, (source) => {
     let next = replaceRegex(source, cesEndpointPattern, "$1=`ruizhi-disabled://ces/v1/rgstr`,$2=`ruizhi-disabled://ces/v1`", "CES 分析上报端点禁用");
     next = replaceRegex(next, cesEnabledPattern, "$1=!1&&$2&&$3===`success`&&$4===!0", "CES 分析上报初始化禁用");
@@ -974,18 +1002,11 @@ function patchNativeUsageSettingsVisibility() {
     "usage settings access bundle"
   );
   const source = fs.readFileSync(usageAccessFile, "utf8");
-  if (source.includes("ruizhiUsageSettingsVisibleForApiKey")) {
+  if (source.includes("ruizhiUsageSettingsAlwaysVisible")) {
     log("已存在 Codex 使用情况设置入口补丁");
     return;
   }
-  const usageVisibilityPattern = /(function [A-Za-z_$][\w$]*\(\{authMethod:([A-Za-z_$][\w$]*),plan:[\s\S]{0,1400}?return\{canManageCreditSettings:[A-Za-z_$][\w$]*,isUsageSettingsVisible:)([^}]+)(\}\}function )/;
-  const patched = source.replace(
-    usageVisibilityPattern,
-    "$1($3)||$2===`apikey`/*ruizhiUsageSettingsVisibleForApiKey*/$4"
-  );
-  if (!patched.includes("ruizhiUsageSettingsVisibleForApiKey")) {
-    throw new Error("Codex 使用情况设置入口补丁点不存在");
-  }
+  const patched = patchNativeUsageSettingsVisibilitySource(source);
   fs.writeFileSync(usageAccessFile, patched, "utf8");
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
 }
@@ -1047,6 +1068,30 @@ function patchNativeProfileUsageFallback() {
   }
   fs.writeFileSync(profileQueriesFile, patched, "utf8");
   log(`已补丁 Codex 个人资料 Token 活动本地兜底与调用日志：${path.basename(profileQueriesFile)}`);
+}
+
+function patchNativePlatformUsageFallback() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const usageQueriesFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /safeGet\(`\/wham\/usage`/,
+    "usage queries bundle"
+  );
+  const source = fs.readFileSync(usageQueriesFile, "utf8");
+  if (source.includes("/usage/platform")) {
+    log("已存在锐鉴 API 用量兜底补丁");
+    return;
+  }
+  const patched = source.replace(
+    /queryFn:async\(\)=>\{try\{return await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/usage`,\{parameters:\{query:\{supports_rewardless_invites:!0\}\}\}\)\}catch\(e\)\{if\(e instanceof ([A-Za-z_$][\w$]*)&&\(e\.status===401\|\|e\.status===403\|\|e\.status===404\)\)return null;throw e\}\}/,
+    "queryFn:async()=>{try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`){let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}"
+  );
+  if (!patched.includes("/usage/platform") || !patched.includes("incompatible usage response")) {
+    throw new Error("锐鉴 API 用量兜底补丁点不存在");
+  }
+  fs.writeFileSync(usageQueriesFile, patched, "utf8");
+  log(`已补丁锐鉴 API 真实剩余用量：${path.basename(usageQueriesFile)}`);
 }
 
 function patchNativeProfileApiCallLogging() {
@@ -1371,7 +1416,7 @@ function patchWebviewLocales() {
   }
 
   for (const localeFile of allLocaleFiles) {
-    writePatchedFile(localeFile, (source) => {
+    const changed = writePatchedFileIfChanged(localeFile, (source) => {
       let next = source;
       for (const [key, value] of globalReplacements) {
         const r = replaceLocaleMessage(next, key, value);
@@ -1379,7 +1424,7 @@ function patchWebviewLocales() {
       }
       return next;
     });
-    log(`已补丁通用翻译：${path.basename(localeFile)}`);
+    if (changed) log(`已补丁通用翻译：${path.basename(localeFile)}`);
   }
 
   const replacements = new Map([
@@ -1390,7 +1435,7 @@ function patchWebviewLocales() {
   ]);
 
   for (const localeFile of localeFiles) {
-    writePatchedFile(localeFile, (source) => {
+    const changed = writePatchedFileIfChanged(localeFile, (source) => {
       let next = source;
       for (const [key, value] of replacements) {
         const r = replaceLocaleMessage(next, key, value);
@@ -1398,7 +1443,7 @@ function patchWebviewLocales() {
       }
       return next;
     });
-    log(`已补丁中文翻译：${path.basename(localeFile)}`);
+    if (changed) log(`已补丁中文翻译：${path.basename(localeFile)}`);
   }
 }
 
@@ -2639,7 +2684,7 @@ function ruizhiStartBackgroundUpdateCheck(){
     try{
       const resourcesRoot=process.resourcesPath||path.dirname(process.execPath);
       const servicePath=path.join(resourcesRoot,...pageEnhanceConfig.serviceResourcePath);
-      if(!pageEnhanceConfig.enabled||!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
+      if(!fs.existsSync(servicePath))throw new Error("页面增强服务脚本不存在："+servicePath);
       const service=require(servicePath).createRuizhiEnhanceService({
         codexHome:ruizhiEnhanceCodexHome(),
         resourcesRoot,
@@ -2975,6 +3020,7 @@ async function repackAppAsar() {
   patchNativeUsageSettingsVisibility();
   patchNativeProfileDropdownUsageVisibility();
   patchNativeProfileUsageFallback();
+  patchNativePlatformUsageFallback();
   patchNativeProfileApiCallLogging();
   patchPluginSkillLocalListFallback(extractedDir, { log });
   patchNativeBrowserDesktopFeatureAvailability();
@@ -3009,6 +3055,13 @@ async function repackAppAsar() {
 
 function findMainExecutable() {
   const macosDir = path.join(appOutRoot, "Contents", "MacOS");
+  const plist = path.join(appOutRoot, "Contents", "Info.plist");
+  const executableName = execOutput("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleExecutable", plist]).trim();
+  const plistExecutablePath = path.join(macosDir, executableName);
+  const wrappedExecutablePath = `${plistExecutablePath}.bin`;
+  if (fs.existsSync(plistExecutablePath)) {
+    return fs.existsSync(wrappedExecutablePath) ? wrappedExecutablePath : plistExecutablePath;
+  }
   const executables = fs.readdirSync(macosDir)
     .map((name) => path.join(macosDir, name))
     .filter((candidate) => fs.statSync(candidate).isFile());
@@ -3073,9 +3126,7 @@ function patchInfoPlist() {
 }
 
 function assertAppBinaryArchMatchesHost() {
-  const plist = path.join(appOutRoot, "Contents", "Info.plist");
-  const executableName = execOutput("/usr/libexec/PlistBuddy", ["-c", "Print :CFBundleExecutable", plist]).trim();
-  const executablePath = path.join(appOutRoot, "Contents", "MacOS", executableName);
+  const executablePath = findMainExecutable();
   const archs = execOutput("lipo", ["-archs", executablePath]).trim().split(/\s+/);
   assertMacosBuildArch(archs);
   log(`已确认 macOS app 主程序包含目标架构 ${macosBuildArch}：${archs.join(", ")}`);

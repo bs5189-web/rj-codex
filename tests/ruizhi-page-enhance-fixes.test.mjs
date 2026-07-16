@@ -591,7 +591,7 @@ test("packaging routes and logs native profile token activity", () => {
   }
 });
 
-test("packaging keeps Usage settings visible for API key mode", () => {
+test("packaging keeps Usage settings visible for Ruizhi auth modes", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -602,15 +602,33 @@ test("packaging keeps Usage settings visible for API key mode", () => {
     assert.match(source, /patchNativeProfileDropdownUsageVisibility/, `${scriptPath} should patch the profile dropdown Usage entry`);
     assert.match(source, /enable_free_go_usage_settings/, `${scriptPath} should locate the Usage settings access bundle by code shape`);
     assert.match(source, /isUsageSettingsVisible/, `${scriptPath} should patch the Usage settings visibility result`);
-    assert.match(source, /ruizhiUsageSettingsVisibleForApiKey/, `${scriptPath} should keep Usage settings visible in API key mode`);
+    assert.match(source, /ruizhiUsageSettingsAlwaysVisible/, `${scriptPath} should keep Usage settings visible for Ruizhi auth modes`);
     assert.match(source, /ruizhiProfileDropdownUsageForApiKey/, `${scriptPath} should keep the profile dropdown Usage item visible in API key mode`);
     assert.match(source, /codex\\\.profileDropdown\\\.apiKeyAuth/, `${scriptPath} should locate the API key profile dropdown branch`);
     assert.match(source, /codex\\\.profileDropdown\\\.usage/, `${scriptPath} should locate the profile dropdown Usage item`);
-    assert.match(source, /===`apikey`/, `${scriptPath} should explicitly allow API key auth mode`);
+    assert.match(source, /patchNativeUsageSettingsVisibilitySource/, `${scriptPath} should use the shared all-auth Usage visibility patch`);
   }
 
   const windowsOverrideSource = read("scripts/windows-asar-overrides.mjs");
   assert.match(windowsOverrideSource, /\["Qo=`Usage`", "Qo=`使用情况`"\]/, "Windows overrides should label the menu as 使用情况");
+});
+
+test("Usage settings stays visible for Ruizhi custom OAuth accounts", async () => {
+  const { patchNativeUsageSettingsVisibilitySource } = await import("../scripts/windows-asar-overrides.mjs");
+  assert.equal(
+    typeof patchNativeUsageSettingsVisibilitySource,
+    "function",
+    "packaging should expose a reusable Usage visibility patch instead of hard-coding API key auth",
+  );
+
+  const source = "function ah({authMethod:e,plan:t,isFreeGoUsageSettingsEnabled:n}){let a=e===`chatgpt`,s=a&&t===`pro`;return{canManageCreditSettings:s,isUsageSettingsVisible:s||a&&n||e===`apikey`}}function oh(e){return e===`free`}";
+  const patched = patchNativeUsageSettingsVisibilitySource(source);
+  const usageVisible = Function(
+    `${patched};return ah({authMethod:\"ruizhi-oauth\",plan:null,isFreeGoUsageSettingsEnabled:false}).isUsageSettingsVisible;`,
+  )();
+
+  assert.equal(usageVisible, true, "锐捷自有 OAuth 登录后也必须显示“使用情况和计费”菜单");
+  assert.match(patched, /ruizhiUsageSettingsAlwaysVisible/, "the bundle should carry the always-visible Usage marker");
 });
 
 test("profile API logging patch emits parseable regex literals", () => {
@@ -634,16 +652,43 @@ test("enhance service exposes local profile token usage", () => {
   assert.match(source, /tokens_used/, "local profile usage should be backed by stored thread token counts");
 });
 
-test("packaging plugin auth gate patch tolerates bundle and minifier alias changes", () => {
+test("packaging plugin auth compatibility patch is shared and narrowly scoped", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
   ]) {
     const source = read(scriptPath);
     assert.match(source, /pluginAccountGatePattern/, `${scriptPath} should locate the plugin auth gate by code shape`);
     assert.match(source, /findOneFileByContent/, `${scriptPath} should not depend on a fixed plugin auth bundle name`);
-    assert.match(source, /function \$1\(e\)\{return !1\}/, `${scriptPath} should preserve the captured minified function name`);
+    assert.match(source, /patchNativePluginAuthCompatibilitySource/, `${scriptPath} should use the shared narrow plugin auth patch`);
   }
+
+  const macosSource = read("scripts/build-macos.mjs");
+  assert.doesNotMatch(
+    macosSource,
+    /authMethod===`chatgpt`[\s\S]{0,200}__ruizhi_never__/,
+    "macOS packaging must not globally disable native ChatGPT-authenticated feature paths",
+  );
+});
+
+test("plugin auth compatibility does not rewrite unrelated ChatGPT feature checks", async () => {
+  const { patchNativePluginAuthCompatibilitySource } = await import("../scripts/windows-asar-overrides.mjs");
+  assert.equal(typeof patchNativePluginAuthCompatibilitySource, "function");
+
+  const source = [
+    "function gate(e){return e!==`chatgpt`}",
+    "function statsig(account){return account.authMethod===`chatgpt`}",
+    "function onboarding(account){return account.authMethod===`chatgpt`}",
+  ].join(";");
+  const patched = patchNativePluginAuthCompatibilitySource(source);
+
+  assert.equal(Function(`${patched};return gate(\"chatgpt\");`)(), false);
+  assert.equal(Function(`${patched};return gate(\"apikey\");`)(), false);
+  assert.equal(Function(`${patched};return gate(\"amazonBedrock\");`)(), false);
+  assert.equal(Function(`${patched};return gate(\"copilot\");`)(), true);
+  assert.equal((patched.match(/authMethod===`chatgpt`/g) ?? []).length, 2);
+  assert.doesNotMatch(patched, /__ruizhi_never__/);
 });
 
 test("packaging native feature gate patch tolerates Statsig hook alias changes", () => {

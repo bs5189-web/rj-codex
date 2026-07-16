@@ -259,7 +259,13 @@ test("desktop patches host model listing to read the user models cache", () => {
     assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
     assert.match(source, /forceFreshModelListQuery/);
     assert.match(source, /staleTime:0,queryFn/);
-    assert.match(source, /return \{data:ruizhiModels,nextCursor:null\}/);
+    assert.match(source, /ruizhiNormalizeModelsResult/);
+    assert.match(source, /\.then\(ruizhiNormalizeModelsResult\)/);
+    assert.match(source, /ruizhiModel\.input_modalities=/);
+    assert.match(source, /\\`text\\`,\\`image\\`/);
+    assert.match(source, /ruizhiModel\.supported_reasoning_efforts=ruizhiFinalEfforts/);
+    assert.match(source, /\\`minimal\\`,\\`low\\`,\\`medium\\`,\\`high\\`,\\`xhigh\\`/);
+    assert.match(source, /ruizhiNormalizeModelsResult\(\{data:ruizhiResult\.data,nextCursor:null\}\)/);
   }
 
   const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
@@ -270,7 +276,13 @@ test("desktop patches host model listing to read the user models cache", () => {
   assert.match(asarPatchSource, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
   assert.match(asarPatchSource, /forceFreshModelListQuery/);
   assert.match(asarPatchSource, /staleTime:0,queryFn/);
-  assert.match(asarPatchSource, /return \{data:ruizhiModels,nextCursor:null\}/);
+  assert.match(asarPatchSource, /ruizhiNormalizeModelsResult/);
+  assert.match(asarPatchSource, /\.then\(ruizhiNormalizeModelsResult\)/);
+  assert.match(asarPatchSource, /ruizhiModel\.input_modalities=/);
+  assert.match(asarPatchSource, /\\`text\\`,\\`image\\`/);
+  assert.match(asarPatchSource, /ruizhiModel\.supported_reasoning_efforts=ruizhiFinalEfforts/);
+  assert.match(asarPatchSource, /\\`minimal\\`,\\`low\\`,\\`medium\\`,\\`high\\`,\\`xhigh\\`/);
+  assert.match(asarPatchSource, /ruizhiNormalizeModelsResult\(\{data:ruizhiResult\.data,nextCursor:null\}\)/);
 });
 
 test("host model listing patch separates the helper from queryFn", () => {

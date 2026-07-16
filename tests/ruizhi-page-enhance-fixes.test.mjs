@@ -581,11 +581,13 @@ test("packaging routes and logs native profile token activity", () => {
     assert.match(source, /\/profile\/usage/, `${scriptPath} should fall back to local Ruizhi profile usage`);
     assert.match(source, /globalThis\.ruizhiDesktop\?\.enhance\?\.call/, `${scriptPath} should use the existing enhance bridge for local usage`);
     assert.match(source, /CODEX_API_BASE_URL/, `${scriptPath} should set the native ChatGPT backend API base at launch`);
-    assert.match(source, /https:\/\/gptauth\.rjagi\.cn/, `${scriptPath} should route native backend API calls to Ruizhi auth backend`);
+    assert.match(source, /https:\/\/gptauth\.ruijie\.com\.cn/, `${scriptPath} should route native backend API calls to Ruizhi auth backend`);
     assert.match(source, /patchNativeProfileApiCallLogging/, `${scriptPath} should patch main-process profile API URL logging`);
     assert.match(source, /\[ruizhi\]\[profile-api\]/, `${scriptPath} should log the resolved profile API URL without auth headers`);
     assert.match(source, /replace\(\/\^\\\\\/\+\//, `${scriptPath} should preserve the slash escape in generated regex literals`);
     assert.match(source, /\[ruizhi\]\[profile\] GET \/wham\/profiles\/me start/, `${scriptPath} should log renderer profile API attempts`);
+    assert.match(source, /invalid profile payload/, `${scriptPath} should reject malformed profile payloads before rendering`);
+    assert.match(source, /using empty local profile fallback/, `${scriptPath} should keep profile rendering alive when every profile source fails`);
   }
 });
 

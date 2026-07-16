@@ -116,18 +116,66 @@ function modelFromCatalogEntry(entry, defaultModel) {
   const model = String(entry?.model || entry?.slug || "").trim();
   const displayName = String(entry?.displayName || entry?.display_name || model).trim() || model;
   const visibility = String(entry?.visibility || "list");
+  const supportedReasoningEfforts = normalizeSupportedReasoningEfforts(entry);
+  const defaultReasoningEffort = typeof entry?.defaultReasoningEffort === "string" && entry.defaultReasoningEffort.trim()
+    ? entry.defaultReasoningEffort.trim()
+    : typeof entry?.default_reasoning_level === "string" && entry.default_reasoning_level.trim()
+      ? entry.default_reasoning_level.trim()
+      : "medium";
   return {
     ...entry,
     model,
     slug: entry?.slug || model,
+    input_modalities: ["text", "image"],
+    inputModalities: ["text", "image"],
     displayName,
     display_name: entry?.display_name || displayName,
     description: typeof entry?.description === "string" ? entry.description : "",
     hidden: visibility !== "list",
     isDefault: model === defaultModel || entry?.isDefault === true,
-    supportedReasoningEfforts: Array.isArray(entry?.supportedReasoningEfforts) ? entry.supportedReasoningEfforts : [],
-    defaultReasoningEffort: typeof entry?.defaultReasoningEffort === "string" ? entry.defaultReasoningEffort : "medium"
+    supported_reasoning_efforts: supportedReasoningEfforts.map((item) => item.reasoningEffort),
+    supportedReasoningEfforts,
+    default_reasoning_level: defaultReasoningEffort,
+    defaultReasoningEffort
   };
+}
+
+function normalizeSupportedReasoningEfforts(entry) {
+  const fromDesktop = Array.isArray(entry?.supportedReasoningEfforts)
+    ? entry.supportedReasoningEfforts
+        .map((item) => {
+          if (typeof item === "string") return { reasoningEffort: item, description: item };
+          if (!item || typeof item !== "object") return null;
+          const reasoningEffort = String(item.reasoningEffort || item.effort || "").trim();
+          if (!reasoningEffort) return null;
+          return { reasoningEffort, description: String(item.description || reasoningEffort) };
+        })
+        .filter(Boolean)
+    : [];
+  if (fromDesktop.length > 0) return fromDesktop;
+
+  const fromEfforts = Array.isArray(entry?.supported_reasoning_efforts)
+    ? entry.supported_reasoning_efforts
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .map((reasoningEffort) => ({ reasoningEffort, description: reasoningEffort }))
+    : [];
+  if (fromEfforts.length > 0) return fromEfforts;
+
+  const fromLevels = Array.isArray(entry?.supported_reasoning_levels)
+    ? entry.supported_reasoning_levels
+        .map((item) => {
+          if (typeof item === "string") return { reasoningEffort: item, description: item };
+          if (!item || typeof item !== "object") return null;
+          const reasoningEffort = String(item.effort || item.reasoningEffort || "").trim();
+          if (!reasoningEffort) return null;
+          return { reasoningEffort, description: String(item.description || reasoningEffort) };
+        })
+        .filter(Boolean)
+    : [];
+  return fromLevels.length > 0
+    ? fromLevels
+    : defaultReasoningEfforts().map((reasoningEffort) => ({ reasoningEffort, description: reasoningEffort }));
 }
 
 function applyRuizhiModelCatalogCompatibilityPatches(catalog) {

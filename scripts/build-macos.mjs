@@ -12,6 +12,9 @@ import {
   patchPluginSkillLocalListFallback,
   writeRuntimeModelCatalog
 } from "./windows-asar-overrides.mjs";
+import { patchCodexLoginSuccessBinary } from "./codex-login-success-branding.mjs";
+import { patchCodexAuthIssuerSource } from "./codex-auth-issuer-source.mjs";
+import { patchCodexEnterprisePluginSource } from "./codex-enterprise-plugins-source.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("asar");
@@ -40,6 +43,7 @@ const distDir = resolveProjectPath("dist");
 const macDistDir = resolveProjectPath(path.join("dist", "macos"));
 const appOutRoot = path.join(macDistDir, `${config.productName}.app`);
 const workRoot = path.join(projectRoot, ".work", "macos");
+const codexSourceRoot = path.join(projectRoot, ".work", "codex-source");
 const dmgStagingDir = path.join(workRoot, "dmg");
 const sourceWorkDir = path.join(workRoot, "source");
 const extractedDir = path.join(workRoot, "app");
@@ -1432,6 +1436,10 @@ function shortProductName() {
   return (config.shortProductName ?? config.productName.replace(/Codex.*$/u, "").trim()) || config.productName;
 }
 
+function codingProductName() {
+  return config.productModes?.coding ?? `${shortProductName()} 编码`;
+}
+
 function replaceBrandInVisibleText(value) {
   const productPrefix = config.productName.replace(/Codex.*$/u, "").trim();
   return value.replace(/ChatGPT|Codex/g, (match, offset, source) => {
@@ -1449,6 +1457,9 @@ function replaceLocalizedVisibleText(id, value) {
   }
   if (id === "sidebarElectron.productMode.chatGptWork.plainText") {
     return `${shortProductName()} 工作`;
+  }
+  if (id === "sidebarElectron.productMode.codex") {
+    return codingProductName();
   }
   return replaceBrandInVisibleText(value);
 }
@@ -1976,7 +1987,11 @@ function ruizhiInit(){
       return copied;
     }
     function syncLegacyCodexGlobalSkills(){
-      copyDirectoryEntriesIfMissing(path.join(home,".codex","skills"),path.join(home,".agents","skills"));
+      try{
+        copyDirectoryEntriesIfMissing(path.join(home,".codex","skills"),path.join(home,".agents","skills"));
+      }catch(error){
+        console.error("ruizhi legacy skill migration failed",error);
+      }
     }
     syncImageGenSkill();
     syncLegacyCodexGlobalSkills();
@@ -3053,12 +3068,11 @@ function copyPluginMarketplaces() {
   }
 }
 
-function copyRuntimeOverrides() {
+function copyRuntimeOverrides(codexClientVersion) {
   const resourcesDir = appResourcesDir();
 
   const modelTargetDir = path.join(resourcesDir, "models");
   if (modelCatalogEnabled()) {
-    const codexClientVersion = codexClientVersionFromExe(path.join(resourcesDir, "codex"));
     writeRuntimeModelCatalog(
       modelCatalogPath(),
       path.join(modelTargetDir, "ruizhi-model-catalog.json"),
@@ -3415,17 +3429,46 @@ function verifyCodeSignature() {
   execLogged("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appOutRoot]);
 }
 
+function signEmbeddedCodex(identity) {
+  const codexPath = path.join(appOutRoot, "Contents", "Resources", "codex");
+  const signingDir = path.join(appOutRoot, "Contents", "Resources", ".codex-signing");
+  const signingPath = path.join(signingDir, "codex");
+  const originalMode = fs.statSync(codexPath).mode;
+  fs.rmSync(signingDir, { recursive: true, force: true });
+  fs.mkdirSync(signingDir, { recursive: true });
+  fs.copyFileSync(codexPath, signingPath);
+  fs.chmodSync(signingPath, originalMode);
+
+  const signArgs = ["--force", "--sign", identity];
+  if (identity === "-" || useTestSigningCertificate()) {
+    signArgs.push("--timestamp=none");
+  } else {
+    signArgs.push("--options", "runtime", "--timestamp");
+  }
+  signArgs.push(signingPath);
+  try {
+    execLogged("codesign", signArgs);
+    execLogged("codesign", ["--verify", "--strict", "--verbose=2", signingPath]);
+    fs.renameSync(signingPath, codexPath);
+  } finally {
+    fs.rmSync(signingDir, { recursive: true, force: true });
+  }
+  execLogged("codesign", ["--verify", "--strict", "--verbose=2", codexPath]);
+}
+
 function signApp() {
   execLogged("/usr/bin/xattr", ["-cr", appOutRoot]);
 
   if (!hasDeveloperSigningConfig()) {
     log("未配置 Developer ID 签名 secrets，使用 ad-hoc 签名");
+    signEmbeddedCodex("-");
     execLogged("codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", appOutRoot]);
     verifyCodeSignature();
     return { signed: false, notarized: false };
   }
 
   importDeveloperCertificate();
+  signEmbeddedCodex(process.env.MACOS_CODESIGN_IDENTITY);
   const signArgs = [
     "--force",
     "--deep",
@@ -3534,6 +3577,110 @@ function writeUpdateManifest(zipPath, signingState) {
   log(`macOS 版本 electron-updater 清单已输出：${versionedLatestMacYmlPath()}`);
 }
 
+function ensureCodexSource() {
+  const cliConfig = config.codexCli;
+  if (!cliConfig?.sourceRepo || !cliConfig?.tag) {
+    throw new Error("缺少 codexCli.sourceRepo 或 codexCli.tag 配置");
+  }
+
+  if (!fs.existsSync(path.join(codexSourceRoot, ".git"))) {
+    fs.rmSync(codexSourceRoot, { recursive: true, force: true });
+    execLogged("git", [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      cliConfig.sourceRepo,
+      codexSourceRoot
+    ]);
+  }
+
+  execLogged("git", [
+    "-C",
+    codexSourceRoot,
+    "fetch",
+    "--depth=1",
+    "origin",
+    `refs/tags/${cliConfig.tag}:refs/tags/${cliConfig.tag}`
+  ]);
+  execLogged("git", ["-C", codexSourceRoot, "checkout", "--force", cliConfig.tag]);
+}
+
+function patchCodexCliSource() {
+  const authIssuerPatch = patchCodexAuthIssuerSource(
+    codexSourceRoot,
+    config.openai.chatGptLoginBaseUrl
+  );
+  const enterprisePluginPatch = patchCodexEnterprisePluginSource(codexSourceRoot);
+  log(`已补丁 Codex OAuth issuer：${authIssuerPatch.issuer}`);
+  log(`已补丁 Codex 插件目录：企业版本地市场${enterprisePluginPatch.changed ? "（已更新源码）" : ""}`);
+
+  if (config.codexCli?.disableOpenAIWebSockets) {
+    const providerInfoPath = path.join(
+      codexSourceRoot,
+      "codex-rs",
+      "model-provider-info",
+      "src",
+      "lib.rs"
+    );
+    const original = fs.readFileSync(providerInfoPath, "utf8");
+    const patched = original.replace(
+      /(pub fn create_openai_provider\([\s\S]*?requires_openai_auth: true,[\s\S]*?)supports_websockets: true,/,
+      "$1supports_websockets: false,"
+    );
+    if (patched !== original) {
+      fs.writeFileSync(providerInfoPath, patched, "utf8");
+      log("已补丁内置 OpenAI provider：禁用 Responses WebSocket");
+    } else if (!original.includes("supports_websockets: false")) {
+      throw new Error("补丁点不存在：OpenAI provider Responses WebSocket");
+    }
+  }
+}
+
+function buildPatchedCodexCli(expectedCodexClientVersion) {
+  const cliConfig = config.codexCli;
+  const shouldBuild = process.env.RUIZHI_BUILD_CODEX === "1" || cliConfig?.rebuildByDefault === true;
+  if (!shouldBuild) {
+    throw new Error("锐捷 OAuth 依赖重编 Codex CLI，不能跳过 RUIZHI_BUILD_CODEX");
+  }
+
+  ensureCodexSource();
+  patchCodexCliSource();
+
+  const codexRsRoot = path.join(codexSourceRoot, "codex-rs");
+  const cargoEnv = {
+    ...process.env,
+    ...(cliConfig.rustupToolchain ? { RUSTUP_TOOLCHAIN: cliConfig.rustupToolchain } : {}),
+    CARGO_PROFILE_RELEASE_LTO: "false",
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
+    CARGO_PROFILE_RELEASE_INCREMENTAL: process.env.CARGO_PROFILE_RELEASE_INCREMENTAL ?? "true",
+    CARGO_PROFILE_RELEASE_DEBUG: process.env.CARGO_PROFILE_RELEASE_DEBUG ?? "0",
+    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? "6",
+    CARGO_NET_GIT_FETCH_WITH_CLI: process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true"
+  };
+  execLogged("cargo", ["build", "--release", "-p", "codex-cli", "--bin", "codex"], {
+    cwd: codexRsRoot,
+    env: cargoEnv
+  });
+
+  const builtCodexPath = path.join(codexRsRoot, "target", "release", "codex");
+  const targetCodexPath = path.join(appOutRoot, "Contents", "Resources", "codex");
+  if (!fs.existsSync(builtCodexPath)) {
+    throw new Error(`没有找到编译后的 Codex CLI：${builtCodexPath}`);
+  }
+  // Validate the standalone build before copying it into the still-signed app bundle.
+  // On macOS, launching a modified nested executable before the bundle is re-signed can
+  // block in dyld/Gatekeeper long enough to look like a version-read timeout.
+  const builtCodexClientVersion = codexClientVersionFromExe(builtCodexPath);
+  if (builtCodexClientVersion !== expectedCodexClientVersion) {
+    throw new Error(
+      `重编 Codex CLI 版本不匹配：桌面端=${expectedCodexClientVersion}，重编=${builtCodexClientVersion}`
+    );
+  }
+  fs.copyFileSync(builtCodexPath, targetCodexPath);
+  fs.chmodSync(targetCodexPath, 0o755);
+  log(`已替换 Contents/Resources/codex：OAuth issuer=${config.openai.chatGptLoginBaseUrl}`);
+}
+
 async function main() {
   if (process.platform !== "darwin") {
     throw new Error("build:macos 必须在 macOS 上运行。本地 Windows 不要硬搓 .app，没那个命。");
@@ -3544,6 +3691,9 @@ async function main() {
   cleanDir(workRoot);
 
   const sourceAppRoot = findSourceAppRoot();
+  const sourceCodexClientVersion = codexClientVersionFromExe(
+    path.join(sourceAppRoot, "Contents", "Resources", "codex"),
+  );
   log(`目标 macOS 架构：${macosBuildArch}`);
   log(`使用 Codex.app：${sourceAppRoot}`);
 
@@ -3552,7 +3702,15 @@ async function main() {
   execBestEffort("chflags", ["-R", "nouchg,noschg", appOutRoot], "清理 macOS 文件标志");
   execBestEffort("/usr/bin/xattr", ["-cr", appOutRoot], "清理 macOS 扩展属性");
 
-  copyRuntimeOverrides();
+  buildPatchedCodexCli(sourceCodexClientVersion);
+  const loginSuccessPatch = patchCodexLoginSuccessBinary(
+    path.join(appOutRoot, "Contents", "Resources", "codex"),
+    config.loginSuccessPage,
+  );
+  log(`已补丁 Codex OAuth 成功页：${JSON.stringify(loginSuccessPatch.replacements)}`);
+  signEmbeddedCodex("-");
+
+  copyRuntimeOverrides(sourceCodexClientVersion);
   copyPluginMarketplaces();
   writeAppUpdateConfig();
   patchInfoPlist();

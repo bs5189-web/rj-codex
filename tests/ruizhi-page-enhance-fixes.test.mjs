@@ -232,7 +232,7 @@ test("packaging patches onboarding continue button and build date badge", () => 
   }
 });
 
-test("packaging keeps the ChatGPT Work sidebar title as RuiJie Work", () => {
+test("packaging keeps RuiJie Work and renames the coding mode to RuiJie Coding", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
     "scripts/build-macos.mjs",
@@ -244,6 +244,8 @@ test("packaging keeps the ChatGPT Work sidebar title as RuiJie Work", () => {
     assert.match(source, /<chatGpt>\$\{shortProductName\(\)\}<\/chatGpt> <work>工作<\/work>/, `${scriptPath} should render the mode label as 锐捷 工作`);
     assert.match(source, /id === "sidebarElectron\.productMode\.chatGptWork\.plainText"/, `${scriptPath} should patch the accessible ChatGPT Work mode label`);
     assert.match(source, /\$\{shortProductName\(\)\} 工作/, `${scriptPath} should render the accessible label as 锐捷 工作`);
+    assert.match(source, /id === "sidebarElectron\.productMode\.codex"/, `${scriptPath} should patch the coding mode label explicitly`);
+    assert.match(source, /return config\.productModes\?\.coding \?\? `\$\{shortProductName\(\)\} 编码`/, `${scriptPath} should render the coding mode label as 锐捷 编码`);
     assert.match(source, /replace\("\/ChatGPT\|Codex\/g|replace\(\/ChatGPT\|Codex\/g/, `${scriptPath} should replace ChatGPT and Codex in one pass`);
     assert.doesNotMatch(source, /replace\(\/ChatGPT\/g, config\.productName\)\.replace\(\/Codex\/g/, `${scriptPath} should not reprocess Codex inside the replacement product name`);
   }

@@ -57,7 +57,7 @@ test("bootstrap auto-registers bundled Ruizhi marketplaces for first launch", ()
   assert.ok(config.pluginMarketplaces.length > 0, "test expects a bundled Ruizhi marketplace");
   assert.equal(config.pluginMarketplaces[0].name, "ruijie-marketplace");
   assert.equal(config.pluginMarketplaces[0].online.source, "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git");
-  assert.equal(config.pluginMarketplaces[0].online.autoUpgrade, true);
+  assert.equal(config.pluginMarketplaces[0].online.autoUpgrade, false);
 
   for (const sourcePath of existingProjectFiles([
     "scripts/build-windows.mjs",
@@ -142,7 +142,7 @@ test("macOS packaging avoids provenance-blocked Resource directory creation", ()
   assert.match(source, /execLogged\("ditto", \["--norsrc", sourceAppRoot, appOutRoot\]\)/, "macOS packaging should avoid copying source app xattrs into dist");
 
   const copyIndex = source.indexOf('execLogged("ditto", ["--norsrc", sourceAppRoot, appOutRoot])');
-  const runtimeIndex = source.indexOf("copyRuntimeOverrides();", copyIndex);
+  const runtimeIndex = source.indexOf("copyRuntimeOverrides(", copyIndex);
   const marketplaceIndex = source.indexOf("copyPluginMarketplaces();", copyIndex);
   const plistIndex = source.indexOf("patchInfoPlist();", copyIndex);
   const helperIndex = source.indexOf("buildImageGenHelper();", copyIndex);

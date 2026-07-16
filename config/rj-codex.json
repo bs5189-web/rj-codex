@@ -65,6 +65,14 @@
   "branding": {
     "enabled": true
   },
+  "productModes": {
+    "coding": "锐捷 编码"
+  },
+  "loginSuccessPage": {
+    "title": "锐捷Codex",
+    "legacyMessage": "授权完成，关闭本页",
+    "currentMessage": "授权成功，可以关闭本页面"
+  },
   "models": {
     "enabled": true,
     "catalogPath": "resources/ruizhi-model-catalog.json"
@@ -335,7 +343,7 @@
       "displayName": "锐捷插件",
       "sourcePath": "marketplaces/ruijie-marketplace",
       "resourcePath": "plugins/ruijie-marketplace",
-      "installPath": ".tmp/marketplaces/ruijie-marketplace",
+      "installPath": "plugins/marketplaces/ruijie-marketplace",
       "versionManifestPath": ".codex-plugin/plugin.json",
       "online": {
         "enabled": true,
@@ -344,15 +352,15 @@
         "source": "http://gitlab.dokploy.ruijie.com.cn/marketplace/ruijie-marketplace.git",
         "ref": "main",
         "fallbackToLocal": true,
-        "autoUpgrade": true
+        "autoUpgrade": false
       }
     }
   ],
   "codexCli": {
     "sourceRepo": "https://github.com/openai/codex.git",
-    "tag": "rust-v0.128.0-alpha.1",
+    "tag": "rust-v0.144.2",
     "rustupToolchain": "stable",
-    "rebuildByDefault": false,
+    "rebuildByDefault": true,
     "disableOpenAIWebSockets": true
   }
 }

@@ -480,7 +480,7 @@ function patchWindowsFrontendLocalization(extractedAppDir, config, options = {})
     ["electron.onboarding.welcomeV2.role.subtitle.chatgpt", `${config.version ?? ""}`],
     ["sidebarElectron.productMode.chatGptWork", "<chatGpt>\u5de5\u4f5c</chatGpt>"],
     ["sidebarElectron.productMode.chatGptWork.plainText", "\u5de5\u4f5c"],
-    ["sidebarElectron.productMode.codex", "Codex"]
+    ["sidebarElectron.productMode.codex", config.productModes?.coding ?? "锐捷 编码"]
   ]);
 
   const localeChanged = writePatchedFile(localeFile, (source) => {
@@ -504,7 +504,7 @@ function patchWindowsFrontendLocalization(extractedAppDir, config, options = {})
     next = next
       .replace(/("sidebarElectron\.productMode\.chatGptWork":)`(?:\\.|[^`\\])*`/, "$1`<chatGpt>\u5de5\u4f5c</chatGpt>`")
       .replace(/("sidebarElectron\.productMode\.chatGptWork\.plainText":)`(?:\\.|[^`\\])*`/, "$1`\u5de5\u4f5c`")
-      .replace(/("sidebarElectron\.productMode\.codex":)`(?:\\.|[^`\\])*`/, "$1`Codex`");
+      .replace(/("sidebarElectron\.productMode\.codex":)`(?:\\.|[^`\\])*`/, `$1\`${config.productModes?.coding ?? "锐捷 编码"}\``);
     return next;
   });
   changedFiles += localeChanged ? 1 : 0;
@@ -552,7 +552,7 @@ function replaceLocaleBacktickValue(source, key, value) {
   return `${source.slice(0, valueStart)}${value}${source.slice(valueEnd)}`;
 }
 
-function patchWindowsProductModeLabels(extractedAppDir, options = {}) {
+function patchWindowsProductModeLabels(extractedAppDir, config, options = {}) {
   const log = options.log ?? (() => {});
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const localeFiles = walkFiles(assetsDir)
@@ -564,7 +564,7 @@ function patchWindowsProductModeLabels(extractedAppDir, options = {}) {
     let next = source;
     next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork", "<chatGpt>\u5de5\u4f5c</chatGpt>");
     next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork.plainText", "\u5de5\u4f5c");
-    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.codex", "Codex");
+    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.codex", config.productModes?.coding ?? "锐捷 编码");
     return next;
   });
   log(`Patched Windows product mode labels: ${changed ? "changed" : "already current"}`);
@@ -4138,7 +4138,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   } else {
     log("已跳过 Windows 原生菜单品牌化补丁");
   }
-  patchWindowsProductModeLabels(extractedAppDir, { log });
+  patchWindowsProductModeLabels(extractedAppDir, config, { log });
   patchWindowsProductModeSwitcherVisibility(extractedAppDir, { log });
   patchWindowsSandboxOnboardingBypass(extractedAppDir, { log });
   patchVcRuntimeErrorPage(extractedAppDir, { log });
@@ -4151,7 +4151,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   } else {
     log("已跳过插件市场文案补丁");
   }
-  patchWindowsProductModeLabels(extractedAppDir, { log });
+  patchWindowsProductModeLabels(extractedAppDir, config, { log });
   patchWindowsProductModeSwitcherVisibility(extractedAppDir, { log });
   patchWindowsSandboxOnboardingBypass(extractedAppDir, { log });
   patchWindowsTrayIcon(extractedAppDir, { log });

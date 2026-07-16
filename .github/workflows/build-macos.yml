@@ -18,7 +18,7 @@ jobs:
   macos:
     name: macOS unsigned package (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +53,18 @@ jobs:
         with:
           go-version: "1.25.x"
           cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache patched Codex CLI build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            .work/codex-source/codex-rs/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-codex-${{ hashFiles('config/rj-codex.json', 'scripts/codex-auth-issuer-source.mjs') }}
 
       - name: Install dependencies
         run: npm ci

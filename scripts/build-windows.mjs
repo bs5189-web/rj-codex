@@ -23,6 +23,9 @@ import {
   writeOwlUserDataDirectoryName,
   writeRuntimeModelCatalog
 } from "./windows-asar-overrides.mjs";
+import { patchCodexLoginSuccessBinary } from "./codex-login-success-branding.mjs";
+import { patchCodexAuthIssuerSource } from "./codex-auth-issuer-source.mjs";
+import { patchCodexEnterprisePluginSource } from "./codex-enterprise-plugins-source.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("asar");
@@ -847,6 +850,10 @@ function shortProductName() {
   return (config.shortProductName ?? config.productName.replace(/Codex.*$/u, "").trim()) || config.productName;
 }
 
+function codingProductName() {
+  return config.productModes?.coding ?? `${shortProductName()} 编码`;
+}
+
 function replaceBrandInVisibleText(value) {
   const productPrefix = config.productName.replace(/Codex.*$/u, "").trim();
   return value.replace(/ChatGPT|Codex/g, (match, offset, source) => {
@@ -864,6 +871,9 @@ function replaceLocalizedVisibleText(id, value) {
   }
   if (id === "sidebarElectron.productMode.chatGptWork.plainText") {
     return `${shortProductName()} 工作`;
+  }
+  if (id === "sidebarElectron.productMode.codex") {
+    return codingProductName();
   }
   return replaceBrandInVisibleText(value);
 }
@@ -1368,7 +1378,11 @@ function ruizhiInit(){
       return copied;
     }
     function syncLegacyCodexGlobalSkills(){
-      copyDirectoryEntriesIfMissing(path.join(home,".codex","skills"),path.join(home,".agents","skills"));
+      try{
+        copyDirectoryEntriesIfMissing(path.join(home,".codex","skills"),path.join(home,".agents","skills"));
+      }catch(error){
+        console.error("ruizhi legacy skill migration failed",error);
+      }
     }
     syncSystemSkills();
     syncLegacyCodexGlobalSkills();
@@ -3242,6 +3256,13 @@ function patchCodexCliSource() {
   patchCodexHomeSource();
   patchCodexBundledModels();
   patchCodexImageGenSkillSource();
+  const authIssuerPatch = patchCodexAuthIssuerSource(
+    codexSourceRoot,
+    config.openai.chatGptLoginBaseUrl
+  );
+  const enterprisePluginPatch = patchCodexEnterprisePluginSource(codexSourceRoot);
+  log(`已补丁 Codex OAuth issuer：${authIssuerPatch.issuer}`);
+  log(`已补丁 Codex 插件目录：企业版本地市场${enterprisePluginPatch.changed ? "（已更新源码）" : ""}`);
 
   if (config.codexCli?.disableOpenAIWebSockets) {
     const providerInfoPath = path.join(
@@ -3344,7 +3365,8 @@ function buildPatchedCodexCli() {
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16",
     CARGO_PROFILE_RELEASE_INCREMENTAL: process.env.CARGO_PROFILE_RELEASE_INCREMENTAL ?? "true",
     CARGO_PROFILE_RELEASE_DEBUG: process.env.CARGO_PROFILE_RELEASE_DEBUG ?? "0",
-    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? "6"
+    CARGO_BUILD_JOBS: process.env.CARGO_BUILD_JOBS ?? "6",
+    CARGO_NET_GIT_FETCH_WITH_CLI: process.env.CARGO_NET_GIT_FETCH_WITH_CLI ?? "true"
   };
   execLogged("cargo", ["build", "--release", "-p", "codex-cli", "--bin", "codex"], {
     cwd: codexRsRoot,
@@ -3358,6 +3380,15 @@ function buildPatchedCodexCli() {
   }
 
   fs.copyFileSync(builtExePath, targetExePath);
+  const sourceCodexClientVersion = codexClientVersionFromExe(
+    path.join(pinnedCodexAppRoot, "resources", "codex.exe")
+  );
+  const builtCodexClientVersion = codexClientVersionFromExe(targetExePath);
+  if (builtCodexClientVersion !== sourceCodexClientVersion) {
+    throw new Error(
+      `重编 Codex CLI 版本不匹配：桌面端=${sourceCodexClientVersion}，重编=${builtCodexClientVersion}`
+    );
+  }
   log("已替换 resources\\codex.exe：内置 OpenAI provider 默认禁用 WebSocket");
 }
 
@@ -3952,6 +3983,11 @@ async function main() {
   validateDistCopyNoAbsolutePaths(appOutRoot, installedAppRoot);
 
   buildPatchedCodexCli();
+  const loginSuccessPatch = patchCodexLoginSuccessBinary(
+    path.join(appOutRoot, "resources", "codex.exe"),
+    config.loginSuccessPage,
+  );
+  log(`已补丁 Codex OAuth 成功页：${JSON.stringify(loginSuccessPatch.replacements)}`);
   copyRuntimeOverrides();
   copyPluginMarketplaces();
   patchRuntimeResourceText();

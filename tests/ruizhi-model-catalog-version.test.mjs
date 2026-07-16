@@ -25,9 +25,9 @@ test("model catalog only exposes ray and GPT 5.3+ models", () => {
     catalog.models.map((entry) => entry.slug),
     [
       "ray",
-      "gpt-5.6-Sol",
-      "gpt-5.6-Terra",
-      "gpt-5.6-Luna",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
       "gpt-5.5",
       "gpt-5.4",
       "gpt-5.4-mini",
@@ -54,9 +54,9 @@ test("Ruizhi startup default model is ray", () => {
 test("GPT 5.6 models route through Responses", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
-  assert.equal(config.modelBridge.routes["gpt-5.6-Sol"], "responses");
-  assert.equal(config.modelBridge.routes["gpt-5.6-Terra"], "responses");
-  assert.equal(config.modelBridge.routes["gpt-5.6-Luna"], "responses");
+  assert.equal(config.modelBridge.routes["gpt-5.6-sol"], "responses");
+  assert.equal(config.modelBridge.routes["gpt-5.6-terra"], "responses");
+  assert.equal(config.modelBridge.routes["gpt-5.6-luna"], "responses");
 });
 
 test("model catalog omits Qwen models from the curated picker", () => {
@@ -168,7 +168,7 @@ test("model catalog compatibility fills empty reasoning levels for API catalogs"
   assert.deepEqual(catalog.models[0].supported_reasoning_efforts, ["minimal", "low", "medium", "high", "xhigh"]);
 });
 
-test("desktop bootstrap preserves an existing user models cache and only seeds bundled catalog when missing", () => {
+test("desktop bootstrap refreshes the user models cache from the bundled catalog", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
   assert.equal(config.models.catalogPath, "resources/ruizhi-model-catalog.json");
@@ -179,8 +179,8 @@ test("desktop bootstrap preserves an existing user models cache and only seeds b
 
     assert.match(source, /const userModelCatalogFile="models_cache\.json";/);
     assert.match(source, /function normalizeExistingModelCatalogCache\(target\)/);
-    assert.match(source, /if\(normalizeExistingModelCatalogCache\(target\)\)return;/);
-    assert.match(source, /if\(normalizeExistingModelCatalogCache\(target\)\)return false;/);
+    assert.doesNotMatch(source, /if\(normalizeExistingModelCatalogCache\(target\)\)return;/);
+    assert.doesNotMatch(source, /if\(normalizeExistingModelCatalogCache\(target\)\)return false;/);
     assert.match(source, /syncBundledModelCatalogCache\(\);/);
     assert.match(source, /watchModelCatalogCache\(\);/);
     assert.match(source, /function bundledModelCatalogPath\(\)/);
@@ -216,8 +216,8 @@ test("desktop bootstrap preserves an existing user models cache and only seeds b
   const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
   assert.match(asarPatchSource, /const userModelCatalogFile="models_cache\.json";/);
   assert.match(asarPatchSource, /function normalizeExistingModelCatalogCache\(target\)/);
-  assert.match(asarPatchSource, /if\(normalizeExistingModelCatalogCache\(target\)\)return;/);
-  assert.match(asarPatchSource, /if\(normalizeExistingModelCatalogCache\(target\)\)return false;/);
+  assert.doesNotMatch(asarPatchSource, /if\(normalizeExistingModelCatalogCache\(target\)\)return;/);
+  assert.doesNotMatch(asarPatchSource, /if\(normalizeExistingModelCatalogCache\(target\)\)return false;/);
   assert.match(asarPatchSource, /ruizhiSyncBundledModelCatalogCache/);
   assert.match(asarPatchSource, /if\(fs\.existsSync\(target\)\)\{/);
   assert.match(asarPatchSource, /syncBundledModelCatalogCache\(\);/);
@@ -258,7 +258,7 @@ test("desktop patches host model listing to read the user models cache", () => {
     assert.match(source, /modelListQueryFnPattern/);
     assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
     assert.match(source, /forceFreshModelListQuery/);
-    assert.match(source, /staleTime:0,queryFn/);
+    assert.match(source, /staleTime:0,\$1/);
     assert.match(source, /ruizhiNormalizeModelsResult/);
     assert.match(source, /\.then\(ruizhiNormalizeModelsResult\)/);
     assert.match(source, /ruizhiModel\.input_modalities=/);
@@ -275,7 +275,7 @@ test("desktop patches host model listing to read the user models cache", () => {
   assert.match(asarPatchSource, /modelListQueryFnPattern/);
   assert.match(asarPatchSource, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
   assert.match(asarPatchSource, /forceFreshModelListQuery/);
-  assert.match(asarPatchSource, /staleTime:0,queryFn/);
+  assert.match(asarPatchSource, /staleTime:0,\$1/);
   assert.match(asarPatchSource, /ruizhiNormalizeModelsResult/);
   assert.match(asarPatchSource, /\.then\(ruizhiNormalizeModelsResult\)/);
   assert.match(asarPatchSource, /ruizhiModel\.input_modalities=/);

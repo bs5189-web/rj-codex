@@ -25,5 +25,10 @@ test("packaging scripts expose the enhance bridge on preload", () => {
     const source = read(scriptPath);
     assert.match(source, /ruizhi:enhance:call/, `${scriptPath} should register enhance IPC`);
     assert.match(source, /enhance:\s*\{/, `${scriptPath} should expose window.ruizhiDesktop.enhance`);
+    assert.doesNotMatch(
+      source,
+      /!pageEnhanceConfig\.enabled\|\|!fs\.existsSync\(servicePath\)/,
+      `${scriptPath} must keep the core model service available when page enhancement UI is disabled`,
+    );
   }
 });

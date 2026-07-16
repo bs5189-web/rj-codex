@@ -83,6 +83,20 @@ make local-up
 dist/Ruizhi-macos-0.3.1445-arm64.dmg
 ```
 
+本机已经额外安装一份不覆盖现有正式 App 的测试副本：
+
+```text
+/Applications/锐捷Codex本机测试.app
+```
+
+桌面一键入口：
+
+```text
+/Users/zhangteng/Desktop/启动锐捷Codex本机测试.command
+```
+
+入口使用独立的 `RUIZHI_HOME` 和 Electron 用户目录，避免污染现有锐捷 Codex 的账号和配置；本地 OAuth 凭据只保存在当前 Mac，权限已限制为当前用户可读。
+
 该包通过构建参数固定连接本机地址：
 
 ```text

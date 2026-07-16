@@ -21,7 +21,7 @@ test("runtime defaults initialize Ruizhi home and isolate Electron user data", (
   assert.equal(config.openai.baseUrl, "https://gptauth.ruijie.com.cn/v1");
   assert.equal(config.openai.providerBaseUrl, "https://gptauth.ruijie.com.cn/v1");
   assert.equal(config.runtime.defaultHomeDirName, ".ruizhi");
-  assert.equal(config.runtime.electronUserDataDirName, config.productName);
+  assert.equal(config.runtime.electronUserDataDirName, "Ruizhi");
   assert.match(
     readProjectFile("scripts/build-macos.mjs"),
     /CFBundleName", "-string", "Codex"/,
@@ -93,6 +93,20 @@ test("bootstrap auto-registers bundled Ruizhi marketplaces for first launch", ()
     assert.match(source, /if\(!findTomlTable\(tomlLines\(next\),"\["\+tableName\+"\]"\)\)/, `${sourcePath} should not overwrite existing per-plugin user settings`);
     assert.match(source, /isPathInside\(marketplaceRoot,sourceRoot\)/, `${sourcePath} should reject plugin source paths that escape the synced marketplace`);
   }
+});
+
+test("Windows early bootstrap installs bundled Ruizhi marketplace without legacy anchors", () => {
+  const source = readProjectFile("scripts/windows-asar-overrides.mjs");
+
+  assert.match(source, /const ruizhiMarketplaceSpecs=\$\{JSON\.stringify\(marketplaceSpecs\)\};/);
+  assert.match(source, /function ruizhiSyncBundledPluginMarketplaces\(\)/);
+  assert.match(source, /ruizhiSyncBundledPluginMarketplaces\(\);/);
+  assert.match(source, /path\.join\(resourcesRoot,\.\.\.spec\.resourcePath\)/);
+  assert.match(source, /path\.join\(codexHome,\.\.\.spec\.installPath\)/);
+  assert.match(source, /path\.join\(codexHome,"plugins","cache",spec\.name\)/);
+  assert.match(source, /function ruizhiPluginConfigBlock\(marketplaceName,pluginName\)/);
+  assert.match(source, /"\[plugins\."\+ruizhiTomlString\(pluginName\+"\@"\+marketplaceName\)\+"\]"/);
+  assert.match(source, /enabled = true/);
 });
 
 test("packaging keeps local plugins and skills visible when remote catalogs fail", async () => {

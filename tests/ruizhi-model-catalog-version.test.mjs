@@ -18,19 +18,22 @@ test("model catalog source version is pinned to the current Codex runtime series
   assert.equal(catalog.client_version, "0.133.0");
 });
 
-test("DeepSeek V4 chat models only advertise UniAPI-compatible options", () => {
+test("model catalog only exposes ray and GPT 5.3+ models", () => {
   const catalog = JSON.parse(readProjectFile("resources/ruizhi-model-catalog.json"));
-  const config = JSON.parse(readProjectFile("config/rj-codex.json"));
-  const slugs = ["deepseek-v4-pro", "deepseek-v4-flash-maxthink", "DeepSeek-V4-Flash"];
 
-  for (const slug of slugs) {
-    const model = catalog.models.find((entry) => entry.slug === slug);
-    assert.ok(model, `${slug} should exist in the model catalog`);
-    assert.equal(model.default_verbosity, "medium", `${slug} should use the only supported verbosity`);
-    assert.equal(model.apply_patch_tool_type, undefined, `${slug} must not advertise custom apply_patch tools`);
-    assert.equal(model.web_search_tool_type, undefined, `${slug} must not advertise custom web_search tools`);
-    assert.equal(config.modelBridge.routes[slug]?.protocol, "chat", `${slug} should route through chat bridge`);
-  }
+  assert.deepEqual(
+    catalog.models.map((entry) => entry.slug),
+    [
+      "ray",
+      "gpt-5.6-Sol",
+      "gpt-5.6-Terra",
+      "gpt-5.6-Luna",
+      "gpt-5.5",
+      "gpt-5.4",
+      "gpt-5.4-mini",
+      "gpt-5.3-codex",
+    ],
+  );
 });
 
 test("Ruizhi startup default model is ray", () => {
@@ -48,26 +51,23 @@ test("Ruizhi startup default model is ray", () => {
   assert.match(serviceSource, /isDefault: model === defaultModel/);
 });
 
-test("Qwen Responses models keep Codex desktop plugin-control guidance", () => {
+test("GPT 5.6 models route through Responses", () => {
+  const config = JSON.parse(readProjectFile("config/rj-codex.json"));
+
+  assert.equal(config.modelBridge.routes["gpt-5.6-Sol"], "responses");
+  assert.equal(config.modelBridge.routes["gpt-5.6-Terra"], "responses");
+  assert.equal(config.modelBridge.routes["gpt-5.6-Luna"], "responses");
+});
+
+test("model catalog omits Qwen models from the curated picker", () => {
   const catalog = JSON.parse(readProjectFile("resources/ruizhi-model-catalog.json"));
-  const slugs = ["qwen3.6-plus", "qwen3.6-flash", "qwen3-coder-plus"];
 
-  for (const slug of slugs) {
-    const model = catalog.models.find((entry) => entry.slug === slug);
-    assert.ok(model, `${slug} should exist in the model catalog`);
-    const instructionSources = [
-      model.base_instructions,
-      model.model_messages?.instructions_template,
-    ].filter((value) => typeof value === "string");
-
-    assert.ok(instructionSources.length > 0, `${slug} should carry runtime instructions`);
-    for (const source of instructionSources) {
-      assert.match(source, /\[@浏览器\]/, `${slug} should recognize the Browser plugin mention`);
-      assert.match(source, /plugin:\/\/browser@openai-bundled/, `${slug} should recognize the Browser plugin URI`);
-      assert.match(source, /mcp__node_repl__js/, `${slug} should steer Browser work to the trusted Node REPL tool`);
-      assert.match(source, /exec_command/, `${slug} should explicitly avoid shelling out for Browser control`);
-    }
-  }
+  assert.deepEqual(
+    catalog.models
+      .filter((model) => model.slug.startsWith("qwen"))
+      .map((model) => model.slug),
+    [],
+  );
 });
 
 test("model catalog compatibility defaults all Codex model entries to image-capable", () => {
@@ -168,7 +168,7 @@ test("model catalog compatibility fills empty reasoning levels for API catalogs"
   assert.deepEqual(catalog.models[0].supported_reasoning_efforts, ["minimal", "low", "medium", "high", "xhigh"]);
 });
 
-test("desktop bootstrap refreshes the Codex models cache only from the bundled catalog", () => {
+test("desktop bootstrap preserves an existing user models cache and only seeds bundled catalog when missing", () => {
   const config = JSON.parse(readProjectFile("config/rj-codex.json"));
 
   assert.equal(config.models.catalogPath, "resources/ruizhi-model-catalog.json");
@@ -178,12 +178,20 @@ test("desktop bootstrap refreshes the Codex models cache only from the bundled c
     const source = readProjectFile(scriptPath);
 
     assert.match(source, /const userModelCatalogFile="models_cache\.json";/);
+    assert.match(source, /function normalizeExistingModelCatalogCache\(target\)/);
+    assert.match(source, /if\(normalizeExistingModelCatalogCache\(target\)\)return;/);
+    assert.match(source, /if\(normalizeExistingModelCatalogCache\(target\)\)return false;/);
     assert.match(source, /syncBundledModelCatalogCache\(\);/);
+    assert.match(source, /watchModelCatalogCache\(\);/);
     assert.match(source, /function bundledModelCatalogPath\(\)/);
     assert.match(source, /path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
     assert.match(source, /writeModelCatalogCacheFromSource\(bundledModelCatalogPath\(\),target\)/);
     assert.match(source, /normalizeModelCatalogFile\(temp\);/);
     assert.match(source, /function normalizeModelCatalogFile\(filePath\)/);
+    assert.match(source, /function normalizeUserModelCatalogCache\(\)/);
+    assert.match(source, /function watchModelCatalogCache\(\)/);
+    assert.match(source, /fs\.watchFile\(target,\{interval:1000\}/);
+    assert.match(source, /ruizhi model catalog post-refresh normalize failed/);
     assert.match(source, /function applyRuizhiModelCatalogCompatibilityPatches\(catalog\)/);
     assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
     assert.match(source, /isNonChatModelCatalogEntry/);
@@ -207,12 +215,22 @@ test("desktop bootstrap refreshes the Codex models cache only from the bundled c
 
   const asarPatchSource = readProjectFile("scripts/windows-asar-overrides.mjs");
   assert.match(asarPatchSource, /const userModelCatalogFile="models_cache\.json";/);
+  assert.match(asarPatchSource, /function normalizeExistingModelCatalogCache\(target\)/);
+  assert.match(asarPatchSource, /if\(normalizeExistingModelCatalogCache\(target\)\)return;/);
+  assert.match(asarPatchSource, /if\(normalizeExistingModelCatalogCache\(target\)\)return false;/);
+  assert.match(asarPatchSource, /ruizhiSyncBundledModelCatalogCache/);
+  assert.match(asarPatchSource, /if\(fs\.existsSync\(target\)\)\{/);
   assert.match(asarPatchSource, /syncBundledModelCatalogCache\(\);/);
+  assert.match(asarPatchSource, /watchModelCatalogCache\(\);/);
   assert.match(asarPatchSource, /function bundledModelCatalogPath\(\)/);
   assert.match(asarPatchSource, /path\.join\(resourcesRoot,"models",modelCatalogFile\)/);
   assert.match(asarPatchSource, /writeModelCatalogCacheFromSource\(bundledModelCatalogPath\(\),target\)/);
   assert.match(asarPatchSource, /normalizeModelCatalogFile\(temp\);/);
   assert.match(asarPatchSource, /function normalizeModelCatalogFile\(filePath\)/);
+  assert.match(asarPatchSource, /function normalizeUserModelCatalogCache\(\)/);
+  assert.match(asarPatchSource, /function watchModelCatalogCache\(\)/);
+  assert.match(asarPatchSource, /fs\.watchFile\(target,\{interval:1000\}/);
+  assert.match(asarPatchSource, /ruizhi model catalog post-refresh normalize failed/);
   assert.match(asarPatchSource, /function applyRuizhiModelCatalogCompatibilityPatches\(catalog\)/);
   assert.match(asarPatchSource, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
   assert.match(asarPatchSource, /isNonChatModelCatalogEntry/);
@@ -239,6 +257,8 @@ test("desktop patches host model listing to read the user models cache", () => {
     assert.match(source, /list-models-for-host/);
     assert.match(source, /modelListQueryFnPattern/);
     assert.match(source, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
+    assert.match(source, /forceFreshModelListQuery/);
+    assert.match(source, /staleTime:0,queryFn/);
     assert.match(source, /return \{data:ruizhiModels,nextCursor:null\}/);
   }
 
@@ -248,6 +268,8 @@ test("desktop patches host model listing to read the user models cache", () => {
   assert.match(asarPatchSource, /list-models-for-host/);
   assert.match(asarPatchSource, /modelListQueryFnPattern/);
   assert.match(asarPatchSource, /applyRuizhiModelCatalogCompatibilityPatches\(catalog\);/);
+  assert.match(asarPatchSource, /forceFreshModelListQuery/);
+  assert.match(asarPatchSource, /staleTime:0,queryFn/);
   assert.match(asarPatchSource, /return \{data:ruizhiModels,nextCursor:null\}/);
 });
 

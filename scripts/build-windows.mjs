@@ -1044,16 +1044,21 @@ function patchListModelsForHostFromUserCache() {
   writePatchedFile(modelQueriesFile, (source) => {
     const modelListQueryFnReplacement = (rpcCall, hostId, limit) =>
       `queryFn:()=>{let ruizhiArgs={hostId:${hostId},includeHidden:!0,cursor:null,limit:${limit}},ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call;if(typeof ruizhiCall!==\`function\`)return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs);return ruizhiCall(\`/models/list\`,ruizhiArgs).then(ruizhiResult=>{if(ruizhiResult?.status===\`ok\`&&Array.isArray(ruizhiResult.data)){let ruizhiModels=ruizhiResult.data;return {data:ruizhiModels,nextCursor:null}}return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs)})}`;
-    if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) return source;
+    const forceFreshModelListQuery = (next) =>
+      next.replace(
+        /staleTime:[^,}]+,queryFn:\(\)=>\{let ruizhiArgs=/,
+        "staleTime:0,queryFn:()=>{let ruizhiArgs="
+      );
+    if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) return forceFreshModelListQuery(source);
     const legacyModelListQueryFnPattern = /function ruizhiListModelsForHostFromUserCache\(e\)\{let t=globalThis\.ruizhiDesktop\?\.enhance\?\.call;if\(typeof t!==`function`\)return ([A-Za-z_$][\w$]*)\(`list-models-for-host`,e\);return t\(`\/models\/list`,e\)\.then\(t=>\{if\(t\?\.status===`ok`&&Array\.isArray\(t\.data\)\)\{let models=t\.data;return \{data:models,nextCursor:null\}\}return [A-Za-z_$][\w$]*\(`list-models-for-host`,e\)\}\)\}queryFn:\(\)=>ruizhiListModelsForHostFromUserCache\(\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
     const legacyMatch = source.match(legacyModelListQueryFnPattern);
     if (legacyMatch) {
-      return replaceRegex(
+      return forceFreshModelListQuery(replaceRegex(
         source,
         legacyModelListQueryFnPattern,
         modelListQueryFnReplacement(legacyMatch[1], legacyMatch[2], legacyMatch[3]),
         "修复旧版用户 models_cache.json 模型列表补丁"
-      );
+      ));
     }
     if (source.includes("function ruizhiListModelsForHostFromUserCache(")) {
       throw new Error("补丁点未知：旧版用户 models_cache.json 模型列表补丁");
@@ -1065,12 +1070,12 @@ function patchListModelsForHostFromUserCache() {
     const rpcCall = match[1];
     const hostId = match[2];
     const limit = match[3];
-    return replaceRegex(
+    return forceFreshModelListQuery(replaceRegex(
       source,
       modelListQueryFnPattern,
       modelListQueryFnReplacement(rpcCall, hostId, limit),
       "改用用户 models_cache.json 作为模型列表数据源"
-    );
+    ));
   });
 
   log(`已改用用户模型缓存列表：${path.basename(modelQueriesFile)}`);
@@ -1228,6 +1233,7 @@ function ruizhiInit(){
     fs.mkdirSync(codexHome,{recursive:true});
     fs.mkdirSync(userData,{recursive:true});
     syncModelCache();
+    watchModelCatalogCache();
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env[ruizhiHomeEnvName]=codexHome;
@@ -1260,6 +1266,8 @@ function ruizhiInit(){
       if(!modelCatalogEnabled){
         return;
       }
+      const target=path.join(codexHome,userModelCatalogFile);
+      if(normalizeExistingModelCatalogCache(target))return;
       syncBundledModelCatalogCache();
     }
     function bundledModelCatalogPath(){
@@ -1268,9 +1276,20 @@ function ruizhiInit(){
     function syncBundledModelCatalogCache(){
       const target=path.join(codexHome,userModelCatalogFile);
       try{
+        if(normalizeExistingModelCatalogCache(target))return false;
         return writeModelCatalogCacheFromSource(bundledModelCatalogPath(),target);
       }catch(error){
         console.warn("ruizhi bundled model catalog sync failed",error);
+        return false;
+      }
+    }
+    function normalizeExistingModelCatalogCache(target){
+      try{
+        if(!fs.existsSync(target))return false;
+        normalizeModelCatalogFile(target);
+        return true;
+      }catch(error){
+        console.warn("ruizhi existing model catalog cache invalid, falling back to bundled catalog",error);
         return false;
       }
     }
@@ -1354,6 +1373,42 @@ function ruizhiInit(){
       catalog.fetched_at=new Date().toISOString();
       fs.writeFileSync(filePath,JSON.stringify(catalog,null,2)+"\\n","utf8");
       return catalog;
+    }
+    function normalizeUserModelCatalogCache(){
+      const target=path.join(codexHome,userModelCatalogFile);
+      try{
+        if(!fs.existsSync(target))return false;
+        const original=fs.readFileSync(target,"utf8");
+        const catalog=validateModelCatalogFile(target);
+        applyRuizhiModelCatalogCompatibilityPatches(catalog);
+        const next=JSON.stringify(catalog,null,2)+"\\n";
+        if(next===original)return false;
+        fs.writeFileSync(target,next,"utf8");
+        return true;
+      }catch(error){
+        console.warn("ruizhi model catalog post-refresh normalize failed",error);
+        return false;
+      }
+    }
+    function watchModelCatalogCache(){
+      if(!modelCatalogEnabled)return;
+      const target=path.join(codexHome,userModelCatalogFile);
+      let timer=null;
+      const schedule=()=>{
+        if(timer)clearTimeout(timer);
+        timer=setTimeout(()=>{
+          timer=null;
+          normalizeUserModelCatalogCache();
+        },750);
+      };
+      try{
+        normalizeUserModelCatalogCache();
+        fs.watchFile(target,{interval:1000},(current,previous)=>{
+          if(current.mtimeMs!==previous.mtimeMs||current.size!==previous.size)schedule();
+        });
+      }catch(error){
+        console.warn("ruizhi model catalog watcher failed",error);
+      }
     }
     function backupExistingModelCatalog(target){
       if(!fs.existsSync(target))return;

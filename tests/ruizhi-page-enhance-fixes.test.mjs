@@ -410,6 +410,45 @@ test("enhance service returns appVersion and retires destructive session routes"
   }
 });
 
+test("enhance service model list follows the user models_cache.json contents", async () => {
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "ruizhi-model-cache-"));
+  try {
+    fs.writeFileSync(
+      path.join(tmpHome, "models_cache.json"),
+      `${JSON.stringify({
+        default_model: "gpt-5.5",
+        models: [
+          {
+            slug: "gpt-5.5",
+            display_name: "gpt-5.5",
+            visibility: "list",
+            input_modalities: ["text"],
+            supported_reasoning_levels: []
+          }
+        ]
+      }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const { createRuizhiEnhanceService } = require(path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs"));
+    const service = createRuizhiEnhanceService({ codexHome: tmpHome });
+    const result = await service.call("/models/list", { includeHidden: true, limit: 100 });
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.data.length, 1);
+    assert.equal(result.data[0].slug, "gpt-5.5");
+    assert.equal(result.data[0].displayName, "gpt-5.5");
+    assert.deepEqual(result.data[0].input_modalities, ["text", "image"]);
+    assert.deepEqual(
+      result.data[0].supportedReasoningEfforts.map((entry) => entry.reasoningEffort),
+      ["minimal", "low", "medium", "high", "xhigh"],
+    );
+    assert.equal(result.data[0].defaultReasoningEffort, "medium");
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
 test("application menu translation preserves Codex Automations", () => {
   const source = read("scripts/windows-asar-overrides.mjs");
 

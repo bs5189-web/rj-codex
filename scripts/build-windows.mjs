@@ -385,7 +385,14 @@ function findOneFileByContent(dir, filePattern, contentPattern, label) {
   const matches = fs.readdirSync(dir)
     .filter((name) => filePattern.test(name))
     .map((name) => path.join(dir, name))
-    .filter((filePath) => contentPattern.test(fs.readFileSync(filePath, "utf8")));
+    .filter((filePath) => {
+      try {
+        return contentPattern.test(fs.readFileSync(filePath, "utf8"));
+      } catch (error) {
+        if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
+        throw error;
+      }
+    });
 
   if (matches.length !== 1) {
     throw new Error(`${label} 匹配数量异常：${matches.length}`);
@@ -569,7 +576,7 @@ function patchNativeProfileVisibility() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const profileVisibilityFile = findOneFileByContent(
     assetsDir,
-    /^profile-visibility-.*\.js$/,
+    /^.+\.js$/,
     /2478676115[\s\S]*3503973010[\s\S]*show_dropdown_entry_point/,
     "profile visibility bundle"
   );
@@ -855,8 +862,12 @@ function codingProductName() {
 }
 
 function replaceBrandInVisibleText(value) {
+  let sourceValue = String(value);
   const productPrefix = config.productName.replace(/Codex.*$/u, "").trim();
-  return value.replace(/ChatGPT|Codex/g, (match, offset, source) => {
+  if (productPrefix) {
+    sourceValue = sourceValue.replace(new RegExp(`(?:${escapeRegExp(productPrefix)}){2,}(?=Codex)`, "gu"), productPrefix);
+  }
+  return sourceValue.replace(/ChatGPT|Codex/g, (match, offset, source) => {
     const before = source.slice(Math.max(0, offset - 16), offset);
     if (match === "Codex" && (/GPT-[0-9A-Za-z_. -]*$/i.test(before) || (productPrefix && before.endsWith(productPrefix)))) {
       return match;

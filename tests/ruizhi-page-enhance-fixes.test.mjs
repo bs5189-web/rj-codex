@@ -251,6 +251,41 @@ test("packaging keeps RuiJie Work and renames the coding mode to RuiJie Coding",
   }
 });
 
+test("packaging keeps product-mode labels as RuiJie Work and RuiJie Coding", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /sidebarElectron\.productMode\.chatGptWork/, `${scriptPath} should patch the rich ChatGPT Work mode label`);
+    assert.match(source, /sidebarElectron\.productMode\.chatGptWork\.plainText/, `${scriptPath} should patch the accessible ChatGPT Work mode label`);
+    assert.match(source, /sidebarElectron\.productMode\.codex/, `${scriptPath} should patch the Codex mode label`);
+    assert.match(source, /\$\{shortProductName\([^)]*\)\} \\u7f16\\u7801|\$\{shortProductName\(\)\} 编码/, `${scriptPath} should render the Codex mode label as 锐捷 编码`);
+  }
+});
+
+test("packaging brand replacement does not duplicate RuiJie before Codex", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /\(\?:\$\{escapeRegExp\(productPrefix\)\}\)\{2,\}\(\?=Codex\)/, `${scriptPath} should collapse repeated brand prefixes before Codex`);
+    assert.match(source, /before\.endsWith\(productPrefix\)/, `${scriptPath} should preserve Codex when it is already prefixed by the product brand`);
+  }
+});
+
+test("Windows override uses robust profile visibility entry-point patching", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+  assert.match(source, /findOneFileByContent\(\s*assetsDir,\s*\/\^\.\+\\\.js\$\/,/);
+  assert.match(source, /function ruizhiProfileVisibility\(\)\{return \{isProfileVisibilityLoading:false,isProfileVisible:true\}\}/);
+  assert.match(source, /function ruizhiProfileDropdownEntryPoint\(\)\{return true\}/);
+  assert.match(source, /function \$1\(\)\{return ruizhiProfileVisibility\(\)\}/);
+  assert.match(source, /function \$1\(\)\{return ruizhiProfileDropdownEntryPoint\(\)\}/);
+});
+
 test("bootstrap only applies narrow managed config.toml updates", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",

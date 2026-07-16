@@ -426,16 +426,24 @@ function shouldPreserveCodexVisibleText(value, contextKey = "") {
 }
 
 function replaceBrandInVisibleText(value, config, contextKey = "") {
+  const productName = config.productName ?? "锐捷Codex";
+  const productPrefix = productName.replace(/Codex.*$/u, "").trim();
+  const sourceValue = productPrefix
+    ? String(value).replace(new RegExp(`(?:${escapeRegExp(productPrefix)}){2,}(?=Codex)`, "gu"), productPrefix)
+    : String(value);
   if (shouldPreserveCodexVisibleText(value, contextKey)) {
-    return String(value).replace(/ChatGPT/g, config.productName ?? "锐智");
+    return sourceValue.replace(/ChatGPT/g, productName);
   }
-  const productName = config.productName ?? "锐智";
-  return String(value)
+  return sourceValue
     .replace(/ChatGPT/g, productName)
     .replace(/Codex/g, (match, offset, source) => {
       const before = source.slice(Math.max(0, offset - 16), offset);
-      return /GPT-[0-9A-Za-z_. -]*$/i.test(before) ? match : productName;
+      return /GPT-[0-9A-Za-z_. -]*$/i.test(before) || (productPrefix && before.endsWith(productPrefix)) ? match : productName;
     });
+}
+
+function shortProductName(config) {
+  return (config.shortProductName ?? config.productName.replace(/Codex.*$/u, "").trim()) || config.productName;
 }
 
 function localeBundlePattern(locale) {
@@ -471,16 +479,16 @@ function patchWindowsFrontendLocalization(extractedAppDir, config, options = {})
   let changedMessages = 0;
 
   const onboardingReplacements = new Map([
-    ["electron.onboarding.login.chatgpt.continue", "使用锐智继续"],
-    ["electron.onboarding.login.chatgpt.signIn", "使用锐智继续"],
-    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐智继续"],
-    ["electron.onboarding.welcomeV2.continue", "使用锐智继续"],
+    ["electron.onboarding.login.chatgpt.continue", "使用锐捷继续"],
+    ["electron.onboarding.login.chatgpt.signIn", "使用锐捷继续"],
+    ["electron.onboarding.login.chatgpt.signIn.streamlined", "使用锐捷继续"],
+    ["electron.onboarding.welcomeV2.continue", "使用锐捷继续"],
     ["electron.onboarding.login.includedPlans.welcomeV2", `${config.version ?? ""}`],
     ["electron.onboarding.welcomeV2.role.subtitle", `${config.version ?? ""}`],
     ["electron.onboarding.welcomeV2.role.subtitle.chatgpt", `${config.version ?? ""}`],
-    ["sidebarElectron.productMode.chatGptWork", "<chatGpt>\u5de5\u4f5c</chatGpt>"],
-    ["sidebarElectron.productMode.chatGptWork.plainText", "\u5de5\u4f5c"],
-    ["sidebarElectron.productMode.codex", config.productModes?.coding ?? "锐捷 编码"]
+    ["sidebarElectron.productMode.chatGptWork", `<chatGpt>${shortProductName(config)}</chatGpt> <work>\u5de5\u4f5c</work>`],
+    ["sidebarElectron.productMode.chatGptWork.plainText", `${shortProductName(config)} \u5de5\u4f5c`],
+    ["sidebarElectron.productMode.codex", config.productModes?.coding ?? `${shortProductName(config)} \u7f16\u7801`]
   ]);
 
   const localeChanged = writePatchedFile(localeFile, (source) => {
@@ -502,9 +510,9 @@ function patchWindowsFrontendLocalization(extractedAppDir, config, options = {})
       messages.set(key, value);
     }
     next = next
-      .replace(/("sidebarElectron\.productMode\.chatGptWork":)`(?:\\.|[^`\\])*`/, "$1`<chatGpt>\u5de5\u4f5c</chatGpt>`")
-      .replace(/("sidebarElectron\.productMode\.chatGptWork\.plainText":)`(?:\\.|[^`\\])*`/, "$1`\u5de5\u4f5c`")
-      .replace(/("sidebarElectron\.productMode\.codex":)`(?:\\.|[^`\\])*`/, `$1\`${config.productModes?.coding ?? "锐捷 编码"}\``);
+      .replace(/("sidebarElectron\.productMode\.chatGptWork":)`(?:\\.|[^`\\])*`/, `$1\`<chatGpt>${shortProductName(config)}</chatGpt> <work>\u5de5\u4f5c</work>\``)
+      .replace(/("sidebarElectron\.productMode\.chatGptWork\.plainText":)`(?:\\.|[^`\\])*`/, `$1\`${shortProductName(config)} \u5de5\u4f5c\``)
+      .replace(/("sidebarElectron\.productMode\.codex":)`(?:\\.|[^`\\])*`/, `$1\`${config.productModes?.coding ?? `${shortProductName(config)} \u7f16\u7801`}\``);
     return next;
   });
   changedFiles += localeChanged ? 1 : 0;
@@ -562,9 +570,9 @@ function patchWindowsProductModeLabels(extractedAppDir, config, options = {}) {
   }
   const changed = writePatchedFile(localeFiles[0], (source) => {
     let next = source;
-    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork", "<chatGpt>\u5de5\u4f5c</chatGpt>");
-    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork.plainText", "\u5de5\u4f5c");
-    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.codex", config.productModes?.coding ?? "锐捷 编码");
+    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork", `<chatGpt>${shortProductName(config)}</chatGpt> <work>\u5de5\u4f5c</work>`);
+    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.chatGptWork.plainText", `${shortProductName(config)} \u5de5\u4f5c`);
+    next = replaceLocaleBacktickValue(next, "sidebarElectron.productMode.codex", config.productModes?.coding ?? `${shortProductName(config)} \u7f16\u7801`);
     return next;
   });
   log(`Patched Windows product mode labels: ${changed ? "changed" : "already current"}`);
@@ -668,7 +676,7 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
   try {
     profileVisibilityFile = findOneFileByContent(
       assetsDir,
-      /^profile-visibility-.*\.js$/,
+      /^.+\.js$/,
       /2478676115[\s\S]*3503973010[\s\S]*show_dropdown_entry_point/,
       "profile visibility bundle"
     );
@@ -682,12 +690,12 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
     return;
   }
   source = source.replace(
-    /function l\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:r,isLoading:s\}=i\(\),c=t\(\),l=n\(o\),u=s\|\|r===`chatgpt`&&c,d=r===`chatgpt`&&l,f;return e\[0\]!==u\|\|e\[1\]!==d\?\(f=\{isProfileVisibilityLoading:u,isProfileVisible:d\},e\[0\]=u,e\[1\]=d,e\[2\]=f\):f=e\[2\],f\}/,
-    "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function l(){return ruizhiProfileVisibility()}"
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*),isLoading:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=\5\|\|\4===`chatgpt`&&\7,([A-Za-z_$][\w$]*)=\4===`chatgpt`&&\9,([A-Za-z_$][\w$]*);return \2\[0\]!==\12\|\|\2\[1\]!==\13\?\(\14=\{isProfileVisibilityLoading:\12,isProfileVisible:\13\},\2\[0\]=\12,\2\[1\]=\13,\2\[2\]=\14\):\14=\2\[2\],\14\}/,
+    "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function $1(){return ruizhiProfileVisibility()}"
   );
   source = source.replace(
-    /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:t\}=i\(\),l=n\(o\),u=r\(s\);if\(t!==`chatgpt`\)return!1;let d;return e\[0\]!==l\|\|e\[1\]!==u\?\(d=l&&u\.get\(c,!1\),e\[0\]=l,e\[1\]=u,e\[2\]=d\):d=e\[2\],d\}/,
-    "function ruizhiProfileDropdownEntryPoint(){return true}function u(){return ruizhiProfileDropdownEntryPoint()}"
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\);if\(\4!==`chatgpt`\)return!1;let ([A-Za-z_$][\w$]*);return \2\[0\]!==\6\|\|\2\[1\]!==\9\?\(\12=\6&&\9\.get\(([A-Za-z_$][\w$]*),!1\),\2\[0\]=\6,\2\[1\]=\9,\2\[2\]=\12\):\12=\2\[2\],\12\}/,
+    "function ruizhiProfileDropdownEntryPoint(){return true}function $1(){return ruizhiProfileDropdownEntryPoint()}"
   );
   if (!source.includes("ruizhiProfileVisibility()") || !source.includes("ruizhiProfileDropdownEntryPoint()")) {
     throw new Error("Codex 个人资料入口补丁点不存在");
@@ -1259,7 +1267,12 @@ export function walkFiles(root) {
 function findOneFileByContent(dir, namePattern, contentPattern, description) {
   const candidates = walkFiles(dir).filter((filePath) => {
     if (!namePattern.test(path.basename(filePath))) return false;
-    return contentPattern.test(fs.readFileSync(filePath, "utf8"));
+    try {
+      return contentPattern.test(fs.readFileSync(filePath, "utf8"));
+    } catch (error) {
+      if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
+      throw error;
+    }
   });
   if (candidates.length !== 1) {
     throw new Error(`${description} 匹配数量异常：${candidates.length}`);
@@ -1270,7 +1283,13 @@ function findOneFileByContent(dir, namePattern, contentPattern, description) {
 function findFilesByContent(dir, namePattern, contentPattern) {
   return walkFiles(dir).filter((filePath) => {
     if (!namePattern.test(path.basename(filePath))) return false;
-    return contentPattern.test(fs.readFileSync(filePath, "utf8"));
+    if (!fs.existsSync(filePath)) return false;
+    try {
+      return contentPattern.test(fs.readFileSync(filePath, "utf8"));
+    } catch (error) {
+      if (error && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
+      throw error;
+    }
   });
 }
 
@@ -3082,6 +3101,9 @@ export function patchVcRuntimeErrorPage(extractedAppDir, options = {}) {
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const candidates = walkFiles(assetsDir).filter((filePath) => filePath.endsWith(".js"));
   const targetPath = candidates.find((filePath) => {
+    if (!fs.existsSync(filePath)) {
+      return false;
+    }
     const source = fs.readFileSync(filePath, "utf8");
     return source.includes("function _j(e){") && source.includes("loadingPage.openConfigToml");
   });

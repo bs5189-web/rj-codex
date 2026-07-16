@@ -603,8 +603,7 @@ test("packaging keeps Usage settings visible for Ruizhi auth modes", () => {
     assert.match(source, /enable_free_go_usage_settings/, `${scriptPath} should locate the Usage settings access bundle by code shape`);
     assert.match(source, /isUsageSettingsVisible/, `${scriptPath} should patch the Usage settings visibility result`);
     assert.match(source, /ruizhiUsageSettingsAlwaysVisible/, `${scriptPath} should keep Usage settings visible for Ruizhi auth modes`);
-    assert.match(source, /ruizhiProfileDropdownUsageForApiKey/, `${scriptPath} should keep the profile dropdown Usage item visible in API key mode`);
-    assert.match(source, /codex\\\.profileDropdown\\\.apiKeyAuth/, `${scriptPath} should locate the API key profile dropdown branch`);
+    assert.match(source, /ruizhiProfileDropdownUsageForAllAuth/, `${scriptPath} should keep the profile dropdown Usage item visible for every authenticated mode`);
     assert.match(source, /codex\\\.profileDropdown\\\.usage/, `${scriptPath} should locate the profile dropdown Usage item`);
     assert.match(source, /patchNativeUsageSettingsVisibilitySource/, `${scriptPath} should use the shared all-auth Usage visibility patch`);
   }

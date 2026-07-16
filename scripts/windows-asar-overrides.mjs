@@ -112,6 +112,38 @@ function jsonLiteral(value) {
   });
 }
 
+function resolveBuildEndpoint(envName, configuredValue) {
+  const candidate = String(process.env[envName] || configuredValue || "").trim().replace(/\/+$/, "");
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error(`${envName} 无效：${candidate}`);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error(`${envName} 必须是无账号、查询和锚点的 HTTP/HTTPS 地址：${candidate}`);
+  }
+  return candidate;
+}
+
+function buildOpenAIBaseUrl(config) {
+  return resolveBuildEndpoint("RUIZHI_BUILD_API_BASE_URL", config.openai?.baseUrl);
+}
+
+function buildProviderBaseUrl(config) {
+  return resolveBuildEndpoint(
+    "RUIZHI_BUILD_PROVIDER_BASE_URL",
+    config.openai?.providerBaseUrl ?? buildOpenAIBaseUrl(config)
+  );
+}
+
+function buildChatGptLoginBaseUrl(config) {
+  return resolveBuildEndpoint(
+    "RUIZHI_BUILD_CHATGPT_LOGIN_BASE_URL",
+    config.openai?.chatGptLoginBaseUrl ?? "https://gptauth.ruijie.com.cn"
+  );
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -188,7 +220,7 @@ function modelBridgePort(config) {
 
 function modelProviderBaseUrl(config) {
   if (!modelBridgeEnabled(config)) {
-    return config.openai?.baseUrl;
+    return buildProviderBaseUrl(config);
   }
   return `http://${modelBridgeHost(config)}:${modelBridgePort(config)}/v1`;
 }
@@ -779,7 +811,7 @@ function patchNativeUsageSettingsVisibility(extractedAppDir, options = {}) {
     usageAccessFile = findOneFileByContent(
       assetsDir,
       /^.+\.js$/,
-      /enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible/,
+      /(?:enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible|isUsageSettingsVisible[\s\S]*enable_free_go_usage_settings)/,
       "usage settings access bundle"
     );
   } catch (error) {
@@ -806,26 +838,24 @@ function patchNativeProfileDropdownUsageVisibility(extractedAppDir, options = {}
     "profile dropdown usage bundle"
   );
   let source = fs.readFileSync(profileDropdownFile, "utf8");
-  if (source.includes("ruizhiProfileDropdownUsageForApiKey")) {
+  if (source.includes("ruizhiProfileDropdownUsageForAllAuth")) {
     log("已存在 Codex 头像菜单使用情况入口补丁");
     return;
   }
 
   const usageAccessMatch = source.match(/\{isUsageSettingsVisible:([A-Za-z_$][\w$]*),isUsageSettingsAccessLoading:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\)/);
-  const apiKeyAuthMatch = source.match(/else if\(([A-Za-z_$][\w$]*)\)\{[\s\S]{0,900}?codex\.profileDropdown\.apiKeyAuth/);
-  if (!usageAccessMatch || !apiKeyAuthMatch) {
+  if (!usageAccessMatch) {
     throw new Error("Codex 头像菜单使用情况入口补丁点不存在：账号态变量");
   }
   const [, usageVisibleVar, usageLoadingVar] = usageAccessMatch;
-  const apiKeyAuthVar = apiKeyAuthMatch[1];
   const usageConditionPattern = new RegExp(
     `,([A-Za-z_$][\\w$]*)=([^,;]*&&${escapeRegExp(usageVisibleVar)}&&[^,;]*),([A-Za-z_$][\\w$]*=[A-Za-z_$][\\w$]*\\(\\),)`
   );
   source = source.replace(
     usageConditionPattern,
-    `,$1=($2)||${apiKeyAuthVar}&&${usageVisibleVar}&&!${usageLoadingVar}/*ruizhiProfileDropdownUsageForApiKey*/,$3`
+    `,$1=($2)||!${usageLoadingVar}/*ruizhiProfileDropdownUsageForAllAuth*/,$3`
   );
-  if (!source.includes("ruizhiProfileDropdownUsageForApiKey")) {
+  if (!source.includes("ruizhiProfileDropdownUsageForAllAuth")) {
     throw new Error("Codex 头像菜单使用情况入口补丁点不存在：显示条件");
   }
   fs.writeFileSync(profileDropdownFile, source, "utf8");
@@ -885,13 +915,56 @@ function patchNativePlatformUsageFallback(extractedAppDir, options = {}) {
   }
   source = source.replace(
     /queryFn:async\(\)=>\{try\{return await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/usage`,\{parameters:\{query:\{supports_rewardless_invites:!0\}\}\}\)\}catch\(e\)\{if\(e instanceof ([A-Za-z_$][\w$]*)&&\(e\.status===401\|\|e\.status===403\|\|e\.status===404\)\)return null;throw e\}\}/,
-    "queryFn:async()=>{try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`){let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}"
+    "queryFn:async()=>{let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`)try{let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}catch(e){console.warn(`[ruizhi][usage] local platform usage failed`,{message:String(e?.message||e)})}try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}/*ruizhiPlatformUsageBridgeFirst*/"
   );
-  if (!source.includes("/usage/platform") || !source.includes("incompatible usage response")) {
+  if (!source.includes("/usage/platform") || !source.includes("ruizhiPlatformUsageBridgeFirst")) {
     throw new Error("锐鉴 API 用量兜底补丁点不存在");
   }
   fs.writeFileSync(usageQueriesFile, source, "utf8");
   log(`已补丁锐鉴 API 真实剩余用量：${path.basename(usageQueriesFile)}`);
+}
+
+function patchNativeWalletUsagePresentation(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const rateLimitFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /windowDurationMins\?\?0\)>0/,
+    "rate limit presentation bundle"
+  );
+  let source = fs.readFileSync(rateLimitFile, "utf8");
+  if (source.includes("ruizhiWalletQuotaWindow")) {
+    log("已存在锐捷钱包额度展示补丁");
+  }
+  source = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(e\)\{return e!=null&&\(e\.windowDurationMins\?\?0\)>0\}/,
+    "function $1(e){return e!=null&&((e.windowDurationMins??0)>0||e.windowDurationMins===-1)/*ruizhiWalletQuotaWindow*/}"
+  );
+  source = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(\{intl:e,minutes:t,variant:n=`summary`\}\)\{let r=t\?\?0,/,
+    "function $1({intl:e,minutes:t,variant:n=`summary`}){if(t===-1)return e.formatMessage({id:n===`summary`?`ruizhi.walletBalance.title`:`ruizhi.walletQuota.sentence`,defaultMessage:n===`summary`?`账户余额`:`账户额度`});let r=t??0,"
+  );
+  if (!source.includes("ruizhiWalletQuotaWindow") || !source.includes("ruizhi.walletBalance.title")) {
+    throw new Error("锐捷钱包额度展示补丁点不存在");
+  }
+  fs.writeFileSync(rateLimitFile, source, "utf8");
+  const usageSettingsFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /Generic label for a usage limit row/,
+    "usage settings bundle"
+  );
+  let usageSettingsSource = fs.readFileSync(usageSettingsFile, "utf8");
+  usageSettingsSource = usageSettingsSource.replace(
+    /function ([A-Za-z_$][\w$]*)\(e\)\{let t=e\.bucket\.windowDurationMins\?\?0;return/,
+    "function $1(e){let t=e.bucket.windowDurationMins??0;return t===-1?`账户额度`/*ruizhiWalletQuotaSettingsLabel*/:"
+  );
+  if (!usageSettingsSource.includes("ruizhiWalletQuotaSettingsLabel")) {
+    throw new Error("锐捷钱包设置页标签补丁点不存在");
+  }
+  fs.writeFileSync(usageSettingsFile, usageSettingsSource, "utf8");
+  log(`已补丁锐捷钱包额度展示：${path.basename(rateLimitFile)}`);
 }
 
 function patchNativeProfileApiCallLogging(extractedAppDir, options = {}) {
@@ -1182,6 +1255,39 @@ export function patchPluginSkillLocalListFallback(extractedAppDir, options = {})
   }
   fs.writeFileSync(mainFile[0], patched, "utf8");
   log(`已补丁插件/技能本地列表兜底：${path.basename(mainFile[0])}`);
+}
+
+export function patchDesktopAuthAllowedUrlsSource(source, trustedBaseUrl) {
+  const trustedHost = new URL(trustedBaseUrl).host.toLowerCase();
+  const marker = `ruizhiTrustedDesktopAuthHost:${trustedHost}`;
+  if (source.includes(marker)) return source;
+  const pattern = /return!!\(([A-Za-z_$][\w$]*)===`localhost`\|\|\1===`localhost:8000`\|\|\1===`openai\.com`/;
+  if (!pattern.test(source)) {
+    throw new Error("补丁点不存在：桌面端自定义 OAuth/API 主机信任列表");
+  }
+  return source.replace(
+    pattern,
+    `return!!($1===${JSON.stringify(trustedHost)}/*${marker}*/||$1===\`localhost\`||$1===\`localhost:8000\`||$1===\`openai.com\``
+  );
+}
+
+export function patchDesktopAuthAllowedUrls(extractedAppDir, trustedBaseUrl, options = {}) {
+  const log = options.log ?? (() => {});
+  const buildDir = path.join(extractedAppDir, ".vite", "build");
+  const mainFiles = fs.readdirSync(buildDir)
+    .filter((name) => /^main-.*\.js$/.test(name))
+    .map((name) => path.join(buildDir, name));
+  if (mainFiles.length !== 1) {
+    throw new Error(`Electron main bundle 匹配数量异常：${mainFiles.length}`);
+  }
+  const source = fs.readFileSync(mainFiles[0], "utf8");
+  const patched = patchDesktopAuthAllowedUrlsSource(source, trustedBaseUrl);
+  if (patched === source) {
+    log(`已信任配置的桌面端 OAuth/API 主机：${new URL(trustedBaseUrl).host}`);
+    return;
+  }
+  fs.writeFileSync(mainFiles[0], patched, "utf8");
+  log(`已将配置的 OAuth/API 主机加入桌面端信任列表：${new URL(trustedBaseUrl).host}`);
 }
 
 export function patchBrowserNativePipeDiagnosticsSource(source) {
@@ -3243,7 +3349,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
   const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
   const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
-  const chatGptBackendApiBaseUrl = "https://gptauth.ruijie.com.cn";
+  const chatGptBackendApiBaseUrl = buildChatGptLoginBaseUrl(config);
   const modelCatalogEnabledValue = modelCatalogEnabled(config);
   const marketplaceSpecs = pluginMarketplaces(config).map((marketplace) => ({
     name: marketplace.name,
@@ -3284,6 +3390,7 @@ function ensureWindowsBootstrapEarlyRuizhiEnv(bootstrapPath, config, options = {
   process.env.CODEX_HOME=codexHome;
   process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
   process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
+  process.env.RUIZHI_PLATFORM_BASE_URL=chatGptBackendApiBaseUrl;
   fs.mkdirSync(codexHome,{recursive:true});
   fs.mkdirSync(userData,{recursive:true});
   function ruizhiIsNonChatModel(model){
@@ -3729,6 +3836,7 @@ function bridgeBootstrapBlock(config) {
     const runtimeBridgeBaseUrl=startModelBridge();
     const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
     process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
+    process.env.RUIZHI_PLATFORM_BASE_URL=chatGptBackendApiBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
 /* ruizhi-model-bridge:end */
@@ -3748,6 +3856,7 @@ function pageEnhanceBootstrapBlock(config, appVersion = config.version) {
         const service=require(servicePath).createRuizhiEnhanceService({
           codexHome,
           resourcesRoot,
+          platformBaseUrl:process.env.RUIZHI_PLATFORM_BASE_URL,
           config:{pageEnhance:pageEnhanceConfig}
         });
         n.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
@@ -3768,8 +3877,9 @@ function pageEnhanceBootstrapBlock(config, appVersion = config.version) {
 function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}) {
   const log = options.log ?? (() => {});
   const appVersion = options.appVersion ?? config.version;
-  const openaiBaseUrl = config.openai?.baseUrl ?? "https://gptauth.ruijie.com.cn/v1";
-  const ruijieProviderBaseUrl = config.openai?.providerBaseUrl ?? openaiBaseUrl;
+  const openaiBaseUrl = buildOpenAIBaseUrl(config);
+  const ruijieProviderBaseUrl = buildProviderBaseUrl(config);
+  const chatGptBackendApiBaseUrl = buildChatGptLoginBaseUrl(config);
   const chatModelPrefixes = config.openai?.chatModelPrefixes ?? [];
   const providerBaseUrl = modelProviderBaseUrl(config);
   const bridgeConfig = modelBridgeBootstrapConfig(config);
@@ -3789,7 +3899,7 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
       constantsPattern,
       [
         `const openaiBaseUrl=${jsonLiteral(openaiBaseUrl)};`,
-        `const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.ruijie.com.cn")};`,
+        `const chatGptBackendApiBaseUrl=${jsonLiteral(chatGptBackendApiBaseUrl)};`,
         `const ruijieProviderBaseUrl=${jsonLiteral(ruijieProviderBaseUrl)};`,
         `const ruijieChatModelPrefixes=${jsonLiteral(chatModelPrefixes)};`,
         `const modelProviderBaseUrl=${jsonLiteral(providerBaseUrl)};`,
@@ -3978,7 +4088,7 @@ function patchWindowsBrowserWindowNativeMenuVisibility(source) {
   return next;
 }
 
-function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
+function patchWindowsNativeMenuItems(extractedAppDir, config, options = {}) {
   const log = options.log ?? (() => {});
   const mainBundlePath = findWindowsNativeMenuBundle(extractedAppDir);
   const original = fs.readFileSync(mainBundlePath, "utf8");
@@ -3993,11 +4103,14 @@ function patchWindowsNativeMenuItems(extractedAppDir, _config, options = {}) {
   const helperStart = source.indexOf("function ruizhiTranslateApplicationMenu(");
   if (helperStart >= 0 && helperStart < insertionIndex) {
     const helperSource = source.slice(helperStart, insertionIndex);
-    if (!helperSource.includes("ensureSettingsMenu") || !helperSource.includes("gptauth.ruijie.com.cn")) {
-      source = `${source.slice(0, helperStart)}${windowsNativeMenuPatchSource()}${source.slice(insertionIndex)}`;
+    if (!helperSource.includes("ensureSettingsMenu") || !helperSource.includes(buildChatGptLoginBaseUrl(config))) {
+      source = `${source.slice(0, helperStart)}${windowsNativeMenuPatchSource().replaceAll("https://gptauth.ruijie.com.cn/", `${buildChatGptLoginBaseUrl(config)}/`)}${source.slice(insertionIndex)}`;
     }
   } else if (!source.includes("function ruizhiEnsureNativeMenuItems(")) {
-    source = source.replace(insertionPoint, `${windowsNativeMenuPatchSource()}${insertionPoint}`);
+    source = source.replace(
+      insertionPoint,
+      `${windowsNativeMenuPatchSource().replaceAll("https://gptauth.ruijie.com.cn/", `${buildChatGptLoginBaseUrl(config)}/`)}${insertionPoint}`
+    );
   }
 
   const settingsRouteVar = source.match(/([A-Za-z_$][\w$]*)=`\/settings\/general-settings`/)?.[1];
@@ -4151,6 +4264,7 @@ export function patchWindowsHelpDocumentationLinks(extractedAppDir, config, opti
   const helpHomeUrl = homeUrl(config);
   const helpHomePattern = /\{label:`Codex Documentation`,click:\(\)=>\{([A-Za-z_$][\w$]*)\.shell\.openExternal\(`https:\/\/developers\.openai\.com\/codex\/app`\)\}\}/g;
   const replacements = [
+    ["https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_8dd84c836b", `${chatGptLoginBaseUrl(config)}/console`],
     ["https://developers.openai.com/codex/app/worktrees#option-1-working-on-the-worktree", docsUrl(config, "workspace")],
     ["https://developers.openai.com/codex/app/local-environments", docsUrl(config, "terminal")],
     ["https://developers.openai.com/codex/app/troubleshooting", docsUrl(config, "faq")],
@@ -4209,9 +4323,9 @@ export function patchWindowsHelpDocumentationLinks(extractedAppDir, config, opti
   log(`已补丁帮助文档链接：${changedFiles} 个文件，${replacementCount} 处`);
 }
 
-export function patchWindowsAccountSettingsLinks(extractedAppDir, _config, options = {}) {
+export function patchWindowsAccountSettingsLinks(extractedAppDir, config, options = {}) {
   const log = options.log ?? (() => {});
-  const accountUrl = "https://gptauth.ruijie.com.cn/";
+  const accountUrl = `${buildChatGptLoginBaseUrl(config)}/`;
   const accountSettingsPattern = /https:\/\/chatgpt\.com\/#settings(?:\/[A-Za-z]+)?/g;
   const accountSecurityPattern = /https:\/\/chatgpt\.com\/open-security-settings/g;
   let changedFiles = 0;
@@ -4344,6 +4458,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeProfileDropdownUsageVisibility(extractedAppDir, { log });
   patchNativeProfileUsageFallback(extractedAppDir, { log });
   patchNativePlatformUsageFallback(extractedAppDir, { log });
+  patchNativeWalletUsagePresentation(extractedAppDir, { log });
   patchWindowsAppSunsetDialog(extractedAppDir, { log });
   if (modelCatalogEnabled(config)) {
     patchListModelsForHostFromUserCache(extractedAppDir, config, { log });

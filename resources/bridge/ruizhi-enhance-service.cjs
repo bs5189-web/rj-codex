@@ -22,12 +22,17 @@ const DEFAULT_FEATURES = {
 };
 
 const DEFAULT_PLATFORM_BASE_URL = "https://gptauth.ruijie.com.cn";
-const MONTHLY_USAGE_WINDOW_SECONDS = 30 * 24 * 60 * 60;
 const PLATFORM_REQUEST_TIMEOUT_MS = 8_000;
+// A negative one-minute window is an internal renderer sentinel for a wallet
+// balance. It deliberately avoids pretending that a rechargeable balance has
+// a monthly reset date while still reusing Codex's native usage components.
+const RUIZHI_WALLET_WINDOW_SECONDS = -60;
 
 function createRuizhiEnhanceService(options = {}) {
   const codexHome = options.codexHome || process.env.RUIZHI_HOME || path.join(os.homedir(), ".ruizhi");
-  const platformBaseUrl = String(options.platformBaseUrl || DEFAULT_PLATFORM_BASE_URL).replace(/\/+$/, "");
+  const platformBaseUrl = String(
+    options.platformBaseUrl || process.env.RUIZHI_PLATFORM_BASE_URL || DEFAULT_PLATFORM_BASE_URL
+  ).replace(/\/+$/, "");
   const config = normalizeConfig(options.config);
   const settingsPath = path.join(codexHome, "ruizhi-page-enhance-settings.json");
   const dbPath = path.join(codexHome, "state_5.sqlite");
@@ -125,8 +130,8 @@ async function platformUsage(codexHome, platformBaseUrl) {
       rate_limit: {
         primary_window: {
           used_percent: usedPercent,
-          limit_window_seconds: MONTHLY_USAGE_WINDOW_SECONDS,
-          reset_at: nextMonthStartEpochSeconds()
+          limit_window_seconds: RUIZHI_WALLET_WINDOW_SECONDS,
+          reset_at: null
         },
         secondary_window: null
       },
@@ -142,7 +147,8 @@ async function platformUsage(codexHome, platformBaseUrl) {
       source: "ruizhi-model-platform",
       used_usd: roundUsage(usedUsd),
       limit_usd: roundUsage(limitUsd),
-      remaining_usd: remainingUsd
+      remaining_usd: remainingUsd,
+      window_kind: "wallet"
     }
   };
 }
@@ -185,10 +191,6 @@ function finitePositiveNumber(value, label) {
 
 function roundUsage(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
-}
-
-function nextMonthStartEpochSeconds(now = new Date()) {
-  return Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1) / 1000);
 }
 
 function listModelsFromUserCache(codexHome, payload = {}) {

@@ -9,6 +9,7 @@ import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
 import {
   patchBrowserUseIabOpenStability,
   codexClientVersionFromExe,
+  patchDesktopAuthAllowedUrls,
   patchNativePluginAuthCompatibilitySource,
   patchNativeUsageSettingsVisibilitySource,
   patchPluginSkillLocalListFallback,
@@ -24,6 +25,15 @@ const asar = require("asar");
 const __filename = fileURLToPath(import.meta.url);
 const projectRoot = path.resolve(path.dirname(__filename), "..");
 const config = JSON.parse(fs.readFileSync(path.join(projectRoot, "config", "rj-codex.json"), "utf8"));
+const buildOpenAIBaseUrl = resolveBuildEndpoint("RUIZHI_BUILD_API_BASE_URL", config.openai.baseUrl);
+const buildProviderBaseUrl = resolveBuildEndpoint(
+  "RUIZHI_BUILD_PROVIDER_BASE_URL",
+  config.openai.providerBaseUrl ?? buildOpenAIBaseUrl
+);
+const buildChatGptLoginBaseUrl = resolveBuildEndpoint(
+  "RUIZHI_BUILD_CHATGPT_LOGIN_BASE_URL",
+  config.openai.chatGptLoginBaseUrl ?? "https://gptauth.ruijie.com.cn"
+);
 const appVersion = process.env.RUIZHI_BUILD_VERSION ?? config.version;
 const updatesConfig = config.updates ?? {};
 const macosUpdateConfig = updatesConfig.macos ?? {};
@@ -58,6 +68,20 @@ const archLatestMacYmlPath = path.join(distDir, `latest-mac-${macosBuildArch}.ym
 
 function log(message) {
   console.log(`[ruizhi:macos] ${message}`);
+}
+
+function resolveBuildEndpoint(envName, configuredValue) {
+  const candidate = String(process.env[envName] || configuredValue || "").trim().replace(/\/+$/, "");
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error(`${envName} 无效：${candidate}`);
+  }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error(`${envName} 必须是无账号、查询和锚点的 HTTP/HTTPS 地址：${candidate}`);
+  }
+  return candidate;
 }
 
 function ruizhiBuildDate(date = new Date()) {
@@ -271,6 +295,13 @@ function modelCatalogPath() {
   return resolved;
 }
 
+function codexCliBuildConfig() {
+  return {
+    ...(config.codexCli ?? {}),
+    tag: process.env.RUIZHI_CODEX_CLI_TAG?.trim() || config.codexCli?.tag
+  };
+}
+
 function modelCatalogEnabled() {
   return config.models?.enabled !== false;
 }
@@ -293,7 +324,7 @@ function modelBridgePort() {
 
 function modelProviderBaseUrl() {
   if (!modelBridgeEnabled()) {
-    return config.openai.baseUrl;
+    return buildProviderBaseUrl;
   }
   return `http://${modelBridgeHost()}:${modelBridgePort()}/v1`;
 }
@@ -508,6 +539,7 @@ function patchHelpDocumentationLinks() {
   const helpHomeUrl = homeUrl();
   const helpHomePattern = /\{label:`Codex Documentation`,click:\(\)=>\{([A-Za-z_$][\w$]*)\.shell\.openExternal\(`https:\/\/developers\.openai\.com\/codex\/app`\)\}\}/g;
   const replacements = [
+    ["https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_8dd84c836b", `${buildChatGptLoginBaseUrl}/console`],
     ["https://developers.openai.com/codex/app/worktrees#option-1-working-on-the-worktree", docsUrl("workspace")],
     ["https://developers.openai.com/codex/app/local-environments", docsUrl("terminal")],
     ["https://developers.openai.com/codex/app/troubleshooting", docsUrl("faq")],
@@ -558,7 +590,7 @@ function patchHelpDocumentationLinks() {
 }
 
 function patchAccountSettingsLinks() {
-  const accountUrl = "https://gptauth.ruijie.com.cn/";
+  const accountUrl = `${buildChatGptLoginBaseUrl}/`;
   const accountSettingsPattern = /https:\/\/chatgpt\.com\/#settings(?:\/[A-Za-z]+)?/g;
   const accountSecurityPattern = /https:\/\/chatgpt\.com\/open-security-settings/g;
   let changedFiles = 0;
@@ -663,9 +695,19 @@ function sourceAppFromLocalInstall() {
 function downloadFile(url, targetPath) {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
   const partialPath = `${targetPath}.partial`;
-  const resumeArgs = fs.existsSync(partialPath) ? ["--continue-at", "-"] : [];
-  execLogged("curl", ["-L", "--fail", "--retry", "3", ...resumeArgs, "--output", partialPath, url]);
-  fs.renameSync(partialPath, targetPath);
+  const allowResume = process.env.RUIZHI_CODEX_DOWNLOAD_RESUME === "1";
+  if (!allowResume) fs.rmSync(partialPath, { force: true });
+  const resumeArgs = allowResume && fs.existsSync(partialPath) ? ["--continue-at", "-"] : [];
+  try {
+    execLogged("curl", ["-L", "--fail", "--retry", "3", "--retry-all-errors", ...resumeArgs, "--output", partialPath, url]);
+    if (/\.dmg$/i.test(targetPath)) {
+      execLogged("hdiutil", ["verify", partialPath]);
+    }
+    fs.renameSync(partialPath, targetPath);
+  } catch (error) {
+    fs.rmSync(partialPath, { force: true });
+    throw error;
+  }
 }
 
 function downloadCacheMaxAgeMs() {
@@ -998,7 +1040,7 @@ function patchNativeUsageSettingsVisibility() {
   const usageAccessFile = findOneFileByContent(
     assetsDir,
     /^.+\.js$/,
-    /enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible/,
+    /(?:enable_free_go_usage_settings[\s\S]*isUsageSettingsVisible|isUsageSettingsVisible[\s\S]*enable_free_go_usage_settings)/,
     "usage settings access bundle"
   );
   const source = fs.readFileSync(usageAccessFile, "utf8");
@@ -1020,26 +1062,24 @@ function patchNativeProfileDropdownUsageVisibility() {
     "profile dropdown usage bundle"
   );
   const source = fs.readFileSync(profileDropdownFile, "utf8");
-  if (source.includes("ruizhiProfileDropdownUsageForApiKey")) {
+  if (source.includes("ruizhiProfileDropdownUsageForAllAuth")) {
     log("已存在 Codex 头像菜单使用情况入口补丁");
     return;
   }
 
   const usageAccessMatch = source.match(/\{isUsageSettingsVisible:([A-Za-z_$][\w$]*),isUsageSettingsAccessLoading:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\)/);
-  const apiKeyAuthMatch = source.match(/else if\(([A-Za-z_$][\w$]*)\)\{[\s\S]{0,900}?codex\.profileDropdown\.apiKeyAuth/);
-  if (!usageAccessMatch || !apiKeyAuthMatch) {
+  if (!usageAccessMatch) {
     throw new Error("Codex 头像菜单使用情况入口补丁点不存在：账号态变量");
   }
   const [, usageVisibleVar, usageLoadingVar] = usageAccessMatch;
-  const apiKeyAuthVar = apiKeyAuthMatch[1];
   const usageConditionPattern = new RegExp(
     `,([A-Za-z_$][\\w$]*)=([^,;]*&&${escapeRegExp(usageVisibleVar)}&&[^,;]*),([A-Za-z_$][\\w$]*=[A-Za-z_$][\\w$]*\\(\\),)`
   );
   const patched = source.replace(
     usageConditionPattern,
-    `,$1=($2)||${apiKeyAuthVar}&&${usageVisibleVar}&&!${usageLoadingVar}/*ruizhiProfileDropdownUsageForApiKey*/,$3`
+    `,$1=($2)||!${usageLoadingVar}/*ruizhiProfileDropdownUsageForAllAuth*/,$3`
   );
-  if (!patched.includes("ruizhiProfileDropdownUsageForApiKey")) {
+  if (!patched.includes("ruizhiProfileDropdownUsageForAllAuth")) {
     throw new Error("Codex 头像菜单使用情况入口补丁点不存在：显示条件");
   }
   fs.writeFileSync(profileDropdownFile, patched, "utf8");
@@ -1085,13 +1125,55 @@ function patchNativePlatformUsageFallback() {
   }
   const patched = source.replace(
     /queryFn:async\(\)=>\{try\{return await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/usage`,\{parameters:\{query:\{supports_rewardless_invites:!0\}\}\}\)\}catch\(e\)\{if\(e instanceof ([A-Za-z_$][\w$]*)&&\(e\.status===401\|\|e\.status===403\|\|e\.status===404\)\)return null;throw e\}\}/,
-    "queryFn:async()=>{try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`){let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}"
+    "queryFn:async()=>{let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`)try{let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}catch(e){console.warn(`[ruizhi][usage] local platform usage failed`,{message:String(e?.message||e)})}try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}/*ruizhiPlatformUsageBridgeFirst*/"
   );
-  if (!patched.includes("/usage/platform") || !patched.includes("incompatible usage response")) {
+  if (!patched.includes("/usage/platform") || !patched.includes("ruizhiPlatformUsageBridgeFirst")) {
     throw new Error("锐鉴 API 用量兜底补丁点不存在");
   }
   fs.writeFileSync(usageQueriesFile, patched, "utf8");
   log(`已补丁锐鉴 API 真实剩余用量：${path.basename(usageQueriesFile)}`);
+}
+
+function patchNativeWalletUsagePresentation() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const rateLimitFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /windowDurationMins\?\?0\)>0/,
+    "rate limit presentation bundle"
+  );
+  let source = fs.readFileSync(rateLimitFile, "utf8");
+  if (source.includes("ruizhiWalletQuotaWindow")) {
+    log("已存在锐捷钱包额度展示补丁");
+  }
+  source = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(e\)\{return e!=null&&\(e\.windowDurationMins\?\?0\)>0\}/,
+    "function $1(e){return e!=null&&((e.windowDurationMins??0)>0||e.windowDurationMins===-1)/*ruizhiWalletQuotaWindow*/}"
+  );
+  source = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(\{intl:e,minutes:t,variant:n=`summary`\}\)\{let r=t\?\?0,/,
+    "function $1({intl:e,minutes:t,variant:n=`summary`}){if(t===-1)return e.formatMessage({id:n===`summary`?`ruizhi.walletBalance.title`:`ruizhi.walletQuota.sentence`,defaultMessage:n===`summary`?`账户余额`:`账户额度`});let r=t??0,"
+  );
+  if (!source.includes("ruizhiWalletQuotaWindow") || !source.includes("ruizhi.walletBalance.title")) {
+    throw new Error("锐捷钱包额度展示补丁点不存在");
+  }
+  fs.writeFileSync(rateLimitFile, source, "utf8");
+  const usageSettingsFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /Generic label for a usage limit row/,
+    "usage settings bundle"
+  );
+  let usageSettingsSource = fs.readFileSync(usageSettingsFile, "utf8");
+  usageSettingsSource = usageSettingsSource.replace(
+    /function ([A-Za-z_$][\w$]*)\(e\)\{let t=e\.bucket\.windowDurationMins\?\?0;return/,
+    "function $1(e){let t=e.bucket.windowDurationMins??0;return t===-1?`账户额度`/*ruizhiWalletQuotaSettingsLabel*/:"
+  );
+  if (!usageSettingsSource.includes("ruizhiWalletQuotaSettingsLabel")) {
+    throw new Error("锐捷钱包设置页标签补丁点不存在");
+  }
+  fs.writeFileSync(usageSettingsFile, usageSettingsSource, "utf8");
+  log(`已补丁锐捷钱包额度展示：${path.basename(rateLimitFile)}`);
 }
 
 function patchNativeProfileApiCallLogging() {
@@ -1739,7 +1821,7 @@ function patchApplicationMenu() {
       next = replaceRegex(
         next,
         /function ([A-Za-z_$][\w$]*)\(\{buildFlavor:/,
-        `${applicationMenuPatchSource()}function $1({buildFlavor:`,
+        `${applicationMenuPatchSource().replaceAll("https://gptauth.ruijie.com.cn/", `${buildChatGptLoginBaseUrl}/`)}function $1({buildFlavor:`,
         "注入 macOS 顶部菜单修复函数"
       );
     } else {
@@ -1752,7 +1834,7 @@ function patchApplicationMenu() {
       const helperEnd = helperStart + 1 + helperEndMatch.index;
       const helperSource = next.slice(helperStart, helperEnd);
       if (!helperSource.includes("/settings/usage") || !helperSource.includes('"Usage":"使用情况"')) {
-        next = `${next.slice(0, helperStart)}${applicationMenuPatchSource()}${next.slice(helperEnd)}`;
+        next = `${next.slice(0, helperStart)}${applicationMenuPatchSource().replaceAll("https://gptauth.ruijie.com.cn/", `${buildChatGptLoginBaseUrl}/`)}${next.slice(helperEnd)}`;
       }
     }
 
@@ -1826,11 +1908,11 @@ function ruizhiInit(){
     const posixLocale=${jsonLiteral(posixLocale)};
     const ruizhiHomeEnvName=${jsonLiteral(ruizhiHomeEnvName)};
     const ruizhiDefaultHomeDirName=${jsonLiteral(ruizhiDefaultHomeDirName)};
-    const openaiBaseUrl=${jsonLiteral(config.openai.baseUrl)};
-    const ruijieProviderBaseUrl=${jsonLiteral(config.openai.providerBaseUrl ?? config.openai.baseUrl)};
-    const ruijieChatGptLoginBaseUrl=${jsonLiteral(config.openai.chatGptLoginBaseUrl ?? "https://gptauth.ruijie.com.cn")};
+    const openaiBaseUrl=${jsonLiteral(buildOpenAIBaseUrl)};
+    const ruijieProviderBaseUrl=${jsonLiteral(buildProviderBaseUrl)};
+    const ruijieChatGptLoginBaseUrl=${jsonLiteral(buildChatGptLoginBaseUrl)};
     const ruijieChatModelPrefixes=${jsonLiteral(config.openai.chatModelPrefixes ?? [])};
-    const chatGptBackendApiBaseUrl=${jsonLiteral("https://gptauth.ruijie.com.cn")};
+    const chatGptBackendApiBaseUrl=${jsonLiteral(buildChatGptLoginBaseUrl)};
     const modelProviderBaseUrl=${jsonLiteral(modelProviderBaseUrl())};
     const modelBridgeConfig=${jsonLiteral({
       enabled: modelBridgeEnabled(),
@@ -1905,6 +1987,7 @@ function ruizhiInit(){
     process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
     process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
+    process.env.RUIZHI_PLATFORM_BASE_URL=chatGptBackendApiBaseUrl;
     process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
     process.env.RUIZHI_IMAGEGEN_EXE=path.join(resourcesRoot,"bin",imageGenHelper);
@@ -2688,6 +2771,7 @@ function ruizhiStartBackgroundUpdateCheck(){
       const service=require(servicePath).createRuizhiEnhanceService({
         codexHome:ruizhiEnhanceCodexHome(),
         resourcesRoot,
+        platformBaseUrl:process.env.RUIZHI_PLATFORM_BASE_URL,
         config:{pageEnhance:pageEnhanceConfig}
       });
       ${electronName}.ipcMain.handle("ruizhi:enhance:call",async(_event,route,payload)=>service.call(route,payload||{}));
@@ -3021,6 +3105,8 @@ async function repackAppAsar() {
   patchNativeProfileDropdownUsageVisibility();
   patchNativeProfileUsageFallback();
   patchNativePlatformUsageFallback();
+  patchNativeWalletUsagePresentation();
+  patchDesktopAuthAllowedUrls(extractedDir, buildChatGptLoginBaseUrl, { log });
   patchNativeProfileApiCallLogging();
   patchPluginSkillLocalListFallback(extractedDir, { log });
   patchNativeBrowserDesktopFeatureAvailability();
@@ -3695,7 +3781,7 @@ function writeUpdateManifest(zipPath, signingState) {
 }
 
 function ensureCodexSource() {
-  const cliConfig = config.codexCli;
+  const cliConfig = codexCliBuildConfig();
   if (!cliConfig?.sourceRepo || !cliConfig?.tag) {
     throw new Error("缺少 codexCli.sourceRepo 或 codexCli.tag 配置");
   }
@@ -3725,7 +3811,7 @@ function ensureCodexSource() {
 function patchCodexCliSource() {
   const authIssuerPatch = patchCodexAuthIssuerSource(
     codexSourceRoot,
-    config.openai.chatGptLoginBaseUrl
+    buildChatGptLoginBaseUrl
   );
   const enterprisePluginPatch = patchCodexEnterprisePluginSource(codexSourceRoot);
   log(`已补丁 Codex OAuth issuer：${authIssuerPatch.issuer}`);
@@ -3754,7 +3840,7 @@ function patchCodexCliSource() {
 }
 
 function buildPatchedCodexCli(expectedCodexClientVersion) {
-  const cliConfig = config.codexCli;
+  const cliConfig = codexCliBuildConfig();
   const shouldBuild = process.env.RUIZHI_BUILD_CODEX === "1" || cliConfig?.rebuildByDefault === true;
   if (!shouldBuild) {
     throw new Error("锐捷 OAuth 依赖重编 Codex CLI，不能跳过 RUIZHI_BUILD_CODEX");
@@ -3795,7 +3881,7 @@ function buildPatchedCodexCli(expectedCodexClientVersion) {
   }
   fs.copyFileSync(builtCodexPath, targetCodexPath);
   fs.chmodSync(targetCodexPath, 0o755);
-  log(`已替换 Contents/Resources/codex：OAuth issuer=${config.openai.chatGptLoginBaseUrl}`);
+  log(`已替换 Contents/Resources/codex：OAuth issuer=${buildChatGptLoginBaseUrl}`);
 }
 
 async function main() {

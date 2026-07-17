@@ -18,6 +18,7 @@ import {
 import { patchCodexLoginSuccessBinary } from "./codex-login-success-branding.mjs";
 import { patchCodexAuthIssuerSource } from "./codex-auth-issuer-source.mjs";
 import { patchCodexEnterprisePluginSource } from "./codex-enterprise-plugins-source.mjs";
+import { pageEnhanceRendererInstallerSource, pageEnhanceRendererSources } from "./page-enhance-source.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("asar");
@@ -40,8 +41,14 @@ const macosUpdateConfig = updatesConfig.macos ?? {};
 const macosBuildArch = normalizeMacosBuildArch(process.env.RUIZHI_MACOS_ARCH ?? process.arch);
 const runtimeConfig = config.runtime ?? {};
 const ruizhiHomeEnvName = runtimeConfig.homeEnv ?? "RUIZHI_HOME";
-const ruizhiDefaultHomeDirName = runtimeConfig.defaultHomeDirName ?? ".ruizhi";
-const electronUserDataDirName = runtimeConfig.electronUserDataDirName ?? "Codex";
+const ruizhiDefaultHomeDirName = resolveBuildDirectoryName(
+  "RUIZHI_BUILD_HOME_DIR_NAME",
+  runtimeConfig.defaultHomeDirName ?? ".ruizhi"
+);
+const electronUserDataDirName = resolveBuildDirectoryName(
+  "RUIZHI_BUILD_ELECTRON_USER_DATA_DIR_NAME",
+  runtimeConfig.electronUserDataDirName ?? "Codex"
+);
 const imageGenerationConfig = config.imageGeneration ?? {};
 const modelBridgeConfig = config.modelBridge ?? {};
 const openAIBundledPluginDefinitions = [
@@ -80,6 +87,23 @@ function resolveBuildEndpoint(envName, configuredValue) {
   }
   if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new Error(`${envName} 必须是无账号、查询和锚点的 HTTP/HTTPS 地址：${candidate}`);
+  }
+  return candidate;
+}
+
+function resolveBuildDirectoryName(envName, configuredValue) {
+  const override = process.env[envName];
+  const candidate = String(override === undefined ? configuredValue : override).trim();
+  if (
+    !candidate
+    || candidate === "."
+    || candidate === ".."
+    || path.isAbsolute(candidate)
+    || candidate.includes("/")
+    || candidate.includes("\\")
+    || candidate.includes("\0")
+  ) {
+    throw new Error(`${envName} 必须是单个安全目录名：${candidate}`);
   }
   return candidate;
 }
@@ -380,14 +404,6 @@ function pageEnhanceBootstrapConfig() {
     rendererResourcePath: ["renderer", "ruizhi-page-enhance.js"],
     serviceResourcePath: ["bridge", "ruizhi-enhance-service.cjs"]
   };
-}
-
-function pageEnhanceRendererSourcePath() {
-  return resolveProjectPath(path.join("resources", "renderer", "ruizhi-page-enhance.js"));
-}
-
-function pageEnhanceRendererInstallerSource() {
-  return fs.readFileSync(pageEnhanceRendererSourcePath(), "utf8");
 }
 
 function pageEnhanceServiceSourcePath() {
@@ -2921,6 +2937,18 @@ ${pageEnhanceRendererInstallerSource()}
       addCleanup(()=>document.removeEventListener("DOMContentLoaded",listener));
     }else if(!disposed)fn();
   }
+  function injectRuizhiWalletDetails(){
+    if(window.__RUIZHI_WALLET_DETAILS_SCRIPT_INJECTED__)return;
+    try{
+      const installer=globalThis.__RUIZHI_INSTALL_WALLET_DETAILS__;
+      if(typeof installer!=="function")throw new Error("额度明细 installer 不可用");
+      const runtime=installer({window,document,ruizhiDesktop:api});
+      window.__RUIZHI_WALLET_DETAILS_SCRIPT_INJECTED__=true;
+      addCleanup(()=>runtime?.dispose?.());
+    }catch(error){
+      console.error("ruizhi wallet details inject failed",error);
+    }
+  }
   function injectRuizhiPageEnhance(){
     if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
     window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
@@ -2932,6 +2960,7 @@ ${pageEnhanceRendererInstallerSource()}
       console.error("ruizhi page enhance inject failed",error);
     }
   }
+  onReady(injectRuizhiWalletDetails);
   onReady(injectRuizhiPageEnhance);
 
   function onUpdateStateChanged(_event,next){
@@ -3294,9 +3323,11 @@ function copyRuntimeOverrides(codexClientVersion) {
     log(`已内置模型协议 bridge：${path.relative(projectRoot, bridgeTargetPath)}`);
   }
 
-  const enhanceRendererTarget = path.join(resourcesDir, "renderer", "ruizhi-page-enhance.js");
-  fs.mkdirSync(path.dirname(enhanceRendererTarget), { recursive: true });
-  fs.copyFileSync(pageEnhanceRendererSourcePath(), enhanceRendererTarget);
+  for (const { fileName, sourcePath } of pageEnhanceRendererSources) {
+    const enhanceRendererTarget = path.join(resourcesDir, "renderer", fileName);
+    fs.mkdirSync(path.dirname(enhanceRendererTarget), { recursive: true });
+    fs.copyFileSync(sourcePath, enhanceRendererTarget);
+  }
 
   const enhanceServiceTarget = path.join(resourcesDir, "bridge", "ruizhi-enhance-service.cjs");
   fs.mkdirSync(path.dirname(enhanceServiceTarget), { recursive: true });

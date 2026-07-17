@@ -141,6 +141,70 @@ test("desktop builders expose one build-time backend contract for isolated local
   assert.match(macosBuilder, /buildChatGptLoginBaseUrl\}\/console/);
 });
 
+test("local desktop packages isolate account and user data when launched directly", () => {
+  // Given: both platform builders can emit a local-test package next to the production package.
+  for (const scriptPath of ["scripts/build-macos.mjs", "scripts/build-windows.mjs"]) {
+    const source = read(scriptPath);
+
+    // When: the package is built with isolated runtime directory names.
+    // Then: a direct app launch must not reuse the production account or Electron profile.
+    assert.match(source, /RUIZHI_BUILD_HOME_DIR_NAME/, `${scriptPath} should override the Ruizhi account home`);
+    assert.match(source, /RUIZHI_BUILD_ELECTRON_USER_DATA_DIR_NAME/, `${scriptPath} should override Electron user data`);
+    assert.match(source, /resolveBuildDirectoryName/, `${scriptPath} should reject unsafe directory overrides`);
+  }
+});
+
+test("usage settings renders exact wallet totals instead of only a remaining percentage", () => {
+  // Given: the platform bridge already returns exact USD totals in its metadata.
+  const detailsPath = path.join(projectRoot, "resources", "renderer", "ruizhi-wallet-details.js");
+
+  // When: the renderer enhancement is packaged for the native Usage settings page.
+  // Then: it must expose every amount needed for an auditable wallet summary.
+  assert.equal(fs.existsSync(detailsPath), true, "wallet details renderer should exist");
+  const source = fs.readFileSync(detailsPath, "utf8");
+  assert.match(source, /\/usage\/platform/);
+  assert.match(source, /metadata\.limit_usd/);
+  assert.match(source, /metadata\.used_usd/);
+  assert.match(source, /metadata\.remaining_usd/);
+  assert.match(source, /总额度/);
+  assert.match(source, /已使用/);
+  assert.match(source, /剩余余额/);
+  assert.match(source, /使用比例/);
+});
+
+test("desktop packaging composes the wallet details renderer on both platforms", () => {
+  // Given: macOS, Windows, and imported Windows asar builds share one renderer source contract.
+  for (const scriptPath of [
+    "scripts/build-macos.mjs",
+    "scripts/build-windows.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+
+    // When: packaging generates its preload integration.
+    // Then: every path must use the shared source composer that includes wallet details.
+    assert.match(source, /page-enhance-source\.mjs/, `${scriptPath} should import the shared renderer composer`);
+    assert.match(source, /pageEnhanceRendererInstallerSource/, `${scriptPath} should inline the composed renderer source`);
+  }
+});
+
+test("wallet details remain available when optional page enhancements are disabled", () => {
+  // Given: production keeps the unrelated page-enhancement feature set disabled.
+  assert.equal(JSON.parse(read("config/rj-codex.json")).pageEnhance.enabled, false);
+
+  // When: preload integrations initialize the desktop bridge.
+  // Then: the wallet installer must run independently of the optional page-enhancement gate.
+  for (const scriptPath of [
+    "scripts/build-macos.mjs",
+    "scripts/build-windows.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /__RUIZHI_INSTALL_WALLET_DETAILS__/, `${scriptPath} should initialize wallet details directly`);
+    assert.match(source, /onReady\(injectRuizhiWalletDetails\)/, `${scriptPath} should install wallet details on DOM readiness`);
+  }
+});
+
 test("desktop fetch trusts the configured OAuth/API host without weakening the default allowlist", () => {
   const source = "isDesktopAuthAllowedUrl(e){let n=new URL(e).host.toLowerCase();return!!(n===`localhost`||n===`localhost:8000`||n===`openai.com`||n.endsWith(`.openai.com`))}";
   const patched = patchDesktopAuthAllowedUrlsSource(source, "http://127.0.0.1:3300");

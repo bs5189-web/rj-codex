@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import fsExtra from "fs-extra";
+import { pageEnhanceRendererInstallerSource, pageEnhanceRendererSources } from "./page-enhance-source.mjs";
 
 const require = createRequire(import.meta.url);
 const asar = require("asar");
@@ -14,7 +15,6 @@ export const projectRoot = path.resolve(path.dirname(__filename), "..");
 export const windowsAsarOverridesRoot = path.join(projectRoot, "overrides", "windows-app", "asar");
 export const windowsResourceOverridesRoot = path.join(projectRoot, "overrides", "windows-app", "resources");
 export const windowsPrerequisitesRoot = path.join(projectRoot, "resources", "windows", "prerequisites");
-const pageEnhanceRendererSourcePath = path.join(projectRoot, "resources", "renderer", "ruizhi-page-enhance.js");
 const pageEnhanceServiceSourcePath = path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs");
 const enableWindowsPluginTextPatches = process.env.RUIZHI_ENABLE_PLUGIN_TEXT_PATCHES !== "0";
 const windowsVcRedistFileName = "vc_redist.x64.exe";
@@ -180,10 +180,6 @@ export function patchNativePluginAuthCompatibilitySource(source) {
     throw new Error("Codex 插件账号兼容补丁点不存在");
   }
   return patched;
-}
-
-function pageEnhanceRendererInstallerSource() {
-  return fs.readFileSync(pageEnhanceRendererSourcePath, "utf8");
 }
 
 function splitConfigPath(value) {
@@ -2080,15 +2076,20 @@ export function copyWindowsResourceOverrides(resourcesDir, options = {}) {
 
 export function copyPageEnhanceRuntimeResources(resourcesDir, options = {}) {
   const log = options.log ?? (() => {});
-  if (!fs.existsSync(pageEnhanceRendererSourcePath)) {
-    throw new Error(`页面增强 renderer 脚本不存在：${pageEnhanceRendererSourcePath}`);
+  for (const { sourcePath } of pageEnhanceRendererSources) {
+    if (!fs.existsSync(sourcePath)) {
+      throw new Error(`页面增强 renderer 脚本不存在：${sourcePath}`);
+    }
   }
   if (!fs.existsSync(pageEnhanceServiceSourcePath)) {
     throw new Error(`页面增强服务脚本不存在：${pageEnhanceServiceSourcePath}`);
   }
   assertInsideProject(resourcesDir);
   const targets = [
-    [pageEnhanceRendererSourcePath, path.join(resourcesDir, "renderer", "ruizhi-page-enhance.js")],
+    ...pageEnhanceRendererSources.map(({ fileName, sourcePath }) => [
+      sourcePath,
+      path.join(resourcesDir, "renderer", fileName),
+    ]),
     [pageEnhanceServiceSourcePath, path.join(resourcesDir, "bridge", "ruizhi-enhance-service.cjs")]
   ];
   for (const [source, target] of targets) {
@@ -3162,6 +3163,18 @@ ${pageEnhanceRendererInstallerSource()}
     setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
   };
   try{globalThis.ruizhiDesktop=api}catch{}
+  function injectRuizhiWalletDetails(){
+    if(window.__RUIZHI_WALLET_DETAILS_SCRIPT_INJECTED__)return;
+    try{
+      const installer=globalThis.__RUIZHI_INSTALL_WALLET_DETAILS__;
+      if(typeof installer!=="function")throw new Error("额度明细 installer 不可用");
+      const runtime=installer({window,document,ruizhiDesktop:api});
+      window.__RUIZHI_WALLET_DETAILS_SCRIPT_INJECTED__=true;
+      addCleanup(()=>runtime?.dispose?.());
+    }catch(error){
+      console.error("ruizhi wallet details inject failed",error);
+    }
+  }
   function injectRuizhiPageEnhance(){
     if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
     window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
@@ -3173,6 +3186,7 @@ ${pageEnhanceRendererInstallerSource()}
       console.error("ruizhi page enhance inject failed",error);
     }
   }
+  onReady(injectRuizhiWalletDetails);
   onReady(injectRuizhiPageEnhance);
   /* ruizhi-page-enhance-preload:end */
 `;
@@ -3213,6 +3227,15 @@ ${pageEnhanceRendererInstallerSource()}
     setSettings:patch=>ipcRenderer.invoke("ruizhi:enhance:call","/settings/set",patch||{})
   }};
   try{contextBridge.exposeInMainWorld("ruizhiDesktop",api)}catch{}
+  function injectRuizhiWalletDetails(){
+    if(window.__RUIZHI_WALLET_DETAILS_SCRIPT_INJECTED__)return;
+    try{
+      const installer=globalThis.__RUIZHI_INSTALL_WALLET_DETAILS__;
+      if(typeof installer!=="function")throw new Error("额度明细 installer 不可用");
+      installer({window,document,ruizhiDesktop:api});
+      window.__RUIZHI_WALLET_DETAILS_SCRIPT_INJECTED__=true;
+    }catch(error){console.error("ruizhi wallet details inject failed",error);}
+  }
   function injectRuizhiPageEnhance(){
     if(!pageEnhanceConfig.enabled||window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__)return;
     window.__RUIZHI_PAGE_ENHANCE_SCRIPT_INJECTED__=true;
@@ -3222,7 +3245,11 @@ ${pageEnhanceRendererInstallerSource()}
       installer({window,document,ruizhiDesktop:api,config:pageEnhanceConfig});
     }catch(error){console.error("ruizhi page enhance inject failed",error);}
   }
-  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",injectRuizhiPageEnhance,{once:true});else injectRuizhiPageEnhance();
+  function injectRuizhiPreloadEnhancements(){
+    injectRuizhiWalletDetails();
+    injectRuizhiPageEnhance();
+  }
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",injectRuizhiPreloadEnhancements,{once:true});else injectRuizhiPreloadEnhancements();
 }catch(error){console.error("ruizhi preload fallback integration failed",error)}})();
 /* ruizhi-page-enhance-preload:end */
 `;

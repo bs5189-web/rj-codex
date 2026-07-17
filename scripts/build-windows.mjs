@@ -1189,14 +1189,18 @@ function patchListModelsForHostFromUserCache() {
   const modelQueriesFile = findOneFileByContent(assetsDir, /\.js$/, modelListQueryFnPattern, "model queries bundle");
 
   writePatchedFile(modelQueriesFile, (source) => {
+    const normalizeModelListResult = `ruizhiNormalizeModel=ruizhiModel=>{let ruizhiLevels=Array.isArray(ruizhiModel?.supported_reasoning_levels)?ruizhiModel.supported_reasoning_levels:[],ruizhiEfforts=Array.isArray(ruizhiModel?.supportedReasoningEfforts)?ruizhiModel.supportedReasoningEfforts:[];if(ruizhiLevels.length===0)ruizhiLevels=ruizhiEfforts.map(ruizhiEntry=>({effort:ruizhiEntry.reasoningEffort,description:ruizhiEntry.description??ruizhiEntry.reasoningEffort}));if(ruizhiEfforts.length===0)ruizhiEfforts=ruizhiLevels.map(ruizhiEntry=>({reasoningEffort:ruizhiEntry.effort,description:ruizhiEntry.description??ruizhiEntry.effort}));let ruizhiModalities=[...new Set([...(Array.isArray(ruizhiModel?.input_modalities)?ruizhiModel.input_modalities:[]),...(Array.isArray(ruizhiModel?.inputModalities)?ruizhiModel.inputModalities:[])])];return {...ruizhiModel,supported_reasoning_levels:ruizhiLevels,supportedReasoningEfforts:ruizhiEfforts,input_modalities:ruizhiModalities,inputModalities:ruizhiModalities}},ruizhiNormalizeResult=ruizhiResult=>({...ruizhiResult,data:Array.isArray(ruizhiResult?.data)?ruizhiResult.data.map(ruizhiNormalizeModel):[]})`;
     const modelListQueryFnReplacement = (rpcCall, hostId, limit) =>
       `queryFn:()=>{let ruizhiArgs={hostId:${hostId},includeHidden:!0,cursor:null,limit:${limit}},ruizhiNormalizeModelsResult=ruizhiResult=>{let ruizhiModels=Array.isArray(ruizhiResult?.data)?ruizhiResult.data:[];for(let ruizhiModel of ruizhiModels){if(!ruizhiModel||typeof ruizhiModel!==\`object\`)continue;ruizhiModel.input_modalities=[\`text\`,\`image\`];ruizhiModel.inputModalities=ruizhiModel.input_modalities;let ruizhiEfforts=Array.isArray(ruizhiModel.supported_reasoning_efforts)?ruizhiModel.supported_reasoning_efforts.filter(Boolean):[],ruizhiDesktopEfforts=Array.isArray(ruizhiModel.supportedReasoningEfforts)?ruizhiModel.supportedReasoningEfforts.map(e=>typeof e===\`string\`?e:e?.reasoningEffort||e?.effort).filter(Boolean):[],ruizhiLevels=Array.isArray(ruizhiModel.supported_reasoning_levels)?ruizhiModel.supported_reasoning_levels.map(e=>typeof e===\`string\`?e:e?.effort||e?.reasoningEffort).filter(Boolean):[];let ruizhiFinalEfforts=ruizhiEfforts.length?ruizhiEfforts:ruizhiDesktopEfforts.length?ruizhiDesktopEfforts:ruizhiLevels.length?ruizhiLevels:[\`minimal\`,\`low\`,\`medium\`,\`high\`,\`xhigh\`];ruizhiModel.supported_reasoning_efforts=ruizhiFinalEfforts;ruizhiModel.supportedReasoningEfforts=ruizhiFinalEfforts.map(e=>({reasoningEffort:e,description:e}));if(typeof ruizhiModel.defaultReasoningEffort!==\`string\`||!ruizhiModel.defaultReasoningEffort)ruizhiModel.defaultReasoningEffort=ruizhiModel.default_reasoning_level||\`medium\`;if(typeof ruizhiModel.default_reasoning_level!==\`string\`||!ruizhiModel.default_reasoning_level)ruizhiModel.default_reasoning_level=ruizhiModel.defaultReasoningEffort}return {...ruizhiResult,data:ruizhiModels}},ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call;if(typeof ruizhiCall!==\`function\`)return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs).then(ruizhiNormalizeModelsResult);return ruizhiCall(\`/models/list\`,ruizhiArgs).then(ruizhiResult=>{if(ruizhiResult?.status===\`ok\`&&Array.isArray(ruizhiResult.data))return ruizhiNormalizeModelsResult({data:ruizhiResult.data,nextCursor:null});return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs).then(ruizhiNormalizeModelsResult)})}`;
     const forceFreshModelListQuery = (next) =>
       next.replace(
-        /staleTime:[^,}]+,queryFn:\(\)=>\{let ruizhiArgs=/,
-        "staleTime:0,queryFn:()=>{let ruizhiArgs="
+        /staleTime:[^,}]+,(queryFn:\(\)=>\{let (?:ruizhiArgs|ruizhiNormalizeModel)=)/,
+        "staleTime:0,$1"
       );
-    if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) return forceFreshModelListQuery(source);
+    if (source.includes("ruizhiNormalizeModel=")) return forceFreshModelListQuery(source);
+    if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) {
+      throw new Error("补丁点未知：旧版用户 models_cache.json 前端字段适配补丁");
+    }
     const legacyModelListQueryFnPattern = /function ruizhiListModelsForHostFromUserCache\(e\)\{let t=globalThis\.ruizhiDesktop\?\.enhance\?\.call;if\(typeof t!==`function`\)return ([A-Za-z_$][\w$]*)\(`list-models-for-host`,e\);return t\(`\/models\/list`,e\)\.then\(t=>\{if\(t\?\.status===`ok`&&Array\.isArray\(t\.data\)\)\{let models=t\.data;return \{data:models,nextCursor:null\}\}return [A-Za-z_$][\w$]*\(`list-models-for-host`,e\)\}\)\}queryFn:\(\)=>ruizhiListModelsForHostFromUserCache\(\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
     const legacyMatch = source.match(legacyModelListQueryFnPattern);
     if (legacyMatch) {
@@ -1415,7 +1419,6 @@ function ruizhiInit(){
         return;
       }
       const target=path.join(codexHome,userModelCatalogFile);
-      if(normalizeExistingModelCatalogCache(target))return;
       syncBundledModelCatalogCache();
     }
     function bundledModelCatalogPath(){
@@ -1424,7 +1427,6 @@ function ruizhiInit(){
     function syncBundledModelCatalogCache(){
       const target=path.join(codexHome,userModelCatalogFile);
       try{
-        if(normalizeExistingModelCatalogCache(target))return false;
         return writeModelCatalogCacheFromSource(bundledModelCatalogPath(),target);
       }catch(error){
         console.warn("ruizhi bundled model catalog sync failed",error);

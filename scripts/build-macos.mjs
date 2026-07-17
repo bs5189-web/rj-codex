@@ -177,6 +177,14 @@ function execOutput(command, args, options = {}) {
   return execFileSync(command, args, { encoding: "utf8", ...options });
 }
 
+function execOutputBestEffort(command, args, options = {}) {
+  try {
+    return execOutput(command, args, options);
+  } catch {
+    return "";
+  }
+}
+
 function jsonLiteral(value) {
   return JSON.stringify(value);
 }
@@ -1052,6 +1060,10 @@ function patchNativeProfileVisibility() {
 }
 
 function patchNativeUsageSettingsVisibility() {
+  if (process.env.RUIZHI_SKIP_USAGE_SETTINGS_PATCH === "1") {
+    log("已跳过 Codex 使用情况设置入口补丁（RUIZHI_SKIP_USAGE_SETTINGS_PATCH=1）");
+    return;
+  }
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const usageAccessFile = findOneFileByContent(
     assetsDir,
@@ -1095,10 +1107,23 @@ function patchNativeProfileDropdownUsageVisibility() {
     usageConditionPattern,
     `,$1=($2)||!${usageLoadingVar}/*ruizhiProfileDropdownUsageForAllAuth*/,$3`
   );
-  if (!patched.includes("ruizhiProfileDropdownUsageForAllAuth")) {
+  if (patched.includes("ruizhiProfileDropdownUsageForAllAuth")) {
+    fs.writeFileSync(profileDropdownFile, patched, "utf8");
+    log(`已打开 Codex 头像菜单使用情况入口：${path.basename(profileDropdownFile)}`);
+    return;
+  }
+
+  const compactUsageConditionPattern = new RegExp(
+    `(,([A-Za-z_$][\\w$]*)=([^,;]{0,160}&&${escapeRegExp(usageVisibleVar)}&&[^,;]{0,160}),([A-Za-z_$][\\w$]*=![A-Za-z_$][\\w$]*&&))`
+  );
+  const compactPatched = source.replace(
+    compactUsageConditionPattern,
+    `,$2=($3)||!${usageLoadingVar}/*ruizhiProfileDropdownUsageForAllAuth*/,$4`
+  );
+  if (!compactPatched.includes("ruizhiProfileDropdownUsageForAllAuth")) {
     throw new Error("Codex 头像菜单使用情况入口补丁点不存在：显示条件");
   }
-  fs.writeFileSync(profileDropdownFile, patched, "utf8");
+  fs.writeFileSync(profileDropdownFile, compactPatched, "utf8");
   log(`已打开 Codex 头像菜单使用情况入口：${path.basename(profileDropdownFile)}`);
 }
 
@@ -1771,14 +1796,18 @@ function patchListModelsForHostFromUserCache() {
   const modelQueriesFile = findOneFileByContent(assetsDir, /\.js$/, modelListQueryFnPattern, "model queries bundle");
 
   writePatchedFile(modelQueriesFile, (source) => {
+    const normalizeModelListResult = `ruizhiNormalizeModel=ruizhiModel=>{let ruizhiLevels=Array.isArray(ruizhiModel?.supported_reasoning_levels)?ruizhiModel.supported_reasoning_levels:[],ruizhiEfforts=Array.isArray(ruizhiModel?.supportedReasoningEfforts)?ruizhiModel.supportedReasoningEfforts:[];if(ruizhiLevels.length===0)ruizhiLevels=ruizhiEfforts.map(ruizhiEntry=>({effort:ruizhiEntry.reasoningEffort,description:ruizhiEntry.description??ruizhiEntry.reasoningEffort}));if(ruizhiEfforts.length===0)ruizhiEfforts=ruizhiLevels.map(ruizhiEntry=>({reasoningEffort:ruizhiEntry.effort,description:ruizhiEntry.description??ruizhiEntry.effort}));let ruizhiModalities=[...new Set([...(Array.isArray(ruizhiModel?.input_modalities)?ruizhiModel.input_modalities:[]),...(Array.isArray(ruizhiModel?.inputModalities)?ruizhiModel.inputModalities:[])])];return {...ruizhiModel,supported_reasoning_levels:ruizhiLevels,supportedReasoningEfforts:ruizhiEfforts,input_modalities:ruizhiModalities,inputModalities:ruizhiModalities}},ruizhiNormalizeResult=ruizhiResult=>({...ruizhiResult,data:Array.isArray(ruizhiResult?.data)?ruizhiResult.data.map(ruizhiNormalizeModel):[]})`;
     const modelListQueryFnReplacement = (rpcCall, hostId, limit) =>
       `queryFn:()=>{let ruizhiArgs={hostId:${hostId},includeHidden:!0,cursor:null,limit:${limit}},ruizhiNormalizeModelsResult=ruizhiResult=>{let ruizhiModels=Array.isArray(ruizhiResult?.data)?ruizhiResult.data:[];for(let ruizhiModel of ruizhiModels){if(!ruizhiModel||typeof ruizhiModel!==\`object\`)continue;ruizhiModel.input_modalities=[\`text\`,\`image\`];ruizhiModel.inputModalities=ruizhiModel.input_modalities;let ruizhiEfforts=Array.isArray(ruizhiModel.supported_reasoning_efforts)?ruizhiModel.supported_reasoning_efforts.filter(Boolean):[],ruizhiDesktopEfforts=Array.isArray(ruizhiModel.supportedReasoningEfforts)?ruizhiModel.supportedReasoningEfforts.map(e=>typeof e===\`string\`?e:e?.reasoningEffort||e?.effort).filter(Boolean):[],ruizhiLevels=Array.isArray(ruizhiModel.supported_reasoning_levels)?ruizhiModel.supported_reasoning_levels.map(e=>typeof e===\`string\`?e:e?.effort||e?.reasoningEffort).filter(Boolean):[];let ruizhiFinalEfforts=ruizhiEfforts.length?ruizhiEfforts:ruizhiDesktopEfforts.length?ruizhiDesktopEfforts:ruizhiLevels.length?ruizhiLevels:[\`minimal\`,\`low\`,\`medium\`,\`high\`,\`xhigh\`];ruizhiModel.supported_reasoning_efforts=ruizhiFinalEfforts;ruizhiModel.supportedReasoningEfforts=ruizhiFinalEfforts.map(e=>({reasoningEffort:e,description:e}));if(typeof ruizhiModel.defaultReasoningEffort!==\`string\`||!ruizhiModel.defaultReasoningEffort)ruizhiModel.defaultReasoningEffort=ruizhiModel.default_reasoning_level||\`medium\`;if(typeof ruizhiModel.default_reasoning_level!==\`string\`||!ruizhiModel.default_reasoning_level)ruizhiModel.default_reasoning_level=ruizhiModel.defaultReasoningEffort}return {...ruizhiResult,data:ruizhiModels}},ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call;if(typeof ruizhiCall!==\`function\`)return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs).then(ruizhiNormalizeModelsResult);return ruizhiCall(\`/models/list\`,ruizhiArgs).then(ruizhiResult=>{if(ruizhiResult?.status===\`ok\`&&Array.isArray(ruizhiResult.data))return ruizhiNormalizeModelsResult({data:ruizhiResult.data,nextCursor:null});return ${rpcCall}(\`list-models-for-host\`,ruizhiArgs).then(ruizhiNormalizeModelsResult)})}`;
     const forceFreshModelListQuery = (next) =>
       next.replace(
-        /staleTime:[^,}]+,queryFn:\(\)=>\{let ruizhiArgs=/,
-        "staleTime:0,queryFn:()=>{let ruizhiArgs="
+        /staleTime:[^,}]+,(queryFn:\(\)=>\{let (?:ruizhiArgs|ruizhiNormalizeModel)=)/,
+        "staleTime:0,$1"
       );
-    if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) return forceFreshModelListQuery(source);
+    if (source.includes("ruizhiNormalizeModel=")) return forceFreshModelListQuery(source);
+    if (source.includes("ruizhiCall=globalThis.ruizhiDesktop?.enhance?.call")) {
+      throw new Error("补丁点未知：旧版用户 models_cache.json 前端字段适配补丁");
+    }
     const legacyModelListQueryFnPattern = /function ruizhiListModelsForHostFromUserCache\(e\)\{let t=globalThis\.ruizhiDesktop\?\.enhance\?\.call;if\(typeof t!==`function`\)return ([A-Za-z_$][\w$]*)\(`list-models-for-host`,e\);return t\(`\/models\/list`,e\)\.then\(t=>\{if\(t\?\.status===`ok`&&Array\.isArray\(t\.data\)\)\{let models=t\.data;return \{data:models,nextCursor:null\}\}return [A-Za-z_$][\w$]*\(`list-models-for-host`,e\)\}\)\}queryFn:\(\)=>ruizhiListModelsForHostFromUserCache\(\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
     const legacyMatch = source.match(legacyModelListQueryFnPattern);
     if (legacyMatch) {
@@ -2031,7 +2060,6 @@ function ruizhiInit(){
         return;
       }
       const target=path.join(codexHome,userModelCatalogFile);
-      if(normalizeExistingModelCatalogCache(target))return;
       syncBundledModelCatalogCache();
     }
     function bundledModelCatalogPath(){
@@ -2040,7 +2068,6 @@ function ruizhiInit(){
     function syncBundledModelCatalogCache(){
       const target=path.join(codexHome,userModelCatalogFile);
       try{
-        if(normalizeExistingModelCatalogCache(target))return false;
         return writeModelCatalogCacheFromSource(bundledModelCatalogPath(),target);
       }catch(error){
         console.warn("ruizhi bundled model catalog sync failed",error);
@@ -3131,7 +3158,11 @@ async function repackAppAsar() {
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeUsageSettingsVisibility();
-  patchNativeProfileDropdownUsageVisibility();
+  if (process.env.RUIZHI_SKIP_PROFILE_DROPDOWN_USAGE === "1") {
+    log("已跳过 Codex 头像菜单使用情况入口补丁（RUIZHI_SKIP_PROFILE_DROPDOWN_USAGE=1）");
+  } else {
+    patchNativeProfileDropdownUsageVisibility();
+  }
   patchNativeProfileUsageFallback();
   patchNativePlatformUsageFallback();
   patchNativeWalletUsagePresentation();
@@ -3828,14 +3859,25 @@ function ensureCodexSource() {
     ]);
   }
 
-  execLogged("git", [
+  const cachedTag = execOutputBestEffort("git", [
     "-C",
     codexSourceRoot,
-    "fetch",
-    "--depth=1",
-    "origin",
-    `refs/tags/${cliConfig.tag}:refs/tags/${cliConfig.tag}`
-  ]);
+    "tag",
+    "-l",
+    cliConfig.tag
+  ]).trim();
+  if (cachedTag === cliConfig.tag) {
+    log(`已复用本地 Codex CLI tag：${cliConfig.tag}`);
+  } else {
+    execLogged("git", [
+      "-C",
+      codexSourceRoot,
+      "fetch",
+      "--depth=1",
+      "origin",
+      `refs/tags/${cliConfig.tag}:refs/tags/${cliConfig.tag}`
+    ]);
+  }
   execLogged("git", ["-C", codexSourceRoot, "checkout", "--force", cliConfig.tag]);
 }
 
@@ -3872,6 +3914,10 @@ function patchCodexCliSource() {
 
 function buildPatchedCodexCli(expectedCodexClientVersion) {
   const cliConfig = codexCliBuildConfig();
+  if (process.env.RUIZHI_SKIP_CODEX_CLI_BUILD === "1") {
+    log("已跳过 Codex CLI 重编（RUIZHI_SKIP_CODEX_CLI_BUILD=1）");
+    return;
+  }
   const shouldBuild = process.env.RUIZHI_BUILD_CODEX === "1" || cliConfig?.rebuildByDefault === true;
   if (!shouldBuild) {
     throw new Error("锐捷 OAuth 依赖重编 Codex CLI，不能跳过 RUIZHI_BUILD_CODEX");

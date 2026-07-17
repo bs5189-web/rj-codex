@@ -4260,11 +4260,19 @@ async function main() {
   validateDistCopyNoAbsolutePaths(appOutRoot, installedAppRoot);
 
   buildPatchedCodexCli();
-  const loginSuccessPatch = patchCodexLoginSuccessBinary(
-    path.join(appOutRoot, "resources", "codex.exe"),
-    config.loginSuccessPage,
-  );
-  log(`已补丁 Codex OAuth 成功页：${JSON.stringify(loginSuccessPatch.replacements)}`);
+  try {
+    const loginSuccessPatch = patchCodexLoginSuccessBinary(
+      path.join(appOutRoot, "resources", "codex.exe"),
+      config.loginSuccessPage,
+    );
+    log(`已补丁 Codex OAuth 成功页：${JSON.stringify(loginSuccessPatch.replacements)}`);
+  } catch (error) {
+    if (process.env.RUIZHI_BUILD_CODEX === "0") {
+      log(`跳过 Codex OAuth 成功页补丁：${error.message}`);
+    } else {
+      throw error;
+    }
+  }
   copyRuntimeOverrides();
   copyPluginMarketplaces();
   patchRuntimeResourceText();

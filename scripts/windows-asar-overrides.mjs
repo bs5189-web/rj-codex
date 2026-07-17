@@ -342,6 +342,10 @@ function patchListModelsForHostFromUserCache(extractedAppDir, config, options = 
   const assetsDir = path.join(extractedAppDir, "webview", "assets");
   const modelListQueryFnPattern = /queryFn:\(\)=>([A-Za-z_$][\w$]*)\(`list-models-for-host`,\{hostId:([A-Za-z_$][\w$]*),includeHidden:!0,cursor:null,limit:([A-Za-z_$][\w$]*)\}\)/;
   const candidates = walkFiles(assetsDir).filter((filePath) => filePath.endsWith(".js") && modelListQueryFnPattern.test(fs.readFileSync(filePath, "utf8")));
+  if (candidates.length === 0) {
+    log("已跳过模型列表缓存补丁：model queries bundle 补丁点不存在");
+    return;
+  }
   if (candidates.length !== 1) {
     throw new Error(`model queries bundle 匹配数量异常：${candidates.length}`);
   }
@@ -495,7 +499,8 @@ function patchWindowsDefaultLocale(extractedAppDir, config, options = {}) {
   }
 
   if (legacyResolvers.length === 0 && intlSignalFiles.length === 0) {
-    throw new Error("Windows webview default locale patch point not found");
+    log("Skipped Windows default locale patch: patch point not found");
+    return;
   }
 
   log(`Patched Windows default locale: ${locale}, changed files: ${changedFiles}`);
@@ -4056,40 +4061,56 @@ function ensureWindowsBootstrapRuntimeConfig(bootstrapPath, config, options = {}
     );
   }
 
-  next = replaceRegex(
-    next,
-    /[A-Za-z_$][\w$]*\.app\.setName\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*(?:,[A-Za-z_$][\w$]*)?\)\)/,
-    (match) => {
-      const electronName = match.slice(0, match.indexOf(".app.setName"));
-      return `${electronName}.app.setName(${jsonLiteral(windowsTaskManagerName(config))})`;
-    },
-    "Windows bootstrap app name"
-  );
-  next = replaceRegex(
-    next,
-    /[A-Za-z_$][\w$]*\.app\.setPath\(`userData`,[A-Za-z_$][\w$]*\(\{appDataPath:[A-Za-z_$][\w$]*\.app\.getPath\(`appData`\),buildFlavor:[A-Za-z_$][\w$]*,env:process\.env\}\)\)/,
-    (match) => {
-      const electronName = match.slice(0, match.indexOf(".app.setPath"));
-      return `${electronName}.app.setPath(\`userData\`,process.env.CODEX_ELECTRON_USER_DATA_PATH?.trim()||o.join(${electronName}.app.getPath(\`appData\`),${jsonLiteral(electronUserDataDirName)}))`;
-    },
-    "Windows bootstrap userData path"
-  );
-  next = replaceRegex(
-    next,
-    /process\.platform===`win32`&&[A-Za-z_$][\w$]*\.app\.setAppUserModelId\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)/,
-    (match) => {
-      const appMatch = match.match(/&&([A-Za-z_$][\w$]*)\.app\.setAppUserModelId/);
-      const electronName = appMatch?.[1] ?? "a";
-      return `process.platform===\`win32\`&&${electronName}.app.setAppUserModelId(\`cn.ruizhi.desktop\`)`;
-    },
-    "Windows bootstrap AppUserModelID"
-  );
-  next = replaceRegex(
-    next,
-    /if\(!\(![A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\.app\.requestSingleInstanceLock\(\)\)\)/,
-    "if(!1)",
-    "Windows bootstrap single-instance lock"
-  );
+  try {
+    next = replaceRegex(
+      next,
+      /[A-Za-z_$][\w$]*\.app\.setName\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*(?:,[A-Za-z_$][\w$]*)?\)\)/,
+      (match) => {
+        const electronName = match.slice(0, match.indexOf(".app.setName"));
+        return `${electronName}.app.setName(${jsonLiteral(windowsTaskManagerName(config))})`;
+      },
+      "Windows bootstrap app name"
+    );
+  } catch (error) {
+    log(`已跳过 Windows bootstrap app name 补丁：${error.message}`);
+  }
+  try {
+    next = replaceRegex(
+      next,
+      /[A-Za-z_$][\w$]*\.app\.setPath\(`userData`,[A-Za-z_$][\w$]*\(\{appDataPath:[A-Za-z_$][\w$]*\.app\.getPath\(`appData`\),buildFlavor:[A-Za-z_$][\w$]*,env:process\.env\}\)\)/,
+      (match) => {
+        const electronName = match.slice(0, match.indexOf(".app.setPath"));
+        return `${electronName}.app.setPath(\`userData\`,process.env.CODEX_ELECTRON_USER_DATA_PATH?.trim()||o.join(${electronName}.app.getPath(\`appData\`),${jsonLiteral(electronUserDataDirName)}))`;
+      },
+      "Windows bootstrap userData path"
+    );
+  } catch (error) {
+    log(`已跳过 Windows bootstrap userData path 补丁：${error.message}`);
+  }
+  try {
+    next = replaceRegex(
+      next,
+      /process\.platform===`win32`&&[A-Za-z_$][\w$]*\.app\.setAppUserModelId\([A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)\)/,
+      (match) => {
+        const appMatch = match.match(/&&([A-Za-z_$][\w$]*)\.app\.setAppUserModelId/);
+        const electronName = appMatch?.[1] ?? "a";
+        return `process.platform===\`win32\`&&${electronName}.app.setAppUserModelId(\`cn.ruizhi.desktop\`)`;
+      },
+      "Windows bootstrap AppUserModelID"
+    );
+  } catch (error) {
+    log(`已跳过 Windows bootstrap AppUserModelID 补丁：${error.message}`);
+  }
+  try {
+    next = replaceRegex(
+      next,
+      /if\(!\(![A-Za-z_$][\w$]*\|\|[A-Za-z_$][\w$]*\.app\.requestSingleInstanceLock\(\)\)\)/,
+      "if(!1)",
+      "Windows bootstrap single-instance lock"
+    );
+  } catch (error) {
+    log(`已跳过 Windows bootstrap single-instance lock 补丁：${error.message}`);
+  }
 
   if (next !== source) {
     fs.writeFileSync(bootstrapPath, next, "utf8");
@@ -4341,7 +4362,7 @@ export function patchWindowsHelpDocumentationLinks(extractedAppDir, config, opti
   const helpHomeUrl = homeUrl(config);
   const helpHomePattern = /\{label:`Codex Documentation`,click:\(\)=>\{([A-Za-z_$][\w$]*)\.shell\.openExternal\(`https:\/\/developers\.openai\.com\/codex\/app`\)\}\}/g;
   const replacements = [
-    ["https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_8dd84c836b", `${chatGptLoginBaseUrl(config)}/console`],
+    ["https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_8dd84c836b", `${buildChatGptLoginBaseUrl(config)}/console`],
     ["https://developers.openai.com/codex/app/worktrees#option-1-working-on-the-worktree", docsUrl(config, "workspace")],
     ["https://developers.openai.com/codex/app/local-environments", docsUrl(config, "terminal")],
     ["https://developers.openai.com/codex/app/troubleshooting", docsUrl(config, "faq")],

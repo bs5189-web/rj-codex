@@ -91,7 +91,7 @@ function createRuizhiEnhanceService(options = {}) {
         case "/profile/usage":
           return withStorage(dbPath, backupDir, (storage) => storage.profileUsage());
         case "/usage/platform":
-          return platformUsage(codexHome, platformBaseUrl);
+          return await platformUsage(codexHome, platformBaseUrl);
         default:
           return { status: "failed", message: `Unknown enhance route: ${route}` };
       }
@@ -172,6 +172,14 @@ async function requestPlatformJson(url, headers) {
       throw new Error(`模型平台用量接口异常：HTTP ${response.status}`);
     }
     return await response.json();
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`模型平台用量接口超时：${url}`);
+    }
+    if (error instanceof TypeError && String(error.message || "").includes("fetch failed")) {
+      throw new Error(`模型平台用量接口网络失败：${url}`);
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }

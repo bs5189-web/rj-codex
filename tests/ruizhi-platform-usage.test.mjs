@@ -117,6 +117,39 @@ test("platform usage accepts an isolated runtime backend override", async () => 
   }
 });
 
+test("platform usage network failures return a failed result instead of rejecting IPC", async () => {
+  const server = http.createServer((_request, response) => {
+    response.end("unused");
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const port = address.port;
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "ruizhi-platform-usage-failed-"));
+  fs.writeFileSync(
+    path.join(tmpHome, "auth.json"),
+    JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "test-oauth-token" } }),
+  );
+
+  try {
+    const { createRuizhiEnhanceService } = require(
+      path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs"),
+    );
+    const service = createRuizhiEnhanceService({
+      codexHome: tmpHome,
+      platformBaseUrl: `http://127.0.0.1:${port}`,
+    });
+
+    await assert.doesNotReject(() => service.call("/usage/platform"));
+    const result = await service.call("/usage/platform");
+    assert.equal(result.status, "failed");
+    assert.match(result.message, /模型平台用量接口网络失败|fetch failed|ECONNREFUSED/);
+  } finally {
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
 test("desktop builders expose one build-time backend contract for isolated local packages", () => {
   for (const scriptPath of ["scripts/build-macos.mjs", "scripts/build-windows.mjs"]) {
     const source = read(scriptPath);

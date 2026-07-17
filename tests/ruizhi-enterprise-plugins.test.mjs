@@ -30,6 +30,73 @@ test("enterprise plugin list always uses configured local marketplaces", () => {
         "let include_local = marketplace_kinds.contains(&PluginListMarketplaceKind::Local);",
         "let include_vertical = marketplace_kinds.contains(&PluginListMarketplaceKind::Vertical);",
         "",
+        "if !remote_sources.is_empty() {",
+        "    match codex_core_plugins::remote::fetch_remote_marketplaces(",
+        "        &remote_plugin_service_config,",
+        "        auth.as_ref(),",
+        "        &remote_sources,",
+        "        /*global_catalog_cache_path*/ Some(config.codex_home.as_path()),",
+        "    )",
+        "    .await",
+        "    {",
+        "        Ok(remote_marketplaces) => {",
+        "            let _ = remote_marketplaces;",
+        "        }",
+        "        Err(err) => {",
+        "            let _ = err;",
+        "        }",
+        "    }",
+        "}",
+        "",
+        "    async fn load_remote_installed_plugins(",
+        "        &self,",
+        "        plugins_manager: Arc<codex_core_plugins::PluginsManager>,",
+        "        plugins_input: &codex_core_plugins::PluginsConfigInput,",
+        "        visible_marketplaces: &[&str],",
+        "        auth: Option<&CodexAuth>,",
+        "    ) -> Vec<PluginMarketplaceEntry> {",
+        "        let remote_marketplaces = if let Some(remote_marketplaces) = plugins_manager",
+        "            .build_remote_installed_plugin_marketplaces_from_cache(visible_marketplaces)",
+        "        {",
+        "            Ok(remote_marketplaces)",
+        "        } else {",
+        "            plugins_manager",
+        "                .build_and_cache_remote_installed_plugin_marketplaces(",
+        "                    plugins_input,",
+        "                    auth,",
+        "                    visible_marketplaces,",
+        "                    Some(self.effective_plugins_changed_callback()),",
+        "                )",
+        "                .await",
+        "        };",
+        "",
+        "        match remote_marketplaces {",
+        "            Ok(remote_marketplaces) => remote_marketplaces",
+        "                .into_iter()",
+        "                .map(remote_marketplace_to_info)",
+        "                .collect(),",
+        "            Err(",
+        "                RemotePluginCatalogError::AuthRequired",
+        "                | RemotePluginCatalogError::UnsupportedAuthMode,",
+        "            ) => Vec::new(),",
+        "            Err(err) => {",
+        "                warn!(",
+        "                    error = %err,",
+        "                    \"plugin/installed remote installed plugin fetch failed; returning local marketplaces only\"",
+        "                );",
+        "                Vec::new()",
+        "            }",
+        "        }",
+        "    }",
+        "",
+        "    async fn plugin_read_response(&self) {}",
+        "",
+        "fn remote_plugin_catalog_error_type(err: &RemotePluginCatalogError) -> &'static str {",
+        "    match err {",
+        "        RemotePluginCatalogError::UnexpectedStatus { .. } => \"remote_catalog_unexpected_status\",",
+        "    }",
+        "}",
+        "",
       ].join("\n"),
     );
     const remoteSourcePath = writeFixture(
@@ -65,6 +132,19 @@ test("enterprise plugin list always uses configured local marketplaces", () => {
     );
     assert.match(patchedRemote, /Ok\(None\)/);
     assert.doesNotMatch(patchedRemote, /fetch_openai\(config, auth\)/);
+    assert.match(
+      patched,
+      /fn remote_plugin_catalog_error_is_unauthorized\(err: &RemotePluginCatalogError\) -> bool/,
+    );
+    assert.match(patched, /remote plugin catalog unauthorized; refreshing auth before retry/);
+    assert.match(patched, /auth_manager\.refresh_token\(\)\.await/);
+    assert.match(patched, /Some\(auth_manager\.auth\(\)\.await\)/);
+    assert.match(patched, /fetch_remote_marketplaces_with_auth_refresh\(/);
+    assert.match(patched, /self\.auth_manager\.as_ref\(\)/);
+    assert.doesNotMatch(
+      patched,
+      /match codex_core_plugins::remote::fetch_remote_marketplaces\(\n\s*&remote_plugin_service_config,/,
+    );
 
     const secondResult = patchCodexEnterprisePluginSource(sourceRoot);
     assert.equal(secondResult.changed, false);

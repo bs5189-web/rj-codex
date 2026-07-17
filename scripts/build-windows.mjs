@@ -17,6 +17,7 @@ import {
   patchOpenAIBundledPluginDescriptions,
   patchBrowserNativePipeDiagnostics,
   patchBrowserUseIabOpenStability,
+  patchNativeKeymapBindingsFallbackSource,
   patchNativePluginAuthCompatibilitySource,
   patchNativeUsageSettingsVisibilitySource,
   patchPluginSkillLocalListFallback,
@@ -680,8 +681,24 @@ function patchNativeProfileVisibility() {
     "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function l(){return ruizhiProfileVisibility()}"
   );
   patched = patched.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*),isLoading:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=\5\|\|\4===`chatgpt`&&\7,([A-Za-z_$][\w$]*)=\4===`chatgpt`&&\9,([A-Za-z_$][\w$]*);return \2\[0\]!==\12\|\|\2\[1\]!==\13\?\(\14=\{isProfileVisibilityLoading:\12,isProfileVisible:\13\},\2\[0\]=\12,\2\[1\]=\13,\2\[2\]=\14\):\14=\2\[2\],\14\}/,
+    "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function $1(){return ruizhiProfileVisibility()}"
+  );
+  patched = patched.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(13\),\{accountId:([A-Za-z_$][\w$]*),authMethod:([A-Za-z_$][\w$]*),isLoading:([A-Za-z_$][\w$]*),planAtLogin:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),[\s\S]{0,2200}?return \2\[10\]!==([A-Za-z_$][\w$]*)\|\|\2\[11\]!==([A-Za-z_$][\w$]*)\?\(([A-Za-z_$][\w$]*)=\{isProfileVisibilityLoading:\9,isProfileVisible:\10\},\2\[10\]=\9,\2\[11\]=\10,\2\[12\]=\11\):\11=\2\[12\],\11\}/,
+    "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function $1(){return ruizhiProfileVisibility()}"
+  );
+  patched = patched.replace(
     /function u\(\)\{let e=\(0,a\.c\)\(3\),\{authMethod:t\}=i\(\),l=n\(o\),u=r\(s\);if\(t!==`chatgpt`\)return!1;let d;return e\[0\]!==l\|\|e\[1\]!==u\?\(d=l&&u\.get\(c,!1\),e\[0\]=l,e\[1\]=u,e\[2\]=d\):d=e\[2\],d\}/,
     "function ruizhiProfileDropdownEntryPoint(){return true}function u(){return ruizhiProfileDropdownEntryPoint()}"
+  );
+  patched = patched.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\);if\(\4!==`chatgpt`\)return!1;let ([A-Za-z_$][\w$]*);return \2\[0\]!==\6\|\|\2\[1\]!==\9\?\(\12=\6&&\9\.get\(([A-Za-z_$][\w$]*),!1\),\2\[0\]=\6,\2\[1\]=\9,\2\[2\]=\12\):\12=\2\[2\],\12\}/,
+    "function ruizhiProfileDropdownEntryPoint(){return true}function $1(){return ruizhiProfileDropdownEntryPoint()}"
+  );
+  patched = patched.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{isProfileVisible:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*);return \2\[0\]!==\4\|\|\2\[1\]!==\6\?\(\9=\4&&\6\.get\(([A-Za-z_$][\w$]*),!1\),\2\[0\]=\4,\2\[1\]=\6,\2\[2\]=\9\):\9=\2\[2\],\9\}/,
+    "function ruizhiProfileDropdownEntryPoint(){return true}function $1(){return ruizhiProfileDropdownEntryPoint()}"
   );
   if (!patched.includes("ruizhiProfileVisibility()") || !patched.includes("ruizhiProfileDropdownEntryPoint()")) {
     throw new Error("Codex 个人资料入口补丁点不存在");
@@ -706,6 +723,30 @@ function patchNativeUsageSettingsVisibility() {
   const patched = patchNativeUsageSettingsVisibilitySource(source);
   fs.writeFileSync(usageAccessFile, patched, "utf8");
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
+}
+
+function patchNativeKeymapBindingsFallback() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  let keymapFile;
+  try {
+    keymapFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /\?\.bindings\.filter\([A-Za-z_$][\w$]*=>[A-Za-z_$][\w$]*\.command===/,
+      "keymap bindings bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex 快捷键 bindings 兜底补丁：${error.message}`);
+    return;
+  }
+  const source = fs.readFileSync(keymapFile, "utf8");
+  if (source.includes("ruizhiKeymapBindingsFallback")) {
+    log("已存在 Codex 快捷键 bindings 兜底补丁");
+    return;
+  }
+  const patched = patchNativeKeymapBindingsFallbackSource(source);
+  fs.writeFileSync(keymapFile, patched, "utf8");
+  log(`已补丁 Codex 快捷键 bindings 兜底：${path.basename(keymapFile)}`);
 }
 
 function patchNativeProfileDropdownUsageVisibility() {
@@ -3360,6 +3401,7 @@ function applyLegacyAsarPatches() {
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeUsageSettingsVisibility();
+  patchNativeKeymapBindingsFallback();
   patchNativeProfileDropdownUsageVisibility();
   patchNativeProfileUsageFallback();
   patchNativePlatformUsageFallback();

@@ -566,6 +566,8 @@ test("packaging opens the native profile dropdown entry point", () => {
     assert.match(source, /isProfileVisibilityLoading:false,isProfileVisible:true/, `${scriptPath} should not redirect away from Settings profile`);
     assert.match(source, /show_dropdown_entry_point/, `${scriptPath} should force the profile dropdown entry point on`);
     assert.match(source, /ruizhiProfileDropdownEntryPoint/, `${scriptPath} should keep the profile dropdown entry point visible`);
+    assert.match(source, /accountId:/, `${scriptPath} should match the newer profile visibility hook shape`);
+    assert.match(source, /isProfileVisible:/, `${scriptPath} should match the newer dropdown entry-point hook shape`);
   }
 });
 

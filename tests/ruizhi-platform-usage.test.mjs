@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const { patchDesktopAuthAllowedUrlsSource } = await import("../scripts/windows-asar-overrides.mjs");
+const { patchDesktopAuthAllowedUrlsSource, patchNativeKeymapBindingsFallbackSource } = await import("../scripts/windows-asar-overrides.mjs");
 
 function read(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
@@ -254,6 +254,27 @@ test("usage bridge remains available when optional page enhancements are disable
       /!pageEnhanceConfig\.enabled\|\|!fs\.existsSync\(servicePath\)/,
       `${scriptPath} should not disable the usage bridge with renderer feature flags`,
     );
+  }
+});
+
+test("usage settings tolerates missing keymap bindings from local desktop state", () => {
+  // Given: the native settings route can render hotkey labels before keymap state has hydrated.
+  const source = "function E({commandId:e,keymapState:t,isMacOS:n}){let r=v(e);if(r==null||!y(r))return[];let i=t?.bindings.filter(t=>t.command===e);if(i!=null&&i.length>0)return i.map(e=>e.key);return T({commandId:e,isMacOS:n})}";
+
+  // When: packaging patches the keymap helper.
+  const patched = patchNativeKeymapBindingsFallbackSource(source);
+
+  // Then: missing or malformed bindings become an empty list instead of throwing undefined.filter.
+  assert.match(patched, /Array\.isArray\(t\?\.bindings\)\?t\.bindings\.filter/);
+  assert.match(patched, /ruizhiKeymapBindingsFallback/);
+  assert.equal(patchNativeKeymapBindingsFallbackSource(patched), patched);
+  for (const scriptPath of [
+    "scripts/build-macos.mjs",
+    "scripts/build-windows.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const packagingSource = read(scriptPath);
+    assert.match(packagingSource, /patchNativeKeymapBindingsFallback/, `${scriptPath} should patch keymap bindings before usage settings renders`);
   }
 });
 

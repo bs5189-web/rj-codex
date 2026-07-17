@@ -10,6 +10,7 @@ import {
   patchBrowserUseIabOpenStability,
   codexClientVersionFromExe,
   patchDesktopAuthAllowedUrls,
+  patchNativeKeymapBindingsFallbackSource,
   patchNativePluginAuthCompatibilitySource,
   patchNativeUsageSettingsVisibilitySource,
   patchPluginSkillLocalListFallback,
@@ -1033,12 +1034,18 @@ function patchNativeCesAnalyticsNetwork() {
 
 function patchNativeProfileVisibility() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const profileVisibilityFile = findOneFileByContent(
-    assetsDir,
-    /^.+\.js$/,
-    /2478676115[\s\S]*3503973010[\s\S]*show_dropdown_entry_point/,
-    "profile visibility bundle"
-  );
+  let profileVisibilityFile;
+  try {
+    profileVisibilityFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /2478676115[\s\S]*3503973010[\s\S]*show_dropdown_entry_point/,
+      "profile visibility bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex 个人资料入口补丁：${error.message}`);
+    return;
+  }
   const source = fs.readFileSync(profileVisibilityFile, "utf8");
   if (source.includes("ruizhiProfileVisibility()")) {
     log("已存在 Codex 个人资料入口补丁");
@@ -1049,11 +1056,20 @@ function patchNativeProfileVisibility() {
     "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function $1(){return ruizhiProfileVisibility()}"
   );
   patched = patched.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(13\),\{accountId:([A-Za-z_$][\w$]*),authMethod:([A-Za-z_$][\w$]*),isLoading:([A-Za-z_$][\w$]*),planAtLogin:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),[\s\S]{0,2200}?return \2\[10\]!==([A-Za-z_$][\w$]*)\|\|\2\[11\]!==([A-Za-z_$][\w$]*)\?\(([A-Za-z_$][\w$]*)=\{isProfileVisibilityLoading:\9,isProfileVisible:\10\},\2\[10\]=\9,\2\[11\]=\10,\2\[12\]=\11\):\11=\2\[12\],\11\}/,
+    "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function $1(){return ruizhiProfileVisibility()}"
+  );
+  patched = patched.replace(
     /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\);if\(\4!==`chatgpt`\)return!1;let ([A-Za-z_$][\w$]*);return \2\[0\]!==\6\|\|\2\[1\]!==\9\?\(\12=\6&&\9\.get\(([A-Za-z_$][\w$]*),!1\),\2\[0\]=\6,\2\[1\]=\9,\2\[2\]=\12\):\12=\2\[2\],\12\}/,
     "function ruizhiProfileDropdownEntryPoint(){return true}function $1(){return ruizhiProfileDropdownEntryPoint()}"
   );
+  patched = patched.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{isProfileVisible:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*);return \2\[0\]!==\4\|\|\2\[1\]!==\6\?\(\9=\4&&\6\.get\(([A-Za-z_$][\w$]*),!1\),\2\[0\]=\4,\2\[1\]=\6,\2\[2\]=\9\):\9=\2\[2\],\9\}/,
+    "function ruizhiProfileDropdownEntryPoint(){return true}function $1(){return ruizhiProfileDropdownEntryPoint()}"
+  );
   if (!patched.includes("ruizhiProfileVisibility()") || !patched.includes("ruizhiProfileDropdownEntryPoint()")) {
-    throw new Error("Codex 个人资料入口补丁点不存在");
+    log("已跳过 Codex 个人资料入口补丁：当前 Desktop 结构不匹配");
+    return;
   }
   fs.writeFileSync(profileVisibilityFile, patched, "utf8");
   log(`已打开 Codex 个人资料入口：${path.basename(profileVisibilityFile)}`);
@@ -1081,14 +1097,44 @@ function patchNativeUsageSettingsVisibility() {
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
 }
 
+function patchNativeKeymapBindingsFallback() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  let keymapFile;
+  try {
+    keymapFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /\?\.bindings\.filter\([A-Za-z_$][\w$]*=>[A-Za-z_$][\w$]*\.command===/,
+      "keymap bindings bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex 快捷键 bindings 兜底补丁：${error.message}`);
+    return;
+  }
+  const source = fs.readFileSync(keymapFile, "utf8");
+  if (source.includes("ruizhiKeymapBindingsFallback")) {
+    log("已存在 Codex 快捷键 bindings 兜底补丁");
+    return;
+  }
+  const patched = patchNativeKeymapBindingsFallbackSource(source);
+  fs.writeFileSync(keymapFile, patched, "utf8");
+  log(`已补丁 Codex 快捷键 bindings 兜底：${path.basename(keymapFile)}`);
+}
+
 function patchNativeProfileDropdownUsageVisibility() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const profileDropdownFile = findOneFileByContent(
-    assetsDir,
-    /^.+\.js$/,
-    /\{isUsageSettingsVisible:[A-Za-z_$][\w$]*,isUsageSettingsAccessLoading:[A-Za-z_$][\w$]*\}=[A-Za-z_$][\w$]*\(\)[\s\S]*codex\.profileDropdown\.apiKeyAuth[\s\S]*codex\.profileDropdown\.usage/,
-    "profile dropdown usage bundle"
-  );
+  let profileDropdownFile;
+  try {
+    profileDropdownFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /\{isUsageSettingsVisible:[A-Za-z_$][\w$]*,isUsageSettingsAccessLoading:[A-Za-z_$][\w$]*\}=[A-Za-z_$][\w$]*\(\)[\s\S]*codex\.profileDropdown\.apiKeyAuth[\s\S]*codex\.profileDropdown\.usage/,
+      "profile dropdown usage bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex 头像菜单使用情况入口补丁：${error.message}`);
+    return;
+  }
   const source = fs.readFileSync(profileDropdownFile, "utf8");
   if (source.includes("ruizhiProfileDropdownUsageForAllAuth")) {
     log("已存在 Codex 头像菜单使用情况入口补丁");
@@ -1153,12 +1199,18 @@ function patchNativeProfileUsageFallback() {
 
 function patchNativePlatformUsageFallback() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const usageQueriesFile = findOneFileByContent(
-    assetsDir,
-    /^.+\.js$/,
-    /safeGet\(`\/wham\/usage`/,
-    "usage queries bundle"
-  );
+  let usageQueriesFile;
+  try {
+    usageQueriesFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /safeGet\(`\/wham\/usage`/,
+      "usage queries bundle"
+    );
+  } catch (error) {
+    log(`已跳过锐鉴 API 用量兜底补丁：${error.message}`);
+    return;
+  }
   const source = fs.readFileSync(usageQueriesFile, "utf8");
   if (source.includes("/usage/platform")) {
     log("已存在锐鉴 API 用量兜底补丁");
@@ -1169,7 +1221,8 @@ function patchNativePlatformUsageFallback() {
     "queryFn:async()=>{let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`)try{let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}catch(e){console.warn(`[ruizhi][usage] local platform usage failed`,{message:String(e?.message||e)})}try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}/*ruizhiPlatformUsageBridgeFirst*/"
   );
   if (!patched.includes("/usage/platform") || !patched.includes("ruizhiPlatformUsageBridgeFirst")) {
-    throw new Error("锐鉴 API 用量兜底补丁点不存在");
+    log("已跳过锐鉴 API 用量兜底补丁：当前 Desktop 结构不匹配");
+    return;
   }
   fs.writeFileSync(usageQueriesFile, patched, "utf8");
   log(`已补丁锐鉴 API 真实剩余用量：${path.basename(usageQueriesFile)}`);
@@ -1177,12 +1230,18 @@ function patchNativePlatformUsageFallback() {
 
 function patchNativeWalletUsagePresentation() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
-  const rateLimitFile = findOneFileByContent(
-    assetsDir,
-    /^.+\.js$/,
-    /windowDurationMins\?\?0\)>0/,
-    "rate limit presentation bundle"
-  );
+  let rateLimitFile;
+  try {
+    rateLimitFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /windowDurationMins\?\?0\)>0/,
+      "rate limit presentation bundle"
+    );
+  } catch (error) {
+    log(`已跳过锐捷钱包额度展示补丁：${error.message}`);
+    return;
+  }
   let source = fs.readFileSync(rateLimitFile, "utf8");
   if (source.includes("ruizhiWalletQuotaWindow")) {
     log("已存在锐捷钱包额度展示补丁");
@@ -1196,7 +1255,8 @@ function patchNativeWalletUsagePresentation() {
     "function $1({intl:e,minutes:t,variant:n=`summary`}){if(t===-1)return e.formatMessage({id:n===`summary`?`ruizhi.walletBalance.title`:`ruizhi.walletQuota.sentence`,defaultMessage:n===`summary`?`账户余额`:`账户额度`});let r=t??0,"
   );
   if (!source.includes("ruizhiWalletQuotaWindow") || !source.includes("ruizhi.walletBalance.title")) {
-    throw new Error("锐捷钱包额度展示补丁点不存在");
+    log("已跳过锐捷钱包额度展示补丁：当前 Desktop 结构不匹配");
+    return;
   }
   fs.writeFileSync(rateLimitFile, source, "utf8");
   const usageSettingsFile = findOneFileByContent(
@@ -1219,12 +1279,18 @@ function patchNativeWalletUsagePresentation() {
 
 function patchNativeProfileApiCallLogging() {
   const mainBuildDir = path.join(extractedDir, ".vite", "build");
-  const mainFile = findOneFileByContent(
-    mainBuildDir,
-    /^main-.*\.js$/,
-    /CODEX_API_BASE_URL[\s\S]*?prodApiBaseUrl/,
-    "main API base bundle"
-  );
+  let mainFile;
+  try {
+    mainFile = findOneFileByContent(
+      mainBuildDir,
+      /^main-.*\.js$/,
+      /CODEX_API_BASE_URL[\s\S]*?prodApiBaseUrl/,
+      "main API base bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex /wham/profiles/me 主进程调用日志补丁：${error.message}`);
+    return;
+  }
   const source = fs.readFileSync(mainFile, "utf8");
   if (source.includes("[ruizhi][profile-api]")) {
     log("已存在 Codex /wham/profiles/me 主进程调用日志补丁");
@@ -1235,7 +1301,8 @@ function patchNativeProfileApiCallLogging() {
     "function $1(e,t){let n=`${$2(e)}/${t.replace(/^\\/+/,``)}`;try{String(t).replace(/^\\/+/,``)===`wham/profiles/me`&&console.info(`[ruizhi][profile-api] GET /wham/profiles/me`,{url:n,apiBase:$2(e)})}catch{}return n}"
   );
   if (!patched.includes("[ruizhi][profile-api]")) {
-    throw new Error("Codex /wham/profiles/me 主进程调用日志补丁点不存在");
+    log("已跳过 Codex /wham/profiles/me 主进程调用日志补丁：当前 Desktop 结构不匹配");
+    return;
   }
   fs.writeFileSync(mainFile, patched, "utf8");
   log(`已补丁 Codex /wham/profiles/me 主进程调用日志：${path.basename(mainFile)}`);
@@ -3158,6 +3225,7 @@ async function repackAppAsar() {
   patchNativeCesAnalyticsNetwork();
   patchNativeProfileVisibility();
   patchNativeUsageSettingsVisibility();
+  patchNativeKeymapBindingsFallback();
   if (process.env.RUIZHI_SKIP_PROFILE_DROPDOWN_USAGE === "1") {
     log("已跳过 Codex 头像菜单使用情况入口补丁（RUIZHI_SKIP_PROFILE_DROPDOWN_USAGE=1）");
   } else {
@@ -3168,13 +3236,25 @@ async function repackAppAsar() {
   patchNativeWalletUsagePresentation();
   patchDesktopAuthAllowedUrls(extractedDir, buildChatGptLoginBaseUrl, { log });
   patchNativeProfileApiCallLogging();
-  patchPluginSkillLocalListFallback(extractedDir, { log });
+  try {
+    patchPluginSkillLocalListFallback(extractedDir, { log });
+  } catch (error) {
+    log(`已跳过插件/技能本地列表兜底补丁：${error.message}`);
+  }
   patchNativeBrowserDesktopFeatureAvailability();
   patchChatGptAuthExternalBrowser();
-  patchBrowserNativePipeDiagnostics();
+  try {
+    patchBrowserNativePipeDiagnostics();
+  } catch (error) {
+    log(`已跳过 Browser nativePipe 诊断日志补丁：${error.message}`);
+  }
   patchBrowserNativePipePeerAuthorization();
   patchBrowserUseIabOpenStability(extractedDir, { log });
-  patchTrustedBrowserClientHashes();
+  try {
+    patchTrustedBrowserClientHashes();
+  } catch (error) {
+    log(`已跳过 Browser client nativePipe 信任哈希补丁：${error.message}`);
+  }
   patchBrowserUseIabCdpNoTargetRetry();
   patchWebviewLocales();
   patchPackageMetadata();
@@ -3971,9 +4051,9 @@ async function main() {
   cleanDir(workRoot);
 
   const sourceAppRoot = findSourceAppRoot();
-  const sourceCodexClientVersion = codexClientVersionFromExe(
-    path.join(sourceAppRoot, "Contents", "Resources", "codex"),
-  );
+  const sourceCodexClientVersion =
+    process.env.RUIZHI_CODEX_CLIENT_VERSION ??
+    codexClientVersionFromExe(path.join(sourceAppRoot, "Contents", "Resources", "codex"));
   log(`目标 macOS 架构：${macosBuildArch}`);
   log(`使用 Codex.app：${sourceAppRoot}`);
 

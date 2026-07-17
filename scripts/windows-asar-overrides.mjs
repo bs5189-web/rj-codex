@@ -163,6 +163,21 @@ export function patchNativeUsageSettingsVisibilitySource(source) {
   return patched;
 }
 
+export function patchNativeKeymapBindingsFallbackSource(source) {
+  if (source.includes("ruizhiKeymapBindingsFallback")) {
+    return source;
+  }
+  const bindingsFilterPattern = /let ([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\?\.bindings\.filter\(([A-Za-z_$][\w$]*)=>\3\.command===([A-Za-z_$][\w$]*)\);/;
+  const patched = source.replace(
+    bindingsFilterPattern,
+    "let $1=Array.isArray($2?.bindings)?$2.bindings.filter($3=>$3.command===$4):[]/*ruizhiKeymapBindingsFallback*/;"
+  );
+  if (!patched.includes("ruizhiKeymapBindingsFallback")) {
+    throw new Error("Codex 快捷键 bindings 兜底补丁点不存在");
+  }
+  return patched;
+}
+
 export function patchNativePluginAuthCompatibilitySource(source) {
   if (source.includes("ruizhiPluginAuthCompatibility")) {
     return source;
@@ -767,7 +782,15 @@ function patchNativeProfileVisibility(extractedAppDir, options = {}) {
     "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function $1(){return ruizhiProfileVisibility()}"
   );
   source = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(13\),\{accountId:([A-Za-z_$][\w$]*),authMethod:([A-Za-z_$][\w$]*),isLoading:([A-Za-z_$][\w$]*),planAtLogin:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),[\s\S]{0,2200}?return \2\[10\]!==([A-Za-z_$][\w$]*)\|\|\2\[11\]!==([A-Za-z_$][\w$]*)\?\(([A-Za-z_$][\w$]*)=\{isProfileVisibilityLoading:\9,isProfileVisible:\10\},\2\[10\]=\9,\2\[11\]=\10,\2\[12\]=\11\):\11=\2\[12\],\11\}/,
+    "function ruizhiProfileVisibility(){return {isProfileVisibilityLoading:false,isProfileVisible:true}}function $1(){return ruizhiProfileVisibility()}"
+  );
+  source = source.replace(
     /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{authMethod:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\);if\(\4!==`chatgpt`\)return!1;let ([A-Za-z_$][\w$]*);return \2\[0\]!==\6\|\|\2\[1\]!==\9\?\(\12=\6&&\9\.get\(([A-Za-z_$][\w$]*),!1\),\2\[0\]=\6,\2\[1\]=\9,\2\[2\]=\12\):\12=\2\[2\],\12\}/,
+    "function ruizhiProfileDropdownEntryPoint(){return true}function $1(){return ruizhiProfileDropdownEntryPoint()}"
+  );
+  source = source.replace(
+    /function ([A-Za-z_$][\w$]*)\(\)\{let ([A-Za-z_$][\w$]*)=\(0,([A-Za-z_$][\w$]*)\.c\)\(3\),\{isProfileVisible:([A-Za-z_$][\w$]*)\}=([A-Za-z_$][\w$]*)\(\),([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*);return \2\[0\]!==\4\|\|\2\[1\]!==\6\?\(\9=\4&&\6\.get\(([A-Za-z_$][\w$]*),!1\),\2\[0\]=\4,\2\[1\]=\6,\2\[2\]=\9\):\9=\2\[2\],\9\}/,
     "function ruizhiProfileDropdownEntryPoint(){return true}function $1(){return ruizhiProfileDropdownEntryPoint()}"
   );
   if (!source.includes("ruizhiProfileVisibility()") || !source.includes("ruizhiProfileDropdownEntryPoint()")) {
@@ -826,6 +849,31 @@ function patchNativeUsageSettingsVisibility(extractedAppDir, options = {}) {
   source = patchNativeUsageSettingsVisibilitySource(source);
   fs.writeFileSync(usageAccessFile, source, "utf8");
   log(`已打开 Codex 使用情况设置入口：${path.basename(usageAccessFile)}`);
+}
+
+function patchNativeKeymapBindingsFallback(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  let keymapFile;
+  try {
+    keymapFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /\?\.bindings\.filter\([A-Za-z_$][\w$]*=>[A-Za-z_$][\w$]*\.command===/,
+      "keymap bindings bundle"
+    );
+  } catch (error) {
+    log(`已跳过 Codex 快捷键 bindings 兜底补丁：${error.message}`);
+    return;
+  }
+  let source = fs.readFileSync(keymapFile, "utf8");
+  if (source.includes("ruizhiKeymapBindingsFallback")) {
+    log("已存在 Codex 快捷键 bindings 兜底补丁");
+    return;
+  }
+  source = patchNativeKeymapBindingsFallbackSource(source);
+  fs.writeFileSync(keymapFile, source, "utf8");
+  log(`已补丁 Codex 快捷键 bindings 兜底：${path.basename(keymapFile)}`);
 }
 
 function patchNativeProfileDropdownUsageVisibility(extractedAppDir, options = {}) {
@@ -4484,6 +4532,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
   patchNativeCesAnalyticsNetwork(extractedAppDir, { log });
   patchNativeProfileVisibility(extractedAppDir, { log });
   patchNativeUsageSettingsVisibility(extractedAppDir, { log });
+  patchNativeKeymapBindingsFallback(extractedAppDir, { log });
   patchNativeProfileDropdownUsageVisibility(extractedAppDir, { log });
   patchNativeProfileUsageFallback(extractedAppDir, { log });
   patchNativePlatformUsageFallback(extractedAppDir, { log });

@@ -3694,7 +3694,7 @@ function ruijieProviderBootstrapBlock() {
     function isTomlHeader(line){const trimmed=String(line??"").trim();return trimmed.startsWith("[")&&trimmed.endsWith("]");}
     function tomlKey(line){const trimmed=String(line??"").trimStart();const match=trimmed.match(/^([A-Za-z0-9_.-]+)\\s*=/);return match?match[1]:null;}
     function findTomlTable(lines,header){let start=-1;for(let index=0;index<lines.length;index+=1){if(String(lines[index]).trim()===header){start=index;break;}}if(start<0)return null;let end=lines.length;for(let index=start+1;index<lines.length;index+=1){if(isTomlHeader(lines[index])){end=index;break;}}return {start,end};}
-    function upsertTopLevelTomlKey(source,key,value){const lines=tomlLines(source);const next=tomlKeyLine(key,value);let firstTable=lines.length;for(let index=0;index<lines.length;index+=1){if(isTomlHeader(lines[index])){firstTable=index;break;}}for(let index=0;index<firstTable;index+=1){if(tomlKey(lines[index])===key){if(lines[index]!==next)lines[index]=next;return joinTomlLines(lines);}}let insertAt=firstTable;while(insertAt>0&&String(lines[insertAt-1]).trim()==="")insertAt-=1;lines.splice(insertAt,0,next);return joinTomlLines(lines);}
+    function insertTopLevelTomlKeyIfMissing(source,key,value){const lines=tomlLines(source);const next=tomlKeyLine(key,value);let firstTable=lines.length;for(let index=0;index<lines.length;index+=1){if(isTomlHeader(lines[index])){firstTable=index;break;}}for(let index=0;index<firstTable;index+=1){if(tomlKey(lines[index])===key){return joinTomlLines(lines);}}let insertAt=firstTable;while(insertAt>0&&String(lines[insertAt-1]).trim()==="")insertAt-=1;lines.splice(insertAt,0,next);return joinTomlLines(lines);}
     function patchRuijieProviderConfig(source){
       const header="[model_providers.ruijie-uniapi]";
       const lines=tomlLines(source);
@@ -3719,7 +3719,7 @@ function ruijieProviderBootstrapBlock() {
     function syncRuijieProviderConfig(){
       const configPath=path.join(codexHome,"config.toml");
       const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
-      const withLoginBase=upsertTopLevelTomlKey(existing,"chatgpt_login_base_url",chatGptBackendApiBaseUrl);
+      const withLoginBase=insertTopLevelTomlKeyIfMissing(existing,"chatgpt_login_base_url",chatGptBackendApiBaseUrl);
       const next=patchRuijieProviderConfig(withLoginBase);
       if(next!==existing){fs.mkdirSync(path.dirname(configPath),{recursive:true});fs.writeFileSync(configPath,next,"utf8");}
     }

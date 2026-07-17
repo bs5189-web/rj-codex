@@ -2471,7 +2471,7 @@ function ruizhiInit(){
       }
       return {start,end};
     }
-    function upsertTopLevelTomlKey(source,key,value){
+    function insertTopLevelTomlKeyIfMissing(source,key,value){
       const lines=tomlLines(source);
       const next=tomlKeyLine(key,value);
       let firstTable=lines.length;
@@ -2480,7 +2480,6 @@ function ruizhiInit(){
       }
       for(let index=0;index<firstTable;index+=1){
         if(tomlKey(lines[index])===key){
-          if(lines[index]!==next)lines[index]=next;
           return joinTomlLines(lines);
         }
       }
@@ -2554,7 +2553,7 @@ function ruizhiInit(){
       const configPath=path.join(codexHome,"config.toml");
       if(!fs.existsSync(configPath))return;
       const existing=fs.readFileSync(configPath,"utf8");
-      const withLoginBase=upsertTopLevelTomlKey(existing,"chatgpt_login_base_url",ruijieChatGptLoginBaseUrl);
+      const withLoginBase=insertTopLevelTomlKeyIfMissing(existing,"chatgpt_login_base_url",ruijieChatGptLoginBaseUrl);
       const next=patchRuijieProviderConfig(withLoginBase);
       if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
@@ -4051,9 +4050,10 @@ async function main() {
   cleanDir(workRoot);
 
   const sourceAppRoot = findSourceAppRoot();
-  const sourceCodexClientVersion =
-    process.env.RUIZHI_CODEX_CLIENT_VERSION ??
-    codexClientVersionFromExe(path.join(sourceAppRoot, "Contents", "Resources", "codex"));
+  const sourceCodexClientVersion = process.env.RUIZHI_CODEX_CLIENT_VERSION?.trim()
+    || codexClientVersionFromExe(
+      path.join(sourceAppRoot, "Contents", "Resources", "codex"),
+    );
   log(`目标 macOS 架构：${macosBuildArch}`);
   log(`使用 Codex.app：${sourceAppRoot}`);
 

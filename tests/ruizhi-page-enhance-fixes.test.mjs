@@ -34,7 +34,7 @@ function compareVersions(left, right) {
 test("Windows release version advances past the pre-plugin-menu installer", () => {
   const config = JSON.parse(read("config/rj-codex.json"));
 
-  assert.equal(config.version, "0.3.144");
+  assert.equal(config.version, "0.3.144.5");
   assert.ok(
     compareVersions(config.version, "0.2.2") > 0,
     "Windows installer version must advance so machines with the old 0.2.2 package receive the native Plugins menu patch",

@@ -23,6 +23,8 @@ const DEFAULT_FEATURES = {
 
 const DEFAULT_PLATFORM_BASE_URL = "https://gptauth.ruijie.com.cn";
 const PLATFORM_REQUEST_TIMEOUT_MS = 8_000;
+const PLATFORM_OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
+const PLATFORM_TOKEN_REFRESH_SKEW_SECONDS = 60;
 // A negative one-minute window is an internal renderer sentinel for a wallet
 // balance. It deliberately avoids pretending that a rechargeable balance has
 // a monthly reset date while still reusing Codex's native usage components.
@@ -109,15 +111,20 @@ function createRuizhiEnhanceService(options = {}) {
 }
 
 async function platformUsage(codexHome, platformBaseUrl) {
-  const accessToken = readPlatformAccessToken(codexHome);
+  let accessToken = await ensureFreshPlatformAccessToken(codexHome, platformBaseUrl);
   if (!accessToken) {
     throw new Error("锐捷 Codex 登录令牌不存在，请重新登录");
   }
-  const headers = { authorization: `Bearer ${accessToken}` };
-  const [usage, subscription] = await Promise.all([
-    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/usage`, headers),
-    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/subscription`, headers)
-  ]);
+  let usage;
+  let subscription;
+  try {
+    ({ usage, subscription } = await requestPlatformUsagePair(platformBaseUrl, accessToken));
+  } catch (error) {
+    if (error?.status !== 401) throw error;
+    accessToken = await ensureFreshPlatformAccessToken(codexHome, platformBaseUrl, { force: true });
+    if (!accessToken) throw error;
+    ({ usage, subscription } = await requestPlatformUsagePair(platformBaseUrl, accessToken));
+  }
   const totalUsageCents = finiteNonNegativeNumber(usage?.total_usage, "模型平台累计用量");
   const limitUsd = finitePositiveNumber(subscription?.hard_limit_usd ?? subscription?.soft_limit_usd, "模型平台用量上限");
   const usedUsd = totalUsageCents / 100;
@@ -153,13 +160,102 @@ async function platformUsage(codexHome, platformBaseUrl) {
   };
 }
 
-function readPlatformAccessToken(codexHome) {
+async function requestPlatformUsagePair(platformBaseUrl, accessToken) {
+  const headers = { authorization: `Bearer ${accessToken}` };
+  const [usage, subscription] = await Promise.all([
+    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/usage`, headers),
+    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/subscription`, headers)
+  ]);
+  return { usage, subscription };
+}
+
+async function ensureFreshPlatformAccessToken(codexHome, platformBaseUrl, options = {}) {
   const authPath = path.join(codexHome, "auth.json");
   if (!fs.existsSync(authPath)) return "";
   const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
-  const oauthToken = auth?.tokens?.access_token;
-  if (typeof oauthToken === "string" && oauthToken.trim()) return oauthToken.trim();
-  return typeof auth?.OPENAI_API_KEY === "string" ? auth.OPENAI_API_KEY.trim() : "";
+  const accessToken = tokenString(auth?.tokens?.access_token) || tokenString(auth?.OPENAI_API_KEY);
+  const refreshToken = tokenString(auth?.tokens?.refresh_token);
+  if (!refreshToken || (!options.force && !shouldRefreshPlatformAccessToken(accessToken))) {
+    return accessToken;
+  }
+  const refreshed = await refreshPlatformTokens(platformBaseUrl, refreshToken);
+  const nextAuth = {
+    ...auth,
+    tokens: {
+      ...(isRecord(auth?.tokens) ? auth.tokens : {}),
+      ...refreshed
+    },
+    last_refresh: new Date().toISOString()
+  };
+  writeJsonAtomic(authPath, nextAuth);
+  return tokenString(nextAuth.tokens?.access_token) || accessToken;
+}
+
+function shouldRefreshPlatformAccessToken(accessToken) {
+  const expiresAtSeconds = jwtExpiresAtSeconds(accessToken);
+  if (!expiresAtSeconds) return false;
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return expiresAtSeconds <= nowSeconds + PLATFORM_TOKEN_REFRESH_SKEW_SECONDS;
+}
+
+async function refreshPlatformTokens(platformBaseUrl, refreshToken) {
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: PLATFORM_OAUTH_CLIENT_ID
+  });
+  const response = await fetch(`${platformBaseUrl}/oauth/token`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/x-www-form-urlencoded"
+    },
+    body,
+    signal: AbortSignal.timeout(PLATFORM_REQUEST_TIMEOUT_MS)
+  });
+  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+  if (!response.ok || !contentType.includes("application/json")) {
+    const error = new Error(`锐捷 Codex 登录令牌刷新失败：HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  const data = await response.json();
+  if (!tokenString(data?.access_token)) {
+    throw new Error("锐捷 Codex 登录令牌刷新响应无效");
+  }
+  return data;
+}
+
+function tokenString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function jwtExpiresAtSeconds(token) {
+  if (typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(base64UrlToBase64(parts[1]), "base64").toString("utf8"));
+    const expiresAtSeconds = Number(payload?.exp);
+    return Number.isFinite(expiresAtSeconds) && expiresAtSeconds > 0 ? expiresAtSeconds : null;
+  } catch {
+    return null;
+  }
+}
+
+function base64UrlToBase64(value) {
+  const normalized = String(value).replace(/-/g, "+").replace(/_/g, "/");
+  return normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+}
+
+function writeJsonAtomic(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.renameSync(tmpPath, filePath);
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {}
 }
 
 async function requestPlatformJson(url, headers) {

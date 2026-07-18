@@ -564,7 +564,7 @@ function patchHelpDocumentationLinks() {
   const helpHomeUrl = homeUrl();
   const helpHomePattern = /\{label:`Codex Documentation`,click:\(\)=>\{([A-Za-z_$][\w$]*)\.shell\.openExternal\(`https:\/\/developers\.openai\.com\/codex\/app`\)\}\}/g;
   const replacements = [
-    ["https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_8dd84c836b", `${buildChatGptLoginBaseUrl}/console`],
+    ["https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan#h_8dd84c836b", `${buildChatGptLoginBaseUrl}/dashboard/overview`],
     ["https://developers.openai.com/codex/app/worktrees#option-1-working-on-the-worktree", docsUrl("workspace")],
     ["https://developers.openai.com/codex/app/local-environments", docsUrl("terminal")],
     ["https://developers.openai.com/codex/app/troubleshooting", docsUrl("faq")],
@@ -1217,7 +1217,7 @@ function patchNativePlatformUsageFallback() {
     return;
   }
   const patched = source.replace(
-    /queryFn:async\(\)=>\{try\{return await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/usage`,\{parameters:\{query:\{supports_rewardless_invites:!0\}\}\}\)\}catch\(e\)\{if\(e instanceof ([A-Za-z_$][\w$]*)&&\(e\.status===401\|\|e\.status===403\|\|e\.status===404\)\)return null;throw e\}\}/,
+    /queryFn:async\(\)=>\{try\{return await ([A-Za-z_$][\w$]*)\.safeGet\(`\/wham\/usage`(?:,\{parameters:\{query:\{supports_rewardless_invites:!0\}\}\})?\)\}catch\(e\)\{if\(e instanceof ([A-Za-z_$][\w$]*)&&\(e\.status===401\|\|e\.status===403\|\|e\.status===404\)\)return null;throw e\}\}/,
     "queryFn:async()=>{let t=globalThis.ruizhiDesktop?.enhance?.call;if(typeof t===`function`)try{let n=await t(`/usage/platform`,{});if(n?.status===`ok`&&n?.data?.rate_limit?.primary_window)return n.data}catch(e){console.warn(`[ruizhi][usage] local platform usage failed`,{message:String(e?.message||e)})}try{let e=await $1.safeGet(`/wham/usage`,{parameters:{query:{supports_rewardless_invites:!0}}});if(!e?.rate_limit?.primary_window)throw new Error(`incompatible usage response`);return e}catch(e){if(e instanceof $2&&(e.status===401||e.status===403||e.status===404))return null;throw e}}/*ruizhiPlatformUsageBridgeFirst*/"
   );
   if (!patched.includes("/usage/platform") || !patched.includes("ruizhiPlatformUsageBridgeFirst")) {
@@ -1275,6 +1275,72 @@ function patchNativeWalletUsagePresentation() {
   }
   fs.writeFileSync(usageSettingsFile, usageSettingsSource, "utf8");
   log(`已补丁锐捷钱包额度展示：${path.basename(rateLimitFile)}`);
+}
+
+function patchNativeExternalLinkHrefFallback() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  let linkIconFile;
+  try {
+    linkIconFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /openLocalUrlInTargetPreference[\s\S]{0,2500}url:[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*\)/,
+      "external link icon target bundle"
+    );
+  } catch (error) {
+    log(`已跳过外部链接图标 href 兜底补丁：${error.message}`);
+    return;
+  }
+  let source = fs.readFileSync(linkIconFile, "utf8");
+  if (source.includes("ruizhiExternalLinkHrefFallback") && source.includes("ruizhiEmptyExternalLinkHidden")) {
+    log("已存在外部链接图标 href 兜底补丁");
+    return;
+  }
+  source = source.replace(
+    /url:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\),useExternalBrowser:/,
+    "url:$2==null?``:$1($2),useExternalBrowser:/*ruizhiExternalLinkHrefFallback*/"
+  );
+  source = source.replace(
+    /(function [A-Za-z_$][\w$]*\(e\)\{let [A-Za-z_$][\w$]*=\(0,[A-Za-z_$][\w$]*\.c\)\(\d+\),\{className:[A-Za-z_$][\w$]*,ExternalIcon:[A-Za-z_$][\w$]*,href:([A-Za-z_$][\w$]*),isBrowserSidebarEnabled:[A-Za-z_$][\w$]*,openTarget:[A-Za-z_$][\w$]*,PrimaryIcon:[A-Za-z_$][\w$]*,useExternalBrowser:[A-Za-z_$][\w$]*\}=e,[\s\S]{0,1600}?)(let [A-Za-z_$][\w$]*;return )/,
+    "$1if($2==null)return null;/*ruizhiEmptyExternalLinkHidden*/$3"
+  );
+  if (!source.includes("ruizhiExternalLinkHrefFallback") || !source.includes("ruizhiEmptyExternalLinkHidden")) {
+    log("已跳过外部链接图标 href 兜底补丁：当前 Desktop 结构不匹配");
+    return;
+  }
+  fs.writeFileSync(linkIconFile, source, "utf8");
+  log(`已补丁外部链接图标 href 兜底：${path.basename(linkIconFile)}`);
+}
+
+function patchNativeProfileDropdownUsageUpsell() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  let profileDropdownFile;
+  try {
+    profileDropdownFile = findOneFileByContent(
+      assetsDir,
+      /^.+\.js$/,
+      /composer\.mode\.rateLimit\.heading[\s\S]*profile_dropdown_upgrade_cta/,
+      "profile dropdown usage bundle"
+    );
+  } catch (error) {
+    log(`已跳过个人菜单用量 upsell 隐藏补丁：${error.message}`);
+    return;
+  }
+  let source = fs.readFileSync(profileDropdownFile, "utf8");
+  if (source.includes("ruizhiProfileUsageUpsellHidden")) {
+    log("已存在个人菜单用量 upsell 隐藏补丁");
+    return;
+  }
+  source = source.replace(
+    /![A-Za-z_$][\w$]*&&\(0,[A-Za-z_$][\w$]*\.jsx\)\([A-Za-z_$][\w$]*,\{planType:[A-Za-z_$][\w$]*,className:[\s\S]{0,220}?onRequestLimitIncreaseClick:[A-Za-z_$][\w$]*\}\)/,
+    "null/*ruizhiProfileUsageUpsellHidden*/"
+  );
+  if (!source.includes("ruizhiProfileUsageUpsellHidden")) {
+    log("已跳过个人菜单用量 upsell 隐藏补丁：当前 Desktop 结构不匹配");
+    return;
+  }
+  fs.writeFileSync(profileDropdownFile, source, "utf8");
+  log(`已隐藏个人菜单用量 upsell 空白项：${path.basename(profileDropdownFile)}`);
 }
 
 function patchNativeProfileApiCallLogging() {
@@ -3233,6 +3299,8 @@ async function repackAppAsar() {
   patchNativeProfileUsageFallback();
   patchNativePlatformUsageFallback();
   patchNativeWalletUsagePresentation();
+  patchNativeExternalLinkHrefFallback();
+  patchNativeProfileDropdownUsageUpsell();
   patchDesktopAuthAllowedUrls(extractedDir, buildChatGptLoginBaseUrl, { log });
   patchNativeProfileApiCallLogging();
   try {

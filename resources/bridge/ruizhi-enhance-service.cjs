@@ -265,7 +265,9 @@ async function requestPlatformJson(url, headers) {
     const response = await fetch(url, { headers, signal: controller.signal });
     const contentType = String(response.headers.get("content-type") || "").toLowerCase();
     if (!response.ok || !contentType.includes("application/json")) {
-      throw new Error(`模型平台用量接口异常：HTTP ${response.status}`);
+      const error = new Error(`模型平台用量接口异常：HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
     }
     return await response.json();
   } catch (error) {

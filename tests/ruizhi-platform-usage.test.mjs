@@ -244,6 +244,91 @@ test("platform usage refreshes an expired OAuth token before requesting billing 
   }
 });
 
+test("platform usage refreshes and retries when billing endpoints reject the cached token", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const cachedToken = unsignedJwt({ exp: now + 3600, sub: "user-1" });
+  const refreshedToken = unsignedJwt({ exp: now + 7200, sub: "user-1" });
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push({
+      method: request.method,
+      authorization: request.headers.authorization,
+      url: request.url,
+    });
+    response.setHeader("content-type", "application/json");
+    if (request.method === "POST" && request.url === "/oauth/token") {
+      let body = "";
+      request.on("data", (chunk) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const form = new URLSearchParams(body);
+        assert.equal(form.get("grant_type"), "refresh_token");
+        assert.equal(form.get("refresh_token"), "refresh-token-1");
+        response.end(JSON.stringify({
+          access_token: refreshedToken,
+          refresh_token: "refresh-token-2",
+          expires_in: 7200,
+          token_type: "Bearer",
+        }));
+      });
+      return;
+    }
+    if (request.url === "/v1/dashboard/billing/usage" || request.url === "/v1/dashboard/billing/subscription") {
+      if (request.headers.authorization === `Bearer ${cachedToken}`) {
+        response.statusCode = 401;
+        response.end(JSON.stringify({ error: { message: "expired token" } }));
+        return;
+      }
+      assert.equal(request.headers.authorization, `Bearer ${refreshedToken}`);
+      response.end(JSON.stringify(
+        request.url.endsWith("/usage") ? { total_usage: 4321 } : { hard_limit_usd: 100 },
+      ));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "ruizhi-platform-usage-401-refresh-"));
+  const authPath = path.join(tmpHome, "auth.json");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({
+      auth_mode: "chatgpt",
+      tokens: {
+        access_token: cachedToken,
+        refresh_token: "refresh-token-1",
+      },
+    }),
+  );
+
+  try {
+    const { createRuizhiEnhanceService } = require(
+      path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs"),
+    );
+    const service = createRuizhiEnhanceService({
+      codexHome: tmpHome,
+      platformBaseUrl: `http://127.0.0.1:${address.port}`,
+    });
+    const result = await service.call("/usage/platform");
+    const updatedAuth = JSON.parse(fs.readFileSync(authPath, "utf8"));
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.metadata.used_usd, 43.21);
+    assert.equal(updatedAuth.tokens.access_token, refreshedToken);
+    assert.equal(updatedAuth.tokens.refresh_token, "refresh-token-2");
+    assert.equal(requests.filter((request) => request.method === "POST" && request.url === "/oauth/token").length, 1);
+    assert.equal(requests.some((request) => request.authorization === `Bearer ${cachedToken}`), true);
+    assert.equal(requests.some((request) => request.authorization === `Bearer ${refreshedToken}`), true);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
 test("desktop builders expose one build-time backend contract for isolated local packages", () => {
   for (const scriptPath of ["scripts/build-macos.mjs", "scripts/build-windows.mjs"]) {
     const source = read(scriptPath);

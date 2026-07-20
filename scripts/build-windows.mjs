@@ -854,6 +854,21 @@ function patchNativeWalletUsagePresentation() {
     throw new Error("锐捷钱包额度展示补丁点不存在");
   }
   fs.writeFileSync(rateLimitFile, source, "utf8");
+  const resetModalFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /\?\.credits\.filter\([A-Za-z_$][\w$]*\)\?\?(?:\[\]|null)/,
+    "rate limit reset modal bundle"
+  );
+  let resetModalSource = fs.readFileSync(resetModalFile, "utf8");
+  resetModalSource = resetModalSource.replace(
+    /([A-Za-z_$][\w$]*)\?\.credits\.filter\(([A-Za-z_$][\w$]*)\)\?\?(\[\]|null)/g,
+    "Array.isArray($1?.credits)?$1.credits.filter($2):$3/*ruizhiUsageCreditsFallback*/"
+  );
+  if (!resetModalSource.includes("ruizhiUsageCreditsFallback")) {
+    throw new Error("Codex ???? credits ????????");
+  }
+  fs.writeFileSync(resetModalFile, resetModalSource, "utf8");
   const usageSettingsFile = findOneFileByContent(
     assetsDir,
     /^.+\.js$/,

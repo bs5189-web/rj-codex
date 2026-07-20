@@ -32,3 +32,23 @@ test("packaging scripts expose the enhance bridge on preload", () => {
     );
   }
 });
+
+
+test("Windows packages the usage bridge service even when page enhancement UI is disabled", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+
+  assert.match(source, /copyCoreEnhanceServiceResource/);
+  assert.match(source, /bridge", "ruizhi-enhance-service\.cjs"/);
+  assert.match(source, /pageEnhanceEnabled === false\s*\? copyCoreEnhanceServiceResource/s);
+  assert.doesNotMatch(source, /files: 0/);
+});
+
+
+test("Windows preload keeps the usage bridge when page enhancement UI is disabled", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+
+  assert.doesNotMatch(source, /if \(!pageEnhanceEnabled\(config\)\)[\s\S]*?return;/);
+  assert.match(source, /preloadPageEnhanceFallbackSnippet/);
+  assert.match(source, /__RUIZHI_INSTALL_WALLET_DETAILS__/);
+  assert.match(source, /ruizhi:enhance:call/);
+});

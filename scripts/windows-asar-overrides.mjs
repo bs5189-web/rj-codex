@@ -1002,6 +1002,21 @@ function patchNativeWalletUsagePresentation(extractedAppDir, options = {}) {
     throw new Error("锐捷钱包额度展示补丁点不存在");
   }
   fs.writeFileSync(rateLimitFile, source, "utf8");
+  const resetModalFile = findOneFileByContent(
+    assetsDir,
+    /^.+\.js$/,
+    /\?\.credits\.filter\([A-Za-z_$][\w$]*\)\?\?(?:\[\]|null)/,
+    "rate limit reset modal bundle"
+  );
+  let resetModalSource = fs.readFileSync(resetModalFile, "utf8");
+  resetModalSource = resetModalSource.replace(
+    /([A-Za-z_$][\w$]*)\?\.credits\.filter\(([A-Za-z_$][\w$]*)\)\?\?(\[\]|null)/g,
+    "Array.isArray($1?.credits)?$1.credits.filter($2):$3/*ruizhiUsageCreditsFallback*/"
+  );
+  if (!resetModalSource.includes("ruizhiUsageCreditsFallback")) {
+    throw new Error("Codex ???? credits ????????");
+  }
+  fs.writeFileSync(resetModalFile, resetModalSource, "utf8");
   const usageSettingsFile = findOneFileByContent(
     assetsDir,
     /^.+\.js$/,
@@ -2188,13 +2203,26 @@ export function copyWindowsResourceOverrides(resourcesDir, options = {}) {
   const files = fs.existsSync(windowsResourceOverridesRoot) ? walkFiles(windowsResourceOverridesRoot) : [];
   if (files.length > 0) {
     fsExtra.copySync(windowsResourceOverridesRoot, resourcesDir, { overwrite: true });
-    log(`已应用 Windows 资源覆盖层：${files.length} 个文件`);
+    log(`??? Windows ??????${files.length} ???`);
   }
 
   const enhanceFiles = options.pageEnhanceEnabled === false
-    ? (log("已跳过页面增强 renderer 与服务脚本"), { files: 0 })
+    ? copyCoreEnhanceServiceResource(resourcesDir, { log })
     : copyPageEnhanceRuntimeResources(resourcesDir, { log });
   return { files: files.length + enhanceFiles.files };
+}
+
+export function copyCoreEnhanceServiceResource(resourcesDir, options = {}) {
+  const log = options.log ?? (() => {});
+  if (!fs.existsSync(pageEnhanceServiceSourcePath)) {
+    throw new Error(`????????????${pageEnhanceServiceSourcePath}`);
+  }
+  assertInsideProject(resourcesDir);
+  const target = path.join(resourcesDir, "bridge", "ruizhi-enhance-service.cjs");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(pageEnhanceServiceSourcePath, target);
+  log("???????????????????? renderer");
+  return { files: 1 };
 }
 
 export function copyPageEnhanceRuntimeResources(resourcesDir, options = {}) {
@@ -3413,20 +3441,6 @@ function ensurePreloadPageEnhanceIntegration(preloadPath, config, options = {}) 
   const appVersion = options.appVersion ?? config.version;
   let source = fs.readFileSync(preloadPath, "utf8");
   let next = source.replace(/\/\* ruizhi-page-enhance-preload:start \*\/[\s\S]*?\/\* ruizhi-page-enhance-preload:end \*\/\r?\n?/g, "");
-  if (!pageEnhanceEnabled(config)) {
-    const sourceMapAnchor = "\n//# sourceMappingURL=preload.js.map";
-    if (!next.includes("function forceRuizhiLocale")) {
-      if (!next.includes(sourceMapAnchor)) {
-        throw new Error("preload 中文 locale 注入点不存在");
-      }
-      next = next.replace(sourceMapAnchor, `${preloadForcedLocaleSnippet(config)}${sourceMapAnchor}`);
-    }
-    if (next !== source) {
-      fs.writeFileSync(preloadPath, next, "utf8");
-      log("已注入中文 locale preload，跳过页面增强 bridge");
-    }
-    return;
-  }
   if (next.includes("enhance:{") || next.includes("enhance={")) {
     return;
   }
@@ -4528,10 +4542,39 @@ export function patchWindowsAccountSettingsLinks(extractedAppDir, config, option
   log(`已补丁账户设置链接：${changedFiles} 个文件，${replacementCount} 处`);
 }
 
+function patchWindowsMainRuizhiEnhanceIpc(buildDir, options = {}) {
+  const log = options.log ?? (() => {});
+  let mainFile;
+  try {
+    mainFile = findOneFileByContent(
+      buildDir,
+      /^main-.*\.js$/,
+      /exports\.runMainAppStartup=/,
+      "main startup bundle"
+    );
+  } catch (error) {
+    log(`Skipped Ruizhi usage IPC main patch: ${error.message}`);
+    return;
+  }
+  let source = fs.readFileSync(mainFile, "utf8");
+  if (source.includes("ruizhiMainEnhanceIpcRegistered")) {
+    log("??????? IPC ?????");
+    return;
+  }
+  const block = "(()=>{try{if(!global.__RUIZHI_ENHANCE_IPC_REGISTERED__){global.__RUIZHI_ENHANCE_IPC_REGISTERED__=!0;const e=require(`electron`),t=require(`node:path`),r=require(`node:fs`),n=process.resourcesPath||t.dirname(process.execPath),i=t.join(n,`bridge`,`ruizhi-enhance-service.cjs`);if(!r.existsSync(i))throw new Error(`????????????`+i);const a=require(i).createRuizhiEnhanceService({codexHome:process.env.RUIZHI_HOME,resourcesRoot:n,platformBaseUrl:process.env.RUIZHI_PLATFORM_BASE_URL,config:{pageEnhance:{enabled:false}}});e.ipcMain.handle(`ruizhi:enhance:call`,async(_event,route,payload)=>a.call(route,payload||{}));}}catch(error){console.error(`ruizhi enhance ipc register failed`,error);try{require(`electron`).ipcMain.handle(`ruizhi:enhance:call`,async(_event,route,payload)=>({status:`failed`,session_id:String(payload?.session_id||``),message:String(error?.message||error)}));}catch{}}})/*ruizhiMainEnhanceIpcRegistered*/();";
+  const patched = source.replace(/exports\.runMainAppStartup=/, `${block}exports.runMainAppStartup=`);
+  if (!patched.includes("ruizhiMainEnhanceIpcRegistered")) {
+    throw new Error("???? IPC ?????????");
+  }
+  fs.writeFileSync(mainFile, patched, "utf8");
+  log(`??????? IPC ??????${path.basename(mainFile)}`);
+}
+
 export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVersion, options = {}) {
   const log = options.log ?? (() => {});
   const packageJsonPath = path.join(extractedAppDir, "package.json");
   const buildDir = path.join(extractedAppDir, ".vite", "build");
+  patchWindowsMainRuizhiEnhanceIpc(buildDir, { log });
   const preloadPath = path.join(buildDir, "preload.js");
   const bootstrapPath = fs.existsSync(path.join(buildDir, "bootstrap.js"))
     ? path.join(buildDir, "bootstrap.js")

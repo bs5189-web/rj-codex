@@ -2,6 +2,8 @@
 
 const crypto = require("node:crypto");
 const fs = require("node:fs");
+const http = require("node:http");
+const https = require("node:https");
 const os = require("node:os");
 const path = require("node:path");
 
@@ -111,22 +113,21 @@ function createRuizhiEnhanceService(options = {}) {
 }
 
 async function platformUsage(codexHome, platformBaseUrl) {
-  let accessToken = await ensureFreshPlatformAccessToken(codexHome, platformBaseUrl);
-  if (!accessToken) {
-    throw new Error("锐捷 Codex 登录令牌不存在，请重新登录");
+  let token = await ensureFreshPlatformAccessToken(codexHome, platformBaseUrl);
+  if (!token.accessToken) {
+    throw new Error("\u9510\u6377 Codex \u767b\u5f55\u4ee4\u724c\u4e0d\u5b58\u5728\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55");
   }
   let usage;
   let subscription;
   try {
-    ({ usage, subscription } = await requestPlatformUsagePair(platformBaseUrl, accessToken));
+    [usage, subscription] = await requestPlatformBillingPair(platformBaseUrl, token.accessToken);
   } catch (error) {
-    if (error?.status !== 401) throw error;
-    accessToken = await ensureFreshPlatformAccessToken(codexHome, platformBaseUrl, { force: true });
-    if (!accessToken) throw error;
-    ({ usage, subscription } = await requestPlatformUsagePair(platformBaseUrl, accessToken));
+    if (!isUnauthorizedPlatformError(error) || !token.refreshToken) throw error;
+    const refreshedAccessToken = await refreshPlatformAccessToken(codexHome, platformBaseUrl, token.refreshToken, token.source);
+    [usage, subscription] = await requestPlatformBillingPair(platformBaseUrl, refreshedAccessToken);
   }
-  const totalUsageCents = finiteNonNegativeNumber(usage?.total_usage, "模型平台累计用量");
-  const limitUsd = finitePositiveNumber(subscription?.hard_limit_usd ?? subscription?.soft_limit_usd, "模型平台用量上限");
+  const totalUsageCents = finiteNonNegativeNumber(usage?.total_usage, "\u6a21\u578b\u5e73\u53f0\u7d2f\u8ba1\u7528\u91cf");
+  const limitUsd = finitePositiveNumber(subscription?.hard_limit_usd ?? subscription?.soft_limit_usd, "\u6a21\u578b\u5e73\u53f0\u7528\u91cf\u4e0a\u9650");
   const usedUsd = totalUsageCents / 100;
   const remainingUsd = roundUsage(Math.max(0, limitUsd - usedUsd));
   const usedPercent = Math.min(100, Math.max(0, (usedUsd / limitUsd) * 100));
@@ -160,35 +161,12 @@ async function platformUsage(codexHome, platformBaseUrl) {
   };
 }
 
-async function requestPlatformUsagePair(platformBaseUrl, accessToken) {
-  const headers = { authorization: `Bearer ${accessToken}` };
-  const [usage, subscription] = await Promise.all([
-    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/usage`, headers),
-    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/subscription`, headers)
-  ]);
-  return { usage, subscription };
-}
-
 async function ensureFreshPlatformAccessToken(codexHome, platformBaseUrl, options = {}) {
-  const authPath = path.join(codexHome, "auth.json");
-  if (!fs.existsSync(authPath)) return "";
-  const auth = JSON.parse(fs.readFileSync(authPath, "utf8"));
-  const accessToken = tokenString(auth?.tokens?.access_token) || tokenString(auth?.OPENAI_API_KEY);
-  const refreshToken = tokenString(auth?.tokens?.refresh_token);
-  if (!refreshToken || (!options.force && !shouldRefreshPlatformAccessToken(accessToken))) {
-    return accessToken;
-  }
-  const refreshed = await refreshPlatformTokens(platformBaseUrl, refreshToken);
-  const nextAuth = {
-    ...auth,
-    tokens: {
-      ...(isRecord(auth?.tokens) ? auth.tokens : {}),
-      ...refreshed
-    },
-    last_refresh: new Date().toISOString()
-  };
-  writeJsonAtomic(authPath, nextAuth);
-  return tokenString(nextAuth.tokens?.access_token) || accessToken;
+  const token = readPlatformAuthTokens(codexHome);
+  if (!token.accessToken || token.kind === "api_key" || !token.refreshToken) return token;
+  if (!options.force && !shouldRefreshPlatformAccessToken(token.accessToken)) return token;
+  const accessToken = await refreshPlatformAccessToken(codexHome, platformBaseUrl, token.refreshToken, token.source);
+  return { ...token, accessToken };
 }
 
 function shouldRefreshPlatformAccessToken(accessToken) {
@@ -196,38 +174,6 @@ function shouldRefreshPlatformAccessToken(accessToken) {
   if (!expiresAtSeconds) return false;
   const nowSeconds = Math.floor(Date.now() / 1000);
   return expiresAtSeconds <= nowSeconds + PLATFORM_TOKEN_REFRESH_SKEW_SECONDS;
-}
-
-async function refreshPlatformTokens(platformBaseUrl, refreshToken) {
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-    client_id: PLATFORM_OAUTH_CLIENT_ID
-  });
-  const response = await fetch(`${platformBaseUrl}/oauth/token`, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/x-www-form-urlencoded"
-    },
-    body,
-    signal: AbortSignal.timeout(PLATFORM_REQUEST_TIMEOUT_MS)
-  });
-  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
-  if (!response.ok || !contentType.includes("application/json")) {
-    const error = new Error(`锐捷 Codex 登录令牌刷新失败：HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
-  }
-  const data = await response.json();
-  if (!tokenString(data?.access_token)) {
-    throw new Error("锐捷 Codex 登录令牌刷新响应无效");
-  }
-  return data;
-}
-
-function tokenString(value) {
-  return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
 function jwtExpiresAtSeconds(token) {
@@ -248,6 +194,10 @@ function base64UrlToBase64(value) {
   return normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
 }
 
+function tokenString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
 function writeJsonAtomic(filePath, value) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
@@ -258,31 +208,136 @@ function writeJsonAtomic(filePath, value) {
   } catch {}
 }
 
-async function requestPlatformJson(url, headers) {
+function readPlatformAuthTokens(codexHome) {
+  const resolvedCodexHome = path.resolve(codexHome);
+  const defaultRuizhiHome = path.resolve(os.homedir(), ".ruizhi");
+  const fallbackHome = process.env.RUIZHI_PLATFORM_AUTH_FALLBACK_HOME
+    ? path.resolve(process.env.RUIZHI_PLATFORM_AUTH_FALLBACK_HOME)
+    : resolvedCodexHome === defaultRuizhiHome
+      ? path.resolve(os.homedir(), ".codex")
+      : "";
+  const candidates = [
+    path.join(resolvedCodexHome, "auth.json"),
+    fallbackHome ? path.join(fallbackHome, "auth.json") : ""
+  ];
+  const seen = new Set();
+  const tokens = [];
+  for (const authPath of candidates) {
+    if (!authPath) continue;
+    const normalizedPath = path.resolve(authPath);
+    if (seen.has(normalizedPath) || !fs.existsSync(normalizedPath)) continue;
+    seen.add(normalizedPath);
+    const auth = JSON.parse(fs.readFileSync(normalizedPath, "utf8"));
+    const apiKey = tokenString(auth?.OPENAI_API_KEY);
+    const oauthToken = tokenString(auth?.tokens?.access_token);
+    const refreshToken = tokenString(auth?.tokens?.refresh_token);
+    if (apiKey) tokens.push({ accessToken: apiKey, refreshToken: "", source: normalizedPath, kind: "api_key" });
+    if (oauthToken) tokens.push({ accessToken: oauthToken, refreshToken, source: normalizedPath, kind: "oauth" });
+  }
+  return tokens.find((candidate) => candidate.kind === "api_key") ?? tokens[0] ?? { accessToken: "", refreshToken: "", source: "", kind: "none" };
+}
+
+async function requestPlatformBillingPair(platformBaseUrl, accessToken) {
+  const headers = { authorization: `Bearer ${accessToken}` };
+  return Promise.all([
+    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/usage`, headers),
+    requestPlatformJson(`${platformBaseUrl}/v1/dashboard/billing/subscription`, headers)
+  ]);
+}
+
+function isUnauthorizedPlatformError(error) {
+  return /HTTP 401/.test(String(error?.message || error));
+}
+
+async function refreshPlatformAccessToken(codexHome, platformBaseUrl, refreshToken, authPath = path.join(codexHome, "auth.json")) {
+  const response = await requestPlatformJson(`${platformBaseUrl}/oauth/token`, {
+    "content-type": "application/x-www-form-urlencoded"
+  }, new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: PLATFORM_OAUTH_CLIENT_ID
+  }).toString());
+  const nextAccessToken = typeof response?.access_token === "string" ? response.access_token.trim() : "";
+  if (!nextAccessToken) throw new Error("Platform token refresh response did not include an access token");
+  const auth = fs.existsSync(authPath) ? JSON.parse(fs.readFileSync(authPath, "utf8")) : {};
+  auth.tokens = {
+    ...(auth.tokens && typeof auth.tokens === "object" ? auth.tokens : {}),
+    ...response,
+    access_token: nextAccessToken,
+    refresh_token: typeof response?.refresh_token === "string" && response.refresh_token.trim()
+      ? response.refresh_token.trim()
+      : refreshToken
+  };
+  auth.last_refresh = new Date().toISOString();
+  writeJsonAtomic(authPath, auth);
+  return nextAccessToken;
+}
+
+async function requestPlatformJson(url, headers, body) {
+  try {
+    if (typeof fetch === "function") {
+      return await requestPlatformJsonWithFetch(url, headers, body);
+    }
+    return await requestPlatformJsonWithNodeHttp(url, headers, body);
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`Platform usage request timed out: ${url}`);
+    }
+    if (error instanceof TypeError && String(error.message || "").includes("fetch failed")) {
+      throw new Error(`Platform usage request failed: ${url}`);
+    }
+    throw error;
+  }
+}
+
+async function requestPlatformJsonWithFetch(url, headers, body) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PLATFORM_REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(url, { headers, signal: controller.signal });
+    const response = await fetch(url, { method: body == null ? "GET" : "POST", headers, body, signal: controller.signal });
     const contentType = String(response.headers.get("content-type") || "").toLowerCase();
     if (!response.ok || !contentType.includes("application/json")) {
-      const error = new Error(`模型平台用量接口异常：HTTP ${response.status}`);
+      const error = new Error(`Platform usage endpoint returned HTTP ${response.status}`);
       error.status = response.status;
       throw error;
     }
     return await response.json();
-  } catch (error) {
-    if (error?.name === "AbortError") {
-      throw new Error(`模型平台用量接口超时：${url}`);
-    }
-    if (error instanceof TypeError && String(error.message || "").includes("fetch failed")) {
-      throw new Error(`模型平台用量接口网络失败：${url}`);
-    }
-    throw error;
   } finally {
     clearTimeout(timeout);
   }
 }
 
+function requestPlatformJsonWithNodeHttp(url, headers, body) {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const client = parsed.protocol === "https:" ? https : http;
+    const request = client.request(parsed, { method: body == null ? "GET" : "POST", headers, timeout: PLATFORM_REQUEST_TIMEOUT_MS }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const statusCode = response.statusCode || 0;
+        const contentType = String(response.headers["content-type"] || "").toLowerCase();
+        const body = Buffer.concat(chunks).toString("utf8");
+        if (statusCode < 200 || statusCode >= 300 || !contentType.includes("application/json")) {
+          reject(new Error(`Platform usage endpoint returned HTTP ${statusCode}`));
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (error) {
+          reject(new Error(`Platform usage endpoint returned invalid JSON: ${error?.message || error}`));
+        }
+      });
+    });
+    request.on("timeout", () => {
+      request.destroy(new Error(`Platform usage request timed out: ${url}`));
+    });
+    request.on("error", (error) => {
+      reject(new Error(`Platform usage request failed: ${url}: ${error?.message || error}`));
+    });
+    request.end(body || undefined);
+  });
+}
 function finiteNonNegativeNumber(value, label) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) throw new Error(`${label}无效`);

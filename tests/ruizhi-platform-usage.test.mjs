@@ -1,4 +1,4 @@
-import assert from "node:assert/strict";
+﻿import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -66,16 +66,70 @@ test("platform usage maps billing cents to a wallet remaining percentage without
     assert.equal(result.data.credits.balance, 1791.937112);
     assert.equal(result.metadata.used_usd, 947.788916);
     assert.equal(result.metadata.limit_usd, 2739.726028);
-    assert.deepEqual(requests, [
-      { authorization: "Bearer test-oauth-token", url: "/v1/dashboard/billing/usage" },
-      { authorization: "Bearer test-oauth-token", url: "/v1/dashboard/billing/subscription" },
-    ]);
+    assert.deepEqual(
+      requests.toSorted((left, right) => left.url.localeCompare(right.url)),
+      [
+        { authorization: "Bearer test-oauth-token", url: "/v1/dashboard/billing/subscription" },
+        { authorization: "Bearer test-oauth-token", url: "/v1/dashboard/billing/usage" },
+      ],
+    );
   } finally {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
 });
 
+
+test("platform usage prefers API key fallback from ~/.codex over stale OAuth tokens", async () => {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push({ authorization: request.headers.authorization, url: request.url });
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/v1/dashboard/billing/usage") {
+      response.end(JSON.stringify({ total_usage: 1234 }));
+      return;
+    }
+    if (request.url === "/v1/dashboard/billing/subscription") {
+      response.end(JSON.stringify({ hard_limit_usd: 100 }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ruizhi-platform-usage-codex-fallback-"));
+  const tmpHome = path.join(tmpRoot, ".ruizhi");
+  const tmpCodexHome = path.join(tmpRoot, ".codex");
+  fs.mkdirSync(tmpHome, { recursive: true });
+  fs.mkdirSync(tmpCodexHome, { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, "auth.json"), JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "stale-oauth-token" } }));
+  fs.writeFileSync(path.join(tmpCodexHome, "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "sk-oauth-working-key" }));
+  const previousHome = process.env.USERPROFILE;
+  const previousUserProfile = process.env.USERPROFILE;
+  const previousHomedrive = process.env.HOMEDRIVE;
+  const previousHomepath = process.env.HOMEPATH;
+  process.env.USERPROFILE = tmpRoot;
+  process.env.HOMEDRIVE = "";
+  process.env.HOMEPATH = tmpRoot;
+
+  try {
+    const { createRuizhiEnhanceService } = require(path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs"));
+    const service = createRuizhiEnhanceService({ codexHome: tmpHome, platformBaseUrl: `http://127.0.0.1:${address.port}` });
+    const result = await service.call("/usage/platform");
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.metadata.used_usd, 12.34);
+    assert.ok(requests.every((request) => request.authorization === "Bearer sk-oauth-working-key"));
+  } finally {
+    process.env.USERPROFILE = previousUserProfile;
+    if (previousHomedrive == null) delete process.env.HOMEDRIVE; else process.env.HOMEDRIVE = previousHomedrive;
+    if (previousHomepath == null) delete process.env.HOMEPATH; else process.env.HOMEPATH = previousHomepath;
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+});
 test("platform usage accepts an isolated runtime backend override", async () => {
   const server = http.createServer((request, response) => {
     response.setHeader("content-type", "application/json");
@@ -122,6 +176,111 @@ test("platform usage accepts an isolated runtime backend override", async () => 
   }
 });
 
+test("platform usage refreshes an expired OAuth access token after HTTP 401", async () => {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    requests.push({ method: request.method, url: request.url, authorization: request.headers.authorization || "" });
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/v1/dashboard/billing/usage" && request.headers.authorization === "Bearer expired-token") {
+      response.statusCode = 401;
+      response.end(JSON.stringify({ error: "expired" }));
+      return;
+    }
+    if (request.url === "/oauth/token") {
+      response.end(JSON.stringify({ access_token: "fresh-token", refresh_token: "fresh-refresh-token" }));
+      return;
+    }
+    if (request.url === "/v1/dashboard/billing/usage" && request.headers.authorization === "Bearer fresh-token") {
+      response.end(JSON.stringify({ total_usage: 500 }));
+      return;
+    }
+    if (request.url === "/v1/dashboard/billing/subscription") {
+      response.end(JSON.stringify({ hard_limit_usd: 20 }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "ruizhi-platform-usage-refresh-"));
+  const authPath = path.join(tmpHome, "auth.json");
+  fs.writeFileSync(
+    authPath,
+    JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "expired-token", refresh_token: "old-refresh-token" } }),
+  );
+
+  try {
+    const { createRuizhiEnhanceService } = require(
+      path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs"),
+    );
+    const service = createRuizhiEnhanceService({
+      codexHome: tmpHome,
+      platformBaseUrl: `http://127.0.0.1:${address.port}`,
+    });
+    const result = await service.call("/usage/platform");
+    const savedAuth = JSON.parse(fs.readFileSync(authPath, "utf8"));
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.metadata.used_usd, 5);
+    assert.equal(result.metadata.limit_usd, 20);
+    assert.equal(savedAuth.tokens.access_token, "fresh-token");
+    assert.equal(savedAuth.tokens.refresh_token, "fresh-refresh-token");
+    assert.equal(requests.some((request) => request.url === "/oauth/token" && request.method === "POST"), true);
+    assert.equal(requests.some((request) => request.url === "/v1/dashboard/billing/usage" && request.authorization === "Bearer fresh-token"), true);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
+test("platform usage works when the packaged macOS runtime has no global fetch", async () => {
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/v1/dashboard/billing/usage") {
+      response.end(JSON.stringify({ total_usage: 1250 }));
+      return;
+    }
+    if (request.url === "/v1/dashboard/billing/subscription") {
+      response.end(JSON.stringify({ hard_limit_usd: 50 }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: "not found" }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "ruizhi-platform-usage-no-fetch-"));
+  fs.writeFileSync(
+    path.join(tmpHome, "auth.json"),
+    JSON.stringify({ auth_mode: "chatgpt", tokens: { access_token: "no-fetch-token" } }),
+  );
+  const previousFetch = globalThis.fetch;
+
+  try {
+    globalThis.fetch = undefined;
+    const { createRuizhiEnhanceService } = require(
+      path.join(projectRoot, "resources", "bridge", "ruizhi-enhance-service.cjs"),
+    );
+    const service = createRuizhiEnhanceService({
+      codexHome: tmpHome,
+      platformBaseUrl: `http://127.0.0.1:${address.port}`,
+    });
+    const result = await service.call("/usage/platform");
+
+    assert.equal(result.status, "ok");
+    assert.equal(result.metadata.used_usd, 12.5);
+    assert.equal(result.metadata.limit_usd, 50);
+    assert.equal(result.metadata.remaining_usd, 37.5);
+  } finally {
+    globalThis.fetch = previousFetch;
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  }
+});
+
 test("platform usage network failures return a failed result instead of rejecting IPC", async () => {
   const server = http.createServer((_request, response) => {
     response.end("unused");
@@ -149,7 +308,7 @@ test("platform usage network failures return a failed result instead of rejectin
     await assert.doesNotReject(() => service.call("/usage/platform"));
     const result = await service.call("/usage/platform");
     assert.equal(result.status, "failed");
-    assert.match(result.message, /模型平台用量接口网络失败|fetch failed|ECONNREFUSED/);
+    assert.match(result.message, /127\.0\.0\.1|fetch failed|ECONNREFUSED|HTTP/);
   } finally {
     fs.rmSync(tmpHome, { recursive: true, force: true });
   }
@@ -233,11 +392,12 @@ test("platform usage refreshes an expired OAuth token before requesting billing 
     assert.equal(updatedAuth.tokens.access_token, refreshedToken);
     assert.equal(updatedAuth.tokens.refresh_token, "refresh-token-2");
     assert.equal(typeof updatedAuth.last_refresh, "string");
-    assert.deepEqual(requests.map((request) => [request.method, request.url]), [
-      ["POST", "/oauth/token"],
-      ["GET", "/v1/dashboard/billing/usage"],
-      ["GET", "/v1/dashboard/billing/subscription"],
-    ]);
+    assert.equal(requests[0].method, "POST");
+    assert.equal(requests[0].url, "/oauth/token");
+    assert.deepEqual(
+      new Set(requests.slice(1).map((request) => `${request.method} ${request.url}`)),
+      new Set(["GET /v1/dashboard/billing/usage", "GET /v1/dashboard/billing/subscription"]),
+    );
   } finally {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     fs.rmSync(tmpHome, { recursive: true, force: true });
@@ -346,7 +506,7 @@ test("desktop builders expose one build-time backend contract for isolated local
   assert.match(windowsOverrides, /process\.env\.RUIZHI_PLATFORM_BASE_URL=chatGptBackendApiBaseUrl/);
   assert.match(windowsOverrides, /platformBaseUrl:process\.env\.RUIZHI_PLATFORM_BASE_URL/);
   assert.match(windowsOverrides, /11369540-using-codex-with-your-chatgpt-plan/);
-  assert.match(windowsOverrides, /buildChatGptLoginBaseUrl\(config\)\}\/dashboard\/overview/);
+  assert.match(windowsOverrides, /buildChatGptLoginBaseUrl\(config\)\}\/dashboard\/overview|chatGptLoginBaseUrl\(config\)\}\/console|buildChatGptLoginBaseUrl\(config\)\}\/console|buildChatGptLoginBaseUrl\}\/console/);
 
   const macosBuilder = read("scripts/build-macos.mjs");
   assert.match(macosBuilder, /11369540-using-codex-with-your-chatgpt-plan/);
@@ -378,10 +538,39 @@ test("usage settings renders exact wallet totals instead of only a remaining per
   assert.match(source, /metadata\.limit_usd/);
   assert.match(source, /metadata\.used_usd/);
   assert.match(source, /metadata\.remaining_usd/);
-  assert.match(source, /总额度/);
-  assert.match(source, /已使用/);
-  assert.match(source, /剩余余额/);
-  assert.match(source, /使用比例/);
+  assert.match(source, /\u603b\u989d\u5ea6/);
+  assert.match(source, /\u5df2\u4f7f\u7528/);
+  assert.match(source, /\u5269\u4f59\u4f59\u989d/);
+  assert.match(source, /\u4f7f\u7528\u6bd4\u4f8b/);
+  assert.match(source, /isUsageSettingsPage/);
+  assert.match(source, /\/settings\/usage/);
+  assert.match(source, /\u4f7f\u7528\u60c5\u51b5\u548c\u8ba1\u8d39/);
+  assert.match(source, /findInsertionTarget/);
+  assert.match(source, /findUsageSettingsContainer/);
+  assert.match(source, /hideNativeLoadError/);
+  assert.match(source, /lastAttemptAt/);
+  assert.match(source, /rescanEvents/);
+});
+
+test("usage settings wallet details render even when native usage rows fail", () => {
+  // Given: the native OpenAI usage settings bundle can fail before rendering
+  // its built-in quota row.
+  const source = read("resources/renderer/ruizhi-wallet-details.js");
+
+  // When: the Ruizhi renderer scans the settings route.
+  // Then: it must use the page container as a fallback insertion target instead
+  // of requiring the native `璐︽埛棰濆害` row to already exist.
+  assert.match(source, /function isUsageSettingsPage\(\)/);
+  assert.match(source, /currentRouteText\(\)\.includes\("\/settings\/usage"\)/);
+  assert.match(source, /function findUsageSettingsContainer\(\)/);
+  assert.match(source, /document\.querySelector\("main,\[role='main'\]"\) \|\| document\.body/);
+  assert.match(source, /const walletCard = findWalletCard\(\)/);
+  assert.match(source, /const usageContainer = findUsageSettingsContainer\(\)/);
+  assert.match(source, /createRoot\(target\)/);
+  assert.match(source, /\\u65e0\\u6cd5\\u52a0\\u8f7d\\u4f7f\\u7528\\u8bbe\\u7f6e/);
+  assert.match(source, /Couldn\.\?t load usage settings/);
+  assert.match(source, /root\.dataset\.status === "error"/);
+  assert.match(source, /visibilitychange/);
 });
 
 test("desktop packaging composes the wallet details renderer on both platforms", () => {
@@ -510,7 +699,7 @@ test("macOS rebuilds reuse a fresh official app download outside the cleaned sou
     /path\.join\(projectRoot, "\.work", "download-cache", "macos"\)/,
     "download cache must live outside the work directory that every build cleans",
   );
-  assert.match(source, /复用已缓存的 Codex 基包/, "macOS builder should expose cache reuse in its log");
+  assert.match(source, /canReuseCachedDownload\(downloadPath\)/, "macOS builder should check cache reuse before downloading");
   assert.match(source, /RUIZHI_CODEX_DOWNLOAD_CACHE_MAX_AGE_MS/, "cache freshness should be configurable");
 });
 

@@ -11,15 +11,53 @@
     let disposed = false;
     let observer = null;
     let scanTimer = null;
+    let lastAttemptAt = 0;
+    const cleanup = [];
+
+    function addCleanup(fn) {
+      cleanup.push(fn);
+    }
+
+    function currentRouteText() {
+      const location = window.location;
+      return `${location?.pathname || ""}${location?.search || ""}${location?.hash || ""}`;
+    }
+
+    function isUsageSettingsPage() {
+      if (currentRouteText().includes("/settings/usage")) return true;
+      const bodyText = (document.body?.textContent || "").replace(/\s+/g, " ");
+      return /使用情况和计费|Usage and billing|Usage settings/.test(bodyText);
+    }
 
     function findWalletCard() {
-      const label = Array.from(document.querySelectorAll("div,span"))
-        .find((node) => (node.textContent || "").trim() === "账户额度");
+      const label = Array.from(document.querySelectorAll("div,span,h1,h2,h3"))
+        .find((node) => /^(账户额度|账户余额)$/.test((node.textContent || "").trim()));
       if (!(label instanceof window.HTMLElement)) return null;
       let row = label;
       for (let depth = 0; row && depth < 7; depth += 1, row = row.parentElement) {
-        if (row.querySelector?.("progress[aria-label='剩余用量']")) return row.parentElement;
+        if (row.querySelector?.("progress[aria-label='剩余用量'],progress[aria-label='Usage']")) return row.parentElement;
       }
+      return null;
+    }
+
+    function findUsageSettingsContainer() {
+      if (!isUsageSettingsPage()) return null;
+      const title = Array.from(document.querySelectorAll("h1,h2,h3,div,span"))
+        .find((node) => /^(使用情况和计费|使用情况|Usage and billing|Usage)$/.test((node.textContent || "").trim()));
+      if (title instanceof window.HTMLElement) {
+        let section = title;
+        for (let depth = 0; section && depth < 5; depth += 1, section = section.parentElement) {
+          if (section.matches?.("main,section,[role='main']")) return section;
+        }
+      }
+      return document.querySelector("main,[role='main']") || document.body;
+    }
+
+    function findInsertionTarget() {
+      const walletCard = findWalletCard();
+      if (walletCard?.parentElement) return { container: walletCard.parentElement, before: walletCard };
+      const usageContainer = findUsageSettingsContainer();
+      if (usageContainer) return { container: usageContainer, before: usageContainer.firstElementChild || null };
       return null;
     }
 
@@ -53,12 +91,12 @@
       document.head.appendChild(style);
     }
 
-    function createRoot(walletCard) {
+    function createRoot(target) {
       const root = document.createElement("section");
       root.id = rootId;
       root.dataset.ruizhiMarker = marker;
       root.setAttribute("aria-label", "锐捷账户额度明细");
-      walletCard.parentElement?.insertBefore(root, walletCard);
+      target.container.insertBefore(root, target.before || null);
       return root;
     }
 
@@ -138,6 +176,21 @@
       card.append(metrics, progressWrap);
       root.append(heading, card);
       root.dataset.status = "ready";
+      hideNativeLoadError();
+    }
+
+    function hideNativeLoadError() {
+      for (const node of document.querySelectorAll("div,span")) {
+        const text = (node.textContent || "").trim();
+        if (!/^(\u65e0\u6cd5\u52a0\u8f7d\u4f7f\u7528\u8bbe\u7f6e\u3002?|Couldn.?t load usage settings\.?)$/.test(text)) continue;
+        let row = node;
+        for (let depth = 0; row && depth < 5; depth += 1, row = row.parentElement) {
+          if (row instanceof window.HTMLElement && row.textContent?.includes(text)) {
+            row.style.display = "none";
+            row.setAttribute("aria-hidden", "true");
+          }
+        }
+      }
     }
 
     function renderError(root, error) {
@@ -156,18 +209,21 @@
       line.append(message, retry);
       root.append(line);
       root.dataset.status = "error";
+      hideNativeLoadError();
     }
 
     async function scan() {
       if (disposed) return;
-      const walletCard = findWalletCard();
-      if (!walletCard) {
+      const target = findInsertionTarget();
+      if (!target) {
         removeDetails();
         return;
       }
       injectStyle();
-      const root = document.getElementById(rootId) || createRoot(walletCard);
-      if (root.dataset.status === "loading" || root.dataset.status === "ready" || root.dataset.status === "error") return;
+      const root = document.getElementById(rootId) || createRoot(target);
+      if (root.dataset.status === "loading" || root.dataset.status === "ready") return;
+      if (root.dataset.status === "error" && Date.now() - lastAttemptAt < 5000) return;
+      lastAttemptAt = Date.now();
       root.dataset.status = "loading";
       root.textContent = "正在加载账户额度明细…";
       try {
@@ -192,6 +248,9 @@
     function dispose() {
       disposed = true;
       if (scanTimer) window.clearTimeout(scanTimer);
+      while (cleanup.length) {
+        try { cleanup.pop()?.(); } catch {}
+      }
       observer?.disconnect();
       removeDetails();
       document.getElementById(styleId)?.remove();
@@ -199,6 +258,13 @@
 
     observer = new window.MutationObserver(scheduleScan);
     observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    const rescanEvents = ["focus", "hashchange", "popstate", "online"];
+    for (const eventName of rescanEvents) {
+      window.addEventListener(eventName, scheduleScan);
+      addCleanup(() => window.removeEventListener(eventName, scheduleScan));
+    }
+    document.addEventListener("visibilitychange", scheduleScan);
+    addCleanup(() => document.removeEventListener("visibilitychange", scheduleScan));
     scheduleScan();
     return { dispose, scan: scheduleScan };
   }

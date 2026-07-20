@@ -3782,9 +3782,12 @@ function ruijieProviderBootstrapBlock() {
       lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
       return joinTomlLines(lines);
     }
+    function tomlValue(line){const raw=String(line??"");const equals=raw.indexOf("=");if(equals<0)return "";const value=raw.slice(equals+1).trim();const quoteCode=value.charCodeAt(0);if(quoteCode===34||quoteCode===39){const quote=value[0];const end=value.indexOf(quote,1);if(end>0)return value.slice(1,end).trim();}try{const parsed=JSON.parse(value);return typeof parsed==="string"?parsed.trim():"";}catch{return value.split("#")[0].trim();}}
+    function syncRuijieUniApiKeyEnvFromConfig(source){const lines=tomlLines(source);const table=findTomlTable(lines,"[model_providers.ruijie-uniapi]");if(!table)return;for(let index=table.start+1;index<table.end;index+=1){if(tomlKey(lines[index])==="api_key"){const key=tomlValue(lines[index]);if(key)process.env.RUIJIE_UNIAPI_KEY=key;return;}}}
     function syncRuijieProviderConfig(){
       const configPath=path.join(codexHome,"config.toml");
       const existing=fs.existsSync(configPath)?fs.readFileSync(configPath,"utf8"):"";
+      syncRuijieUniApiKeyEnvFromConfig(existing);
       const withLoginBase=insertTopLevelTomlKeyIfMissing(existing,"chatgpt_login_base_url",chatGptBackendApiBaseUrl);
       const next=patchRuijieProviderConfig(withLoginBase);
       if(next!==existing){fs.mkdirSync(path.dirname(configPath),{recursive:true});fs.writeFileSync(configPath,next,"utf8");}

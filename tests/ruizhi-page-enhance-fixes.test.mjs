@@ -320,6 +320,22 @@ test("bootstrap only applies narrow managed config.toml updates", () => {
   }
 });
 
+test("bootstrap exposes ruijie provider api_key as RUIJIE_UNIAPI_KEY", () => {
+  for (const scriptPath of [
+    "scripts/build-windows.mjs",
+    "scripts/build-macos.mjs",
+    "scripts/windows-asar-overrides.mjs",
+  ]) {
+    const source = read(scriptPath);
+    assert.match(source, /function syncRuijieUniApiKeyEnvFromConfig\(/, `${scriptPath} should bridge legacy provider api_key into the runtime env`);
+    assert.match(source, /process\.env\.RUIJIE_UNIAPI_KEY=key/, `${scriptPath} should expose provider api_key as RUIJIE_UNIAPI_KEY`);
+    assert.match(source, /findTomlTable\(lines,"\[model_providers\.ruijie-uniapi\]"\)/, `${scriptPath} should read only the Ruizhi provider table`);
+    assert.match(source, /tomlKey\(lines\[index\]\)==="api_key"/, `${scriptPath} should read the provider api_key field`);
+    assert.match(source, /quoteCode===34\|\|quoteCode===39/, `${scriptPath} should avoid fragile nested quote literals in bootstrap templates`);
+    assert.doesNotMatch(source, /quote==="\\?\""/, `${scriptPath} should not generate invalid quote comparison syntax`);
+  }
+});
+
 test("page enhance preload loads the renderer module without CSP-blocked eval or inline script injection", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",

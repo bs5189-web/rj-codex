@@ -24,9 +24,7 @@
     }
 
     function isUsageSettingsPage() {
-      if (currentRouteText().includes("/settings/usage")) return true;
-      const bodyText = (document.body?.textContent || "").replace(/\s+/g, " ");
-      return /使用情况和计费|Usage and billing|Usage settings/.test(bodyText);
+      return currentRouteText().includes("/settings/usage");
     }
 
     function findWalletCard() {
@@ -54,6 +52,7 @@
     }
 
     function findInsertionTarget() {
+      if (!isUsageSettingsPage()) return null;
       const walletCard = findWalletCard();
       if (walletCard?.parentElement) return { container: walletCard.parentElement, before: walletCard };
       const usageContainer = findUsageSettingsContainer();
@@ -194,6 +193,10 @@
     }
 
     function renderError(root, error) {
+      if (root.dataset.status === "ready") {
+        hideNativeLoadError();
+        return;
+      }
       root.replaceChildren();
       const line = document.createElement("div");
       line.className = "ruizhi-wallet-error";
@@ -221,11 +224,19 @@
       }
       injectStyle();
       const root = document.getElementById(rootId) || createRoot(target);
+      if (root.dataset.status === "error" && findWalletCard()) {
+        removeDetails();
+        hideNativeLoadError();
+        return;
+      }
       if (root.dataset.status === "loading" || root.dataset.status === "ready") return;
       if (root.dataset.status === "error" && Date.now() - lastAttemptAt < 5000) return;
       lastAttemptAt = Date.now();
-      root.dataset.status = "loading";
-      root.textContent = "正在加载账户额度明细…";
+      const previousStatus = root.dataset.status;
+      if (previousStatus !== "ready") {
+        root.dataset.status = "loading";
+        root.textContent = "正在加载账户额度明细…";
+      }
       try {
         const bridge = window.ruizhiDesktop?.enhance;
         if (!bridge || typeof bridge.call !== "function") throw new Error("额度服务不可用");
@@ -233,7 +244,15 @@
         if (result?.status !== "ok" || !result.metadata) throw new Error(result?.message || "额度数据无效");
         if (!disposed && root.isConnected) renderDetails(root, result.metadata);
       } catch (error) {
-        if (!disposed && root.isConnected) renderError(root, error);
+        if (!disposed && root.isConnected) {
+          root.dataset.status = previousStatus;
+          if (findWalletCard()) {
+            removeDetails();
+            hideNativeLoadError();
+            return;
+          }
+          renderError(root, error);
+        }
       }
     }
 

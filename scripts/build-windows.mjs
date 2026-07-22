@@ -16,6 +16,7 @@ import {
   patchWindowsHelpDocumentationLinks,
   patchOpenAIBundledPluginDescriptions,
   patchBrowserNativePipeDiagnostics,
+  patchBrowserNativePipePeerAuthorization,
   patchBrowserUseIabOpenStability,
   patchNativeKeymapBindingsFallbackSource,
   patchNativePluginAuthCompatibilitySource,
@@ -916,7 +917,7 @@ function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
     return source;
   }
 
-  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0,computerUse:!0,computerUseNodeRepl:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed,computerUse:e.computerUse,computerUseNodeRepl:e.computerUseNodeRepl},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed,computerUse:t.computerUse,computerUseNodeRepl:t.computerUseNodeRepl}}),t}";
   const nativeBrowserDesktopFeatureAvailabilityPattern = /function ([A-Za-z_$][\w$]*)\(e,\{buildFlavor:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.resolve\(\),env:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.env,platform:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.platform\}=\{\}\)\{let [\s\S]*?CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE[\s\S]*?return /;
   const availabilityMatch = source.match(nativeBrowserDesktopFeatureAvailabilityPattern);
   if (availabilityMatch) {
@@ -1818,6 +1819,16 @@ function ruizhiInit(){
       const match=trimmed.match(/^([A-Za-z0-9_.-]+)\\s*=/);
       return match?match[1]:null;
     }
+    function tomlStringArrayValue(line){
+      const raw=String(line??"");
+      const equals=raw.indexOf("=");
+      if(equals<0)return [];
+      const value=raw.slice(equals+1).split("#")[0].trim();
+      try{
+        const parsed=JSON.parse(value);
+        return Array.isArray(parsed)?parsed.map(item=>String(item)):[];
+      }catch{return [];}
+    }
     function findTomlTable(lines,header){
       let start=-1;
       for(let index=0;index<lines.length;index+=1){
@@ -1897,15 +1908,25 @@ function ruizhiInit(){
         lines.splice(insertAt,0,tomlKeyLine("base_url",ruijieProviderBaseUrl));
         end+=1;
       }
-      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return joinTomlLines(lines);
+      const requiredChatModelPrefixes=Array.isArray(ruijieChatModelPrefixes)?ruijieChatModelPrefixes.map(item=>String(item)):[];
+      if(requiredChatModelPrefixes.length===0)return joinTomlLines(lines);
       for(let index=start+1;index<end;index+=1){
-        if(tomlKey(lines[index])==="chat_model_prefixes")return joinTomlLines(lines);
+        if(tomlKey(lines[index])==="chat_model_prefixes"){
+          const next=tomlStringArrayValue(lines[index]);
+          const seen=new Set(next);
+          for(const prefix of requiredChatModelPrefixes){
+            if(!seen.has(prefix)){next.push(prefix);seen.add(prefix);}
+          }
+          const replacement="chat_model_prefixes = "+JSON.stringify(next);
+          if(lines[index]!==replacement)lines[index]=replacement;
+          return joinTomlLines(lines);
+        }
       }
       let insertAt=end;
       for(let index=start+1;index<end;index+=1){
         if(tomlKey(lines[index])==="wire_api"){insertAt=index;break;}
       }
-      lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
+      lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(requiredChatModelPrefixes));
       return joinTomlLines(lines);
     }
     function tomlValue(line){
@@ -3456,6 +3477,7 @@ function applyLegacyAsarPatches() {
   patchNativeBrowserDesktopFeatureAvailability();
   patchChatGptAuthExternalBrowser();
   patchBrowserNativePipeDiagnostics(extractedDir, { log });
+  patchBrowserNativePipePeerAuthorization(extractedDir, { log });
   patchBrowserUseIabOpenStability(extractedDir, { log });
   patchTrustedBrowserClientHashes(extractedDir, path.join(appOutRoot, "resources"), { log });
   if (brandingEnabled()) {

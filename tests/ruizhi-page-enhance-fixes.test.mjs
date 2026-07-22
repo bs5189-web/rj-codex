@@ -232,6 +232,19 @@ test("packaging patches onboarding continue button and build date badge", () => 
   }
 });
 
+test("windows packaging shows Browser and Computer Use settings as available", () => {
+  const source = read("scripts/windows-asar-overrides.mjs");
+
+  assert.match(source, /patchWindowsBrowserAndComputerUseSettingsAvailability/, "Windows should patch Browser and Computer Use settings availability bundles");
+  assert.match(source, /browser-use-settings-\.\*\\\.js/, "Windows should patch Browser Use settings chunks");
+  assert.match(source, /computer-use-settings-\.\*\\\.js/, "Windows should patch Computer Use settings chunks");
+  assert.match(source, /v=!0/, "Browser settings should show the main switch sections as enabled");
+  assert.match(source, /browser-use-unavailable/, "Browser settings should keep a visible local Browser row instead of falling into the empty state");
+  assert.match(source, /checked:!0,disabled:!1,onChange:Si/, "Unavailable plugin rows should render as enabled rather than greyed out");
+  assert.match(source, /chrome-unavailable/, "Computer Use settings should keep a visible local Chrome row instead of falling into the empty state");
+  assert.match(source, /if\(\(n\.available=!0\)&&C!=null\)/, "Computer Use settings should treat local desktop control as available");
+});
+
 test("packaging keeps RuiJie Work and renames the coding mode to RuiJie Coding", () => {
   for (const scriptPath of [
     "scripts/build-windows.mjs",
@@ -316,6 +329,9 @@ test("bootstrap only applies narrow managed config.toml updates", () => {
     assert.match(source, /tomlKeyLine\("base_url",ruijieProviderBaseUrl\)|base_url = /, `${scriptPath} should write the provider base URL`);
     assert.match(source, /ruijieProviderBaseUrl/, `${scriptPath} should use the configured provider base URL`);
     assert.match(source, /chat_model_prefixes = /, `${scriptPath} should write chat model prefixes when missing`);
+    assert.match(source, /function tomlStringArrayValue\(/, `${scriptPath} should parse existing chat model prefixes`);
+    assert.match(source, /requiredChatModelPrefixes/, `${scriptPath} should preserve and complete required chat model prefixes`);
+    assert.match(source, /!seen\.has\(prefix\)/, `${scriptPath} should append missing chat model prefixes instead of skipping existing config`);
     assert.match(source, /\[model_providers\.ruijie-uniapi\]/, `${scriptPath} should target only the Ruizhi UniAPI provider`);
   }
 });
@@ -802,9 +818,9 @@ test("packaging enables Codex native Browser desktop availability without Browse
     assert.match(source, /browserPane:!0/, `${scriptPath} should allow the native Browser pane`);
     assert.match(source, /inAppBrowserUse:!0/, `${scriptPath} should enable the native in-app Browser backend`);
     assert.match(source, /inAppBrowserUseAllowed:!0/, `${scriptPath} should allow in-app Browser use`);
-    assert.doesNotMatch(source, /ruizhiBrowserSettingsAvailability/, `${scriptPath} should not override Browser settings availability`);
+    assert.match(source, /computerUse:!0/, `${scriptPath} should enable Computer Use for the local desktop`);
+    assert.match(source, /computerUseNodeRepl:!0/, `${scriptPath} should enable Computer Use Node REPL support`);
     assert.doesNotMatch(source, /patchBrowserDesktopFeaturePayload/, `${scriptPath} should not patch Browser feature payloads`);
-    assert.doesNotMatch(source, /patchBrowserSettingsAvailabilitySource/, `${scriptPath} should not patch Browser settings availability`);
   }
 
   const buildDir = path.join(projectRoot, "overrides", "windows-app", "asar", ".vite", "build");
@@ -1016,6 +1032,13 @@ test("packaging logs Browser native-pipe availability boundaries", () => {
       : /ruizhiBrowserNativePipeEnabled/;
     assert.match(source, nativePipeLogger, `${scriptPath} should log Browser native pipe enable state`);
   }
+});
+
+test("windows packaging disables Browser native-pipe peer authorization like macOS", () => {
+  const source = read("scripts/build-windows.mjs");
+
+  assert.match(source, /patchBrowserNativePipePeerAuthorization/, "Windows build should import and run the Browser native-pipe peer authorization patch");
+  assert.match(source, /patchBrowserNativePipeDiagnostics\(extractedDir, \{ log \}\);\s*patchBrowserNativePipePeerAuthorization\(extractedDir, \{ log \}\);\s*patchBrowserUseIabOpenStability\(extractedDir, \{ log \}\);/s, "Windows build should apply peer authorization between native-pipe diagnostics and IAB stability patches");
 });
 
 test("bootstrap refreshes cached bundled Browser runtime scripts on launch", () => {

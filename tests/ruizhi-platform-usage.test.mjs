@@ -573,6 +573,21 @@ test("usage settings wallet details render even when native usage rows fail", ()
   assert.match(source, /visibilitychange/);
 });
 
+test("wallet details stay confined to the usage settings route", () => {
+  const source = read("resources/renderer/ruizhi-wallet-details.js");
+
+  assert.match(source, /function isUsageSettingsPage\(\)\s*\{\s*return currentRouteText\(\)\.includes\("\/settings\/usage"\);\s*\}/s);
+  assert.match(source, /function findInsertionTarget\(\)\s*\{\s*if \(!isUsageSettingsPage\(\)\) return null;/s);
+});
+
+test("usage settings wallet details hide stale errors once native rows render", () => {
+  const source = read("resources/renderer/ruizhi-wallet-details.js");
+
+  assert.match(source, /root\.dataset\.status === "error" && findWalletCard\(\)/);
+  assert.match(source, /removeDetails\(\);\s*hideNativeLoadError\(\);\s*return;/s);
+  assert.match(source, /root\.dataset\.status = previousStatus;\s*if \(findWalletCard\(\)\)/s);
+});
+
 test("desktop packaging composes the wallet details renderer on both platforms", () => {
   // Given: macOS, Windows, and imported Windows asar builds share one renderer source contract.
   for (const scriptPath of [

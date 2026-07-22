@@ -1137,7 +1137,7 @@ function patchNativeBrowserDesktopFeatureAvailabilitySource(source) {
     return source;
   }
 
-  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed}}),t}";
+  const helper = "function ruizhiBrowserNativePipeLog(e,t){try{console.info(`[ruizhi][browser] ${e}`,t)}catch{}}function ruizhiNativeBrowserDesktopFeatureAvailability(e){let t={...e,browserPane:!0,inAppBrowserUse:!0,inAppBrowserUseAllowed:!0,computerUse:!0,computerUseNodeRepl:!0};return ruizhiBrowserNativePipeLog(`desktopFeatureAvailability`,{before:{browserPane:e.browserPane,inAppBrowserUse:e.inAppBrowserUse,inAppBrowserUseAllowed:e.inAppBrowserUseAllowed,computerUse:e.computerUse,computerUseNodeRepl:e.computerUseNodeRepl},after:{browserPane:t.browserPane,inAppBrowserUse:t.inAppBrowserUse,inAppBrowserUseAllowed:t.inAppBrowserUseAllowed,computerUse:t.computerUse,computerUseNodeRepl:t.computerUseNodeRepl}}),t}";
   const nativeBrowserDesktopFeatureAvailabilityPattern = /function ([A-Za-z_$][\w$]*)\(e,\{buildFlavor:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.[A-Za-z_$][\w$]*\.resolve\(\),env:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.env,platform:[A-Za-z_$][\w$]*=[A-Za-z_$][\w$]*\.default\.platform\}=\{\}\)\{let [\s\S]*?CODEX_ELECTRON_ENABLE_WINDOWS_COMPUTER_USE[\s\S]*?return /;
   const availabilityMatch = source.match(nativeBrowserDesktopFeatureAvailabilityPattern);
   if (availabilityMatch) {
@@ -1279,6 +1279,45 @@ function patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, options =
   }
   fs.writeFileSync(mainFile[0], patched, "utf8");
   log(`已打开 Codex 原生 Browser 桌面能力：${path.basename(mainFile[0])}`);
+}
+
+
+function patchWindowsBrowserAndComputerUseSettingsAvailabilitySource(source, kind) {
+  let next = source;
+  if (kind === "browser") {
+    next = next.replace(/v=u\.enabled&&!u\.isLoading/, "v=!0");
+    next = next.replace(/E=o==null&&ta\(m\)\?\[\{description:\(0,\$\.jsx\)\(L,\{\.\.\.et\.restrictedAvailabilityDescription\}\),icon:\(0,\$\.jsx\)\(yn,\{className:`h-full w-full text-token-foreground`\}\),id:`browser-use-unavailable`,title:\(0,\$\.jsx\)\(L,\{\.\.\.et\.label\}\)\}\]:\[\]/, "E=o==null?[{description:(0,$.jsx)(L,{id:`settings.browserUse.control.description`,defaultMessage:`让 锐捷Codex 控制内置浏览器`,description:`Description for the Browser plugin control row`}),icon:(0,$.jsx)(yn,{className:`h-full w-full text-token-foreground`}),id:`browser-use-unavailable`,title:(0,$.jsx)(L,{...et.label})}]:[]");
+    next = next.replace(/checked:!1,disabled:!0,onChange:Si/, "checked:!0,disabled:!1,onChange:Si");
+    next = next.replace(/ text-sm opacity-60 max-sm:flex-wrap`/, " text-sm max-sm:flex-wrap`");
+  } else if (kind === "computer") {
+    next = next.replace(/R=T==null&&s&&!d\.isLoading&&!d\.allowed\?\[\{description:\(0,Z\.jsx\)\(S,\{\.\.\.ie\.restrictedAvailabilityDescription\}\),icon:\(0,Z\.jsx\)\(`img`,\{alt:``,className:`h-full w-full object-contain`,src:Ht\}\),id:`chrome-unavailable`,title:\(0,Z\.jsx\)\(S,\{\.\.\.Y\.googleChrome\}\)\}\]:\[\]/, "R=T==null?[{description:(0,Z.jsx)(Rt,{status:I}),icon:(0,Z.jsx)(`img`,{alt:``,className:`h-full w-full object-contain`,src:Ht}),id:`chrome-unavailable`,title:(0,Z.jsx)(S,{...Y.googleChrome})}]:[]");
+    next = next.replace(/if\(n\.available&&C!=null\)/, "if((n.available=!0)&&C!=null)");
+  }
+  return next;
+}
+
+function patchWindowsBrowserAndComputerUseSettingsAvailability(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const assetsDir = path.join(extractedAppDir, "webview", "assets");
+  const targets = [
+    { pattern: /^browser-use-settings-.*\.js$/, kind: "browser", label: "Browser Use settings" },
+    { pattern: /^computer-use-settings-.*\.js$/, kind: "computer", label: "Computer Use settings" }
+  ];
+  for (const target of targets) {
+    const files = walkFiles(assetsDir).filter((filePath) => target.pattern.test(path.basename(filePath)));
+    if (files.length === 0) {
+      throw new Error(`???????${target.label} bundle`);
+    }
+    let changed = 0;
+    for (const filePath of files) {
+      const didChange = writePatchedFile(filePath, (source) => patchWindowsBrowserAndComputerUseSettingsAvailabilitySource(source, target.kind));
+      if (didChange) changed += 1;
+    }
+    if (changed === 0) {
+      throw new Error(`???????${target.label} availability`);
+    }
+    log(`??? ${target.label} ????${changed}`);
+  }
 }
 
 export function patchChatGptAuthExternalBrowserSource(source) {
@@ -3773,6 +3812,7 @@ function ruijieProviderBootstrapBlock() {
     function tomlKeyLine(key,value){return key+" = "+JSON.stringify(String(value));}
     function isTomlHeader(line){const trimmed=String(line??"").trim();return trimmed.startsWith("[")&&trimmed.endsWith("]");}
     function tomlKey(line){const trimmed=String(line??"").trimStart();const match=trimmed.match(/^([A-Za-z0-9_.-]+)\\s*=/);return match?match[1]:null;}
+    function tomlStringArrayValue(line){const raw=String(line??"");const equals=raw.indexOf("=");if(equals<0)return [];const value=raw.slice(equals+1).split("#")[0].trim();try{const parsed=JSON.parse(value);return Array.isArray(parsed)?parsed.map(item=>String(item)):[];}catch{return [];}}
     function findTomlTable(lines,header){let start=-1;for(let index=0;index<lines.length;index+=1){if(String(lines[index]).trim()===header){start=index;break;}}if(start<0)return null;let end=lines.length;for(let index=start+1;index<lines.length;index+=1){if(isTomlHeader(lines[index])){end=index;break;}}return {start,end};}
     function insertTopLevelTomlKeyIfMissing(source,key,value){const lines=tomlLines(source);const next=tomlKeyLine(key,value);let firstTable=lines.length;for(let index=0;index<lines.length;index+=1){if(isTomlHeader(lines[index])){firstTable=index;break;}}for(let index=0;index<firstTable;index+=1){if(tomlKey(lines[index])===key){return joinTomlLines(lines);}}let insertAt=firstTable;while(insertAt>0&&String(lines[insertAt-1]).trim()==="")insertAt-=1;lines.splice(insertAt,0,next);return joinTomlLines(lines);}
     function patchRuijieProviderConfig(source){
@@ -3790,10 +3830,11 @@ function ruijieProviderBootstrapBlock() {
       let baseUrlPatched=false;
       for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])==="base_url"){const replacement=tomlKeyLine("base_url",ruijieProviderBaseUrl);if(lines[index]!==replacement)lines[index]=replacement;baseUrlPatched=true;break;}}
       if(!baseUrlPatched){let insertAt=end;for(let index=start+1;index<end;index+=1){const key=tomlKey(lines[index]);if(key==="api_key"||key==="env_key")insertAt=index+1;}lines.splice(insertAt,0,tomlKeyLine("base_url",ruijieProviderBaseUrl));end+=1;}
-      if(!Array.isArray(ruijieChatModelPrefixes)||ruijieChatModelPrefixes.length===0)return joinTomlLines(lines);
-      for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])==="chat_model_prefixes")return joinTomlLines(lines);}
+      const requiredChatModelPrefixes=Array.isArray(ruijieChatModelPrefixes)?ruijieChatModelPrefixes.map(item=>String(item)):[];
+      if(requiredChatModelPrefixes.length===0)return joinTomlLines(lines);
+      for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])==="chat_model_prefixes"){const next=tomlStringArrayValue(lines[index]);const seen=new Set(next);for(const prefix of requiredChatModelPrefixes){if(!seen.has(prefix)){next.push(prefix);seen.add(prefix);}}const replacement="chat_model_prefixes = "+JSON.stringify(next);if(lines[index]!==replacement)lines[index]=replacement;return joinTomlLines(lines);}}
       let insertAt=end;for(let index=start+1;index<end;index+=1){if(tomlKey(lines[index])==="wire_api"){insertAt=index;break;}}
-      lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(ruijieChatModelPrefixes.map(item=>String(item))));
+      lines.splice(insertAt,0,"chat_model_prefixes = "+JSON.stringify(requiredChatModelPrefixes));
       return joinTomlLines(lines);
     }
     function tomlValue(line){const raw=String(line??"");const equals=raw.indexOf("=");if(equals<0)return "";const value=raw.slice(equals+1).trim();const quoteCode=value.charCodeAt(0);if(quoteCode===34||quoteCode===39){const quote=value[0];const end=value.indexOf(quote,1);if(end>0)return value.slice(1,end).trim();}try{const parsed=JSON.parse(value);return typeof parsed==="string"?parsed.trim():"";}catch{return value.split("#")[0].trim();}}
@@ -4679,6 +4720,7 @@ export function refreshWindowsAsarBuildMetadata(extractedAppDir, config, appVers
     log("已跳过模型列表优化补丁");
   }
   patchNativeBrowserDesktopFeatureAvailability(extractedAppDir, { log });
+  patchWindowsBrowserAndComputerUseSettingsAvailability(extractedAppDir, { log });
   patchChatGptAuthExternalBrowser(extractedAppDir, { log });
   patchBrowserNativePipeDiagnostics(extractedAppDir, { log });
   patchBrowserNativePipePeerAuthorization(extractedAppDir, { log });

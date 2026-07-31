@@ -1081,6 +1081,9 @@ function replaceBrandInVisibleText(value) {
 }
 
 function replaceLocalizedVisibleText(id, value) {
+  if (id === "composer.codexAccessSplash.title") {
+    return `用${codingProductName()}将开发任务从想法推进到合并请求`;
+  }
   if (id === "sidebarElectron.productMode.chatGptWork") {
     return `<chatGpt>${shortProductName()}</chatGpt> <work>工作</work>`;
   }

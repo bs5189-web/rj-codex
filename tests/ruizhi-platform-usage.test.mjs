@@ -9,7 +9,11 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const { patchDesktopAuthAllowedUrlsSource, patchNativeKeymapBindingsFallbackSource } = await import("../scripts/windows-asar-overrides.mjs");
+const {
+  patchDesktopAuthAllowedUrlsSource,
+  patchNativeAccountPaymentMethodsFallbackSource,
+  patchNativeKeymapBindingsFallbackSource,
+} = await import("../scripts/windows-asar-overrides.mjs");
 
 function read(relativePath) {
   return fs.readFileSync(path.join(projectRoot, relativePath), "utf8");
@@ -622,14 +626,30 @@ test("wallet details remain available when optional page enhancements are disabl
 });
 
 test("desktop fetch trusts the configured OAuth/API host without weakening the default allowlist", () => {
-  const source = "isDesktopAuthAllowedUrl(e){let n=new URL(e).host.toLowerCase();return!!(n===`localhost`||n===`localhost:8000`||n===`openai.com`||n.endsWith(`.openai.com`))}";
+  const source = "performDesktopFetch({headers:t,resolvedUrl:s}){let u=n.Go(t),d=n.Ko(t),f=n.qo(t),p=mN(t,{inferAuth:this.shouldInferCodexApiAuth(s)}),m={},h={attachAuth:p.attachAuth,attachDesktopSurface:u,attachDeviceCheckToken:d,attachIntegrityState:f}}isDesktopAuthAllowedUrl(e){let n=new URL(e).host.toLowerCase();return!!(n===`localhost`||n===`localhost:8000`||n===`openai.com`||n.endsWith(`.openai.com`))}";
   const patched = patchDesktopAuthAllowedUrlsSource(source, "http://127.0.0.1:3300");
 
-  assert.match(patched, /n==="127\.0\.0\.1:3300"/);
+  assert.match(patched, /ruizhiRuntimeTrustedDesktopAuthHost/);
+  assert.match(patched, /ruizhiSkipDesktopAttestationForTrustedHost/);
+  assert.match(patched, /t==="127\.0\.0\.1:3300"/);
+  assert.match(patched, /RUIZHI_PLATFORM_BASE_URL/);
+  assert.match(patched, /RUIZHI_CHATGPT_LOGIN_BASE_URL/);
+  assert.match(patched, /RUIZHI_CHATGPT_BACKEND_API_BASE_URL/);
+  assert.match(patched, /CODEX_API_BASE_URL/);
+  assert.match(patched, /u=!1,d=!1,f=!1/);
   assert.match(patched, /n===`localhost`/);
   assert.match(patched, /n===`openai\.com`/);
   assert.match(patched, /ruizhiTrustedDesktopAuthHost:127\.0\.0\.1:3300/);
   assert.equal(patchDesktopAuthAllowedUrlsSource(patched, "http://127.0.0.1:3300"), patched);
+});
+
+test("account sidebar tolerates local account responses without payment methods", () => {
+  const source = "function Grc(){let w=account,T=w==null?void 0:w.payment_methods.length>0;return T}";
+  const patched = patchNativeAccountPaymentMethodsFallbackSource(source);
+
+  assert.match(patched, /Array\.isArray\(w\?\.payment_methods\)&&w\.payment_methods\.length>0/);
+  assert.match(patched, /ruizhiAccountPaymentMethodsFallback/);
+  assert.equal(patchNativeAccountPaymentMethodsFallbackSource(patched), patched);
 });
 
 test("packaging falls back when successful wham responses have incompatible shapes", () => {

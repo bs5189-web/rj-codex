@@ -519,6 +519,9 @@ function shouldPreserveCodexVisibleText(value, contextKey = "") {
 }
 
 function replaceBrandInVisibleText(value, config, contextKey = "") {
+  if (contextKey === "composer.codexAccessSplash.title") {
+    return `用${config.productModes?.coding ?? `${shortProductName(config)} \u7f16\u7801`}将开发任务从想法推进到合并请求`;
+  }
   const productName = config.productName ?? "锐捷Codex";
   const productPrefix = productName.replace(/Codex.*$/u, "").trim();
   const sourceValue = productPrefix
@@ -1433,15 +1436,31 @@ export function patchPluginSkillLocalListFallback(extractedAppDir, options = {})
 export function patchDesktopAuthAllowedUrlsSource(source, trustedBaseUrl) {
   const trustedHost = new URL(trustedBaseUrl).host.toLowerCase();
   const marker = `ruizhiTrustedDesktopAuthHost:${trustedHost}`;
-  if (source.includes(marker)) return source;
-  const pattern = /return!!\(([A-Za-z_$][\w$]*)===`localhost`\|\|\1===`localhost:8000`\|\|\1===`openai\.com`/;
-  if (!pattern.test(source)) {
-    throw new Error("补丁点不存在：桌面端自定义 OAuth/API 主机信任列表");
+  const runtimeMarker = "ruizhiRuntimeTrustedDesktopAuthHost";
+  const attestationMarker = "ruizhiSkipDesktopAttestationForTrustedHost";
+  let patched = source;
+  if (!patched.includes(marker) || !patched.includes(runtimeMarker)) {
+    const pattern = /return!!\(([A-Za-z_$][\w$]*)===`localhost`\|\|\1===`localhost:8000`\|\|\1===`openai\.com`/;
+    if (!pattern.test(patched)) {
+      throw new Error("补丁点不存在：桌面端自定义 OAuth/API 主机信任列表");
+    }
+    patched = patched.replace(
+      pattern,
+      `function ${runtimeMarker}(e){try{const t=String(e||"").toLowerCase();if(t===${JSON.stringify(trustedHost)})return!0;for(const e of [process.env.RUIZHI_PLATFORM_BASE_URL,process.env.RUIZHI_CHATGPT_LOGIN_BASE_URL,process.env.RUIZHI_CHATGPT_BACKEND_API_BASE_URL,process.env.CODEX_API_BASE_URL]){try{const n=new URL(String(e||""));if(n.host.toLowerCase()===t)return!0}catch{}}}catch{}return!1}return!!(${runtimeMarker}($1)/*${marker}*/||$1===\`localhost\`||$1===\`localhost:8000\`||$1===\`openai.com\``
+    );
   }
-  return source.replace(
-    pattern,
-    `return!!($1===${JSON.stringify(trustedHost)}/*${marker}*/||$1===\`localhost\`||$1===\`localhost:8000\`||$1===\`openai.com\``
-  );
+  if (!patched.includes(attestationMarker)) {
+    const attestationPattern = /let ([A-Za-z_$][\w$]*)=n\.Go\(t\),([A-Za-z_$][\w$]*)=n\.Ko\(t\),([A-Za-z_$][\w$]*)=n\.qo\(t\),([A-Za-z_$][\w$]*)=mN\(t,\{inferAuth:this\.shouldInferCodexApiAuth\(s\)\}\),([A-Za-z_$][\w$]*)=\{\},([A-Za-z_$][\w$]*)=\{/;
+    if (!attestationPattern.test(patched)) {
+      throw new Error("补丁点不存在：桌面端自定义 OAuth/API 主机跳过 attestation");
+    }
+    const attestationSource = `function ${attestationMarker}(e){try{const t=new URL(e).host.toLowerCase();if(t===\`openai.com\`||t.endsWith(\`.openai.com\`)||t===\`chatgpt.com\`||t.endsWith(\`.chatgpt.com\`))return!1;for(const e of [${JSON.stringify(trustedHost)},process.env.RUIZHI_PLATFORM_BASE_URL,process.env.RUIZHI_CHATGPT_LOGIN_BASE_URL,process.env.RUIZHI_CHATGPT_BACKEND_API_BASE_URL,process.env.CODEX_API_BASE_URL]){try{const n=typeof e===\`string\`&&e.includes(\`://\`)?new URL(e).host.toLowerCase():String(e||\`\`).toLowerCase();if(n&&n===t)return!0}catch{}}}catch{}return!1}`;
+    patched = patched.replace(
+      attestationPattern,
+      `let $1=n.Go(t),$2=n.Ko(t),$3=n.qo(t),$4=mN(t,{inferAuth:this.shouldInferCodexApiAuth(s)}),$5={};if(${attestationSource}(s))$1=!1,$2=!1,$3=!1;let $6={`
+    );
+  }
+  return patched;
 }
 
 export function patchDesktopAuthAllowedUrls(extractedAppDir, trustedBaseUrl, options = {}) {
@@ -1461,6 +1480,46 @@ export function patchDesktopAuthAllowedUrls(extractedAppDir, trustedBaseUrl, opt
   }
   fs.writeFileSync(mainFiles[0], patched, "utf8");
   log(`已将配置的 OAuth/API 主机加入桌面端信任列表：${new URL(trustedBaseUrl).host}`);
+}
+
+export function patchNativeAccountPaymentMethodsFallbackSource(source) {
+  const marker = "ruizhiAccountPaymentMethodsFallback";
+  if (source.includes(marker)) {
+    return source;
+  }
+  const paymentMethodsPattern = /([,;])([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)==null\?void 0:\3\.payment_methods\.length>0/g;
+  const patched = source.replace(
+    paymentMethodsPattern,
+    `$1$2=Array.isArray($3?.payment_methods)&&$3.payment_methods.length>0/*${marker}*/`
+  );
+  if (!patched.includes(marker)) {
+    throw new Error("Codex 账号 payment_methods 数组兜底补丁点不存在");
+  }
+  return patched;
+}
+
+export function patchNativeAccountPaymentMethodsFallback(extractedAppDir, options = {}) {
+  const log = options.log ?? (() => {});
+  const files = walkFiles(path.join(extractedAppDir, "webview", "assets"))
+    .filter((filePath) => /\.js$/i.test(filePath));
+  let patchedCount = 0;
+  const paymentMethodsPattern = /([,;])([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)==null\?void 0:\3\.payment_methods\.length>0/;
+  for (const filePath of files) {
+    const source = fs.readFileSync(filePath, "utf8");
+    if (!paymentMethodsPattern.test(source)) {
+      continue;
+    }
+    const patched = patchNativeAccountPaymentMethodsFallbackSource(source);
+    if (patched !== source) {
+      fs.writeFileSync(filePath, patched, "utf8");
+      patchedCount += 1;
+    }
+  }
+  if (patchedCount === 0) {
+    log("账号 payment_methods 数组兜底已存在或无需补丁");
+    return;
+  }
+  log(`已补丁账号 payment_methods 数组兜底：${patchedCount} 个前端 bundle`);
 }
 
 export function patchBrowserNativePipeDiagnosticsSource(source) {

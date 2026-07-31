@@ -1,6 +1,6 @@
 {
   "productName": "锐捷Codex",
-  "version": "0.3.1442",
+  "version": "0.3.1460",
   "locale": "zh-CN",
   "windows": {
     "sourceAppRoot": "vendor/codex-desktop/windows/current/app",

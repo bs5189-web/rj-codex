@@ -34,7 +34,7 @@ function compareVersions(left, right) {
 test("Windows release version advances past the pre-plugin-menu installer", () => {
   const config = JSON.parse(read("config/rj-codex.json"));
 
-  assert.equal(config.version, "0.3.144");
+  assert.equal(config.version, "0.3.1460");
   assert.ok(
     compareVersions(config.version, "0.2.2") > 0,
     "Windows installer version must advance so machines with the old 0.2.2 package receive the native Plugins menu patch",
@@ -193,6 +193,60 @@ test("first launch auth status remains available without patching the native log
   }
 });
 
+test("macOS preload refreshes stale Codex access gate after OAuth login", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /function installPostLoginAccessRefresh\(/);
+  assert.match(source, /ruizhi\.postLoginAccessRefresh\.v2\./);
+  assert.match(source, /ipcRenderer\.invoke\("ruizhi:auth:get"\)/);
+  assert.match(source, /status\?\.configured/);
+  assert.match(source, /if\(attempts>=8\)return false/);
+  assert.match(source, /sessionStorage\.setItem\(reloadKey,String\(attempts\+1\)\)/);
+  assert.match(source, /ruizhi:window:reload-ignoring-cache/);
+  assert.match(source, /event\.sender\.reloadIgnoringCache\(\)/);
+  assert.match(source, /catch\{\s*location\.reload\(\);\s*\}/);
+  assert.match(source, /You don\.\?t have access to \.\*Codex yet/);
+});
+
+test("macOS wrapper uses a non-conflicting default DevTools port", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /REMOTE_DEBUGGING_PORT="\\\$\{RUIZHI_REMOTE_DEBUGGING_PORT:-9223\}"/);
+  assert.match(source, /--remote-debugging-port=\$REMOTE_DEBUGGING_PORT/);
+});
+
+test("macOS packaging opens local coding mode for ChatGPT auth", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /localWorkAccessPattern/);
+  assert.match(source, /cloudWorkspaceAccessPattern/);
+  assert.match(source, /adminWorkModeEnabled:!0/);
+  assert.match(source, /whamLocalAccess:!0/);
+  assert.match(source, /hasWorkspaceEnabledCodex:!0/);
+  assert.match(source, /accountLookupFallbackPattern/);
+  assert.match(source, /accountAtomFallbackPattern/);
+  assert.match(source, /ruizhiChatGptAccountInfoFallback/);
+  assert.match(source, /ruizhiChatGptAccountAtomFallback/);
+  assert.match(source, /Codex 本地编码\/Work 访问/);
+});
+
+test("macOS packaging persists Work and coding product mode selection", () => {
+  const source = read("scripts/build-macos.mjs");
+
+  assert.match(source, /function patchNativeProductModeSelectionPersistence/);
+  assert.match(source, /modeResolverPattern/);
+  assert.match(source, /modeSelectPattern/);
+  assert.match(source, /detailModeSetterPattern/);
+  assert.match(source, /detailModeStatePattern/);
+  assert.match(source, /ruizhiProductModeOverride/);
+  assert.ok(source.includes("localStorage.getItem(\\`ruizhi.productMode\\`)"));
+  assert.match(source, /let ruizhiMode=ruizhiProductModeOverride\(\)/);
+  assert.ok(source.includes("localStorage.setItem(\\`ruizhi.productMode\\`,${detailName}===xS?\\`work\\`:\\`codex\\`)"));
+  assert.ok(source.includes("ruizhiMode===\\`work\\`?xS:ruizhiMode===\\`codex\\`?Pln"));
+  assert.ok(source.includes("localStorage.setItem(\\`ruizhi.productMode\\`,${nextModeName})"));
+  assert.match(source, /patchNativeProductModeSelectionPersistence\(\)/);
+});
+
 test("page enhance installer skips Codex login pages", () => {
   for (const scriptPath of [
     "resources/renderer/ruizhi-page-enhance.js",
@@ -229,7 +283,11 @@ test("packaging patches onboarding continue button and build date badge", () => 
     assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.continue", "使用锐捷继续"\]/, `${scriptPath} should patch the ChatGPT continue button label`);
     assert.match(source, /\["electron\.onboarding\.login\.chatgpt\.signIn\.streamlined", "使用锐捷继续"\]/, `${scriptPath} should patch the streamlined ChatGPT continue button label`);
     assert.match(source, /\["electron\.onboarding\.login\.includedPlans\.welcomeV2", ruizhiBuildDateLabel\(\)\]/, `${scriptPath} should replace the ChatGPT plan badge with the build date`);
+    assert.match(source, /composer\.codexAccessSplash\.title/, `${scriptPath} should patch the Codex access splash title`);
   }
+
+  const windowsOverrides = read("scripts/windows-asar-overrides.mjs");
+  assert.match(windowsOverrides, /composer\.codexAccessSplash\.title/, "Windows asar overrides should patch the Codex access splash title");
 });
 
 test("windows packaging shows Browser and Computer Use settings as available", () => {
@@ -326,6 +384,11 @@ test("bootstrap only applies narrow managed config.toml updates", () => {
     assert.match(source, /insertTopLevelTomlKeyIfMissing/, `${scriptPath} should preserve an existing ChatGPT login base URL`);
     assert.match(source, /chatgpt_login_base_url/, `${scriptPath} should seed the ChatGPT login base URL when missing`);
     assert.match(source, /ruijieChatGptLoginBaseUrl/, `${scriptPath} should use the configured login base URL`);
+    if (scriptPath === "scripts/build-macos.mjs") {
+      assert.match(source, /chatgpt_base_url/, `${scriptPath} should seed the ChatGPT backend API base URL when missing`);
+      assert.match(source, /backendApiBaseUrl/, `${scriptPath} should derive backend API base URL from the configured login base URL`);
+      assert.doesNotMatch(source, /if\(lines\[index\]!==replacement\)lines\[index\]=replacement;/, `${scriptPath} should not overwrite an existing provider base_url`);
+    }
     assert.match(source, /tomlKeyLine\("base_url",ruijieProviderBaseUrl\)|base_url = /, `${scriptPath} should write the provider base URL`);
     assert.match(source, /ruijieProviderBaseUrl/, `${scriptPath} should use the configured provider base URL`);
     assert.match(source, /chat_model_prefixes = /, `${scriptPath} should write chat model prefixes when missing`);

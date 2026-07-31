@@ -9,6 +9,7 @@ import { flipFuses, FuseVersion, FuseV1Options } from "@electron/fuses";
 import {
   patchBrowserUseIabOpenStability,
   codexClientVersionFromExe,
+  patchNativeAccountPaymentMethodsFallback,
   patchDesktopAuthAllowedUrls,
   patchNativeKeymapBindingsFallbackSource,
   patchNativePluginAuthCompatibilitySource,
@@ -970,6 +971,162 @@ function patchNativeWebviewFeatureGates() {
   log(`已打开 Codex 原生 webview gate：${path.basename(statsigFile)} (${statsigGateIds.length} 个)`);
 }
 
+function patchNativeCodexAccessPolicy() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const accountSettingsRequiredPattern =
+    /function ([A-Za-z_$][\w$]*)\(\{accountId:([A-Za-z_$][\w$]*),accountInfoError:([A-Za-z_$][\w$]*),accountInfoLoading:([A-Za-z_$][\w$]*),authMethod:([A-Za-z_$][\w$]*),plan:([A-Za-z_$][\w$]*),supportedSurface:([A-Za-z_$][\w$]*)\}\)\{return \7&&\5===`chatgpt`&&!\3&&!\4&&\2!=null&&\6!=null&&!([A-Za-z_$][\w$]*)\(\6\)\}/;
+  const personalPlanBypassPattern =
+    /:([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\)\?\{status:`allowed`,accountId:([A-Za-z_$][\w$]*)\}:([A-Za-z_$][\w$]*)==null\|\|\4\.isLoading\?/;
+  const localWorkAccessPattern =
+    /return ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),\{adminWorkModeEnabled:([A-Za-z_$][\w$]*)\.data\?\.admin_work_mode_enabled,isError:\3\.isError,isLoading:\3\.isLoading,permissions:\3\.data\?\.permissions,whamLocalAccess:\3\.data\?\.beta_settings\?\.wham_local_access\}\)/;
+  const cloudWorkspaceAccessPattern =
+    /hasWorkspaceEnabledCodex:!([A-Za-z_$][\w$]*)\|\|\(([A-Za-z_$][\w$]*)\?\.beta_settings\?\.wham_access\?\?!1\)/;
+  const accountLookupFallbackPattern =
+    /([,;])([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\?\.accountId\|\|null,([A-Za-z_$][\w$]*)=\3\?\.hasChatGptToken\?\?!1,([A-Za-z_$][\w$]*)=([A-Za-z_$][\w$]*)\?\.account_ordering\?\.\[0\]\|\|void 0/;
+  const accountAtomFallbackPattern =
+    /accountId:([A-Za-z_$][\w$]*)\?\.accountId\?\?null,accountInfoError:([A-Za-z_$][\w$]*),accountInfoLoading:([A-Za-z_$][\w$]*),authLoading:([A-Za-z_$][\w$]*)\.isLoading,authMethod:\4\.authMethod,plan:\1\?\.plan\?\?null,supportedSurface:!0/;
+  const accessFile = findOneFileByContent(
+    assetsDir,
+    /\.js$/,
+    accountSettingsRequiredPattern,
+    "Codex access policy bundle"
+  );
+
+  let didPatchSettingsRequired = false;
+  let didPatchPersonalBypass = false;
+  let didPatchLocalWorkAccess = false;
+  let didPatchCloudWorkspaceAccess = false;
+  let didPatchAccountLookupFallback = false;
+  let didPatchAccountAtomFallback = false;
+  const changed = writePatchedFileIfChanged(accessFile, (source) => {
+    let next = source.replace(
+      accountSettingsRequiredPattern,
+      (
+        match,
+        functionName,
+        accountIdName,
+        accountInfoErrorName,
+        accountInfoLoadingName,
+        authMethodName,
+        planName,
+        supportedSurfaceName
+      ) => {
+        didPatchSettingsRequired = true;
+        return `function ${functionName}({accountId:${accountIdName},accountInfoError:${accountInfoErrorName},accountInfoLoading:${accountInfoLoadingName},authMethod:${authMethodName},plan:${planName},supportedSurface:${supportedSurfaceName}}){return ${supportedSurfaceName}&&${authMethodName}===\`chatgpt\`&&!${accountInfoErrorName}&&!${accountInfoLoadingName}&&${accountIdName}!=null&&${planName}!=null}`;
+      }
+    );
+    next = next.replace(
+      personalPlanBypassPattern,
+      (_match, _isPersonalPlanName, planName, accountIdName, workspaceSettingsName) => {
+        didPatchPersonalBypass = true;
+        return `:${workspaceSettingsName}==null||${workspaceSettingsName}.isLoading?`;
+      }
+    );
+    next = next.replace(
+      localWorkAccessPattern,
+      (_match, accessPolicyName, accountStateName, settingsQueryName) => {
+        didPatchLocalWorkAccess = true;
+        return `return ${accessPolicyName}(${accountStateName},{adminWorkModeEnabled:!0,isError:!1,isLoading:!1,permissions:${settingsQueryName}.data?.permissions,whamLocalAccess:!0})`;
+      }
+    );
+    next = next.replace(
+      cloudWorkspaceAccessPattern,
+      (_match, personalPlanName, workspaceSettingsName) => {
+        didPatchCloudWorkspaceAccess = true;
+        return `hasWorkspaceEnabledCodex:!0`;
+      }
+    );
+    next = next.replace(
+      accountLookupFallbackPattern,
+      (_match, separator, accountIdName, accountInfoName, hasTokenName, orderingName, accountsName) => {
+        didPatchAccountLookupFallback = true;
+        return `${separator}${accountIdName}=${accountInfoName}?.accountId||\`ruizhi-local-chatgpt\`/*ruizhiChatGptAccountInfoFallback*/,${hasTokenName}=${accountInfoName}?.hasChatGptToken??!0,${orderingName}=${accountsName}?.account_ordering?.[0]||${accountIdName}`;
+      }
+    );
+    next = next.replace(
+      accountAtomFallbackPattern,
+      (_match, accountInfoName, accountInfoErrorName, accountInfoLoadingName, authName) => {
+        didPatchAccountAtomFallback = true;
+        return `accountId:${accountInfoName}?.accountId??\`ruizhi-local-chatgpt\`/*ruizhiChatGptAccountAtomFallback*/,accountInfoError:${accountInfoErrorName},accountInfoLoading:${accountInfoLoadingName},authLoading:${authName}.isLoading,authMethod:${authName}.authMethod,plan:${accountInfoName}?.plan??${authName}.planAtLogin??\`plus\`,supportedSurface:!0`;
+      }
+    );
+    return next;
+  });
+
+  if (
+    !didPatchSettingsRequired
+    || !didPatchPersonalBypass
+    || !didPatchLocalWorkAccess
+    || !didPatchCloudWorkspaceAccess
+    || !didPatchAccountLookupFallback
+    || !didPatchAccountAtomFallback
+  ) {
+    throw new Error("Codex access policy patch point not found");
+  }
+
+  log(`已打开 ChatGPT 认证下的 Codex 本地编码/Work 访问：${path.basename(accessFile)} (${changed ? "changed" : "already current"})`);
+}
+
+function patchNativeProductModeSelectionPersistence() {
+  const assetsDir = path.join(extractedDir, "webview", "assets");
+  const modeResolverPattern =
+    /function ([A-Za-z_$][\w$]*)\(\{configuredThreadDetailLevel:([A-Za-z_$][\w$]*),onboardingWorkMode:([A-Za-z_$][\w$]*),threadDetailLevel:([A-Za-z_$][\w$]*)\}\)\{return \2==null&&\3===`non_coding`\|\|\4===`STEPS_PROSE`\?`work`:`codex`\}/;
+  const modeSelectPattern =
+    /case`error`:return\}if\(([A-Za-z_$][\w$]*)===([A-Za-z_$][\w$]*)\)return;([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*)\);/;
+  const detailModeSetterPattern =
+    /function ([A-Za-z_$][\w$]*)\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)\{let ([A-Za-z_$][\w$]*)=\2\.get\(([A-Za-z_$][\w$]*)\),([A-Za-z_$][\w$]*)=\{detailLevel:\3\};\2\.set\(([A-Za-z_$][\w$]*),\6\);/;
+  const detailModeStatePattern =
+    /([A-Za-z_$][\w$]*)=Da\(Q,\(\)=>null\),([A-Za-z_$][\w$]*)=Pa\(Q,\(\{get:([A-Za-z_$][\w$]*)\}\)=>\{let ([A-Za-z_$][\w$]*)=\3\(\1\)\?\.detailLevel\?\?Mln\(xp\(\3,WEe\.conversationDetailMode\)\),([A-Za-z_$][\w$]*)=\3\(hS\);/;
+  const modeFile = findOneFileByContent(
+    assetsDir,
+    /\.js$/,
+    modeResolverPattern,
+    "Codex product mode selector bundle"
+  );
+
+  let didPatchResolver = false;
+  let didPatchSelection = false;
+  let didPatchDetailSetter = false;
+  let didPatchDetailState = false;
+  const changed = writePatchedFileIfChanged(modeFile, (source) => {
+    let next = source.replace(
+      modeResolverPattern,
+      (_match, resolverName, configuredName, onboardingName, detailName) => {
+        didPatchResolver = true;
+        return `function ruizhiProductModeOverride(){try{let e=localStorage.getItem(\`ruizhi.productMode\`);return e===\`work\`||e===\`codex\`?e:null}catch{return null}}function ${resolverName}({configuredThreadDetailLevel:${configuredName},onboardingWorkMode:${onboardingName},threadDetailLevel:${detailName}}){let ruizhiMode=ruizhiProductModeOverride();return ruizhiMode??(${configuredName}==null&&${onboardingName}===\`non_coding\`||${detailName}===\`STEPS_PROSE\`?\`work\`:\`codex\`)}`;
+      }
+    );
+    next = next.replace(
+      modeSelectPattern,
+      (_match, nextModeName, currentModeName, resetName, storeName) => {
+        didPatchSelection = true;
+        return `case\`error\`:return}try{localStorage.setItem(\`ruizhi.productMode\`,${nextModeName})}catch{}if(${nextModeName}===${currentModeName})return;${resetName}(${storeName});`;
+      }
+    );
+    next = next.replace(
+      detailModeSetterPattern,
+      (_match, setterName, storeName, detailName, previousName, detailAtomName, optimisticName, pendingAtomName) => {
+        didPatchDetailSetter = true;
+        return `function ${setterName}(${storeName},${detailName}){try{localStorage.setItem(\`ruizhi.productMode\`,${detailName}===xS?\`work\`:\`codex\`)}catch{}let ${previousName}=${storeName}.get(${detailAtomName}),${optimisticName}={detailLevel:${detailName}};${storeName}.set(${pendingAtomName},${optimisticName});`;
+      }
+    );
+    next = next.replace(
+      detailModeStatePattern,
+      (_match, pendingAtomName, detailAtomName, getName, detailName, workModeName) => {
+        didPatchDetailState = true;
+        return `${pendingAtomName}=Da(Q,()=>null),${detailAtomName}=Pa(Q,({get:${getName}})=>{let ruizhiMode=ruizhiProductModeOverride(),${detailName}=${getName}(${pendingAtomName})?.detailLevel??(ruizhiMode===\`work\`?xS:ruizhiMode===\`codex\`?Pln:Mln(xp(${getName},WEe.conversationDetailMode))),${workModeName}=${getName}(hS);`;
+      }
+    );
+    return next;
+  });
+
+  if (!didPatchResolver || !didPatchSelection || !didPatchDetailSetter || !didPatchDetailState) {
+    throw new Error("Codex product mode persistence patch point not found");
+  }
+
+  log(`已持久化 Codex Work/编码模式选择：${path.basename(modeFile)} (${changed ? "changed" : "already current"})`);
+}
+
 function patchNativeStatsigNetwork() {
   const assetsDir = path.join(extractedDir, "webview", "assets");
   const statsigNetworkPattern = /networkConfig:\{api:([A-Za-z_$][\w$]*),logEventUrl:([A-Za-z_$][\w$]*),sdkExceptionUrl:([A-Za-z_$][\w$]*),networkOverrideFunc:([A-Za-z_$][\w$]*)\}/;
@@ -1779,6 +1936,9 @@ function replaceBrandInVisibleText(value) {
 }
 
 function replaceLocalizedVisibleText(id, value) {
+  if (id === "composer.codexAccessSplash.title") {
+    return `用${codingProductName()}将开发任务从想法推进到合并请求`;
+  }
   if (id === "sidebarElectron.productMode.chatGptWork") {
     return `<chatGpt>${shortProductName()}</chatGpt> <work>工作</work>`;
   }
@@ -2135,6 +2295,20 @@ function ruizhiInit(){
     const explicitRuizhiHome=(process.env[ruizhiHomeEnvName]||"").trim();
     const codexHome=explicitRuizhiHome||path.join(home,ruizhiDefaultHomeDirName);
     const userData=(process.env.CODEX_ELECTRON_USER_DATA_PATH||"").trim()||defaultUserDataPath();
+    const initialConfigPath=path.join(codexHome,"config.toml");
+    const initialConfigSource=fs.existsSync(initialConfigPath)?fs.readFileSync(initialConfigPath,"utf8"):"";
+    function readProviderTomlString(source,providerName,key){
+      const lines=tomlLines(source);
+      const table=findTomlTable(lines,"[model_providers."+providerName+"]");
+      if(!table)return "";
+      for(let index=table.start+1;index<table.end;index+=1){
+        if(tomlKey(lines[index])===key)return tomlValue(lines[index]);
+      }
+      return "";
+    }
+    const runtimeChatGptLoginBaseUrl=readTopLevelTomlString(initialConfigSource,"chatgpt_login_base_url")||ruijieChatGptLoginBaseUrl;
+    const runtimeChatGptBackendApiBaseUrl=readTopLevelTomlString(initialConfigSource,"chatgpt_base_url")||backendApiBaseUrl(runtimeChatGptLoginBaseUrl);
+    const runtimeOpenAIBaseUrl=readProviderTomlString(initialConfigSource,"ruijie-uniapi","base_url")||openaiBaseUrl;
     try{${electronName}.app.commandLine.appendSwitch("user-data-dir",userData)}catch{}
     function stableModelBridgePort(basePort,seed){
       let hash=0;
@@ -2163,7 +2337,7 @@ function ruizhiInit(){
       const bridge=require(scriptPath).startRuizhiResponsesBridge({
         host:modelBridgeConfig.host,
         port:modelBridgeConfig.port,
-        upstreamBaseUrl:openaiBaseUrl,
+        upstreamBaseUrl:runtimeOpenAIBaseUrl,
         authHome:codexHome,
         catalogPath:path.join(codexHome,userModelCatalogFile),
         routes:modelBridgeConfig.routes
@@ -2175,13 +2349,15 @@ function ruizhiInit(){
     syncModelCache();
     watchModelCatalogCache();
     const runtimeBridgeBaseUrl=startModelBridge();
-    const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||modelProviderBaseUrl;
+    const runtimeModelProviderBaseUrl=runtimeBridgeBaseUrl||runtimeOpenAIBaseUrl||modelProviderBaseUrl;
     process.env[ruizhiHomeEnvName]=codexHome;
     process.env.CODEX_HOME=codexHome;
     process.env.CODEX_ELECTRON_USER_DATA_PATH=userData;
-    process.env.CODEX_API_BASE_URL=chatGptBackendApiBaseUrl;
-    process.env.RUIZHI_PLATFORM_BASE_URL=chatGptBackendApiBaseUrl;
-    process.env.RUIZHI_OPENAI_BASE_URL=openaiBaseUrl;
+    process.env.CODEX_API_BASE_URL=runtimeChatGptBackendApiBaseUrl;
+    process.env.RUIZHI_PLATFORM_BASE_URL=runtimeChatGptLoginBaseUrl;
+    process.env.RUIZHI_CHATGPT_LOGIN_BASE_URL=runtimeChatGptLoginBaseUrl;
+    process.env.RUIZHI_OPENAI_BASE_URL=runtimeOpenAIBaseUrl;
+    process.env.RUIZHI_CHATGPT_BACKEND_API_BASE_URL=runtimeChatGptBackendApiBaseUrl;
     process.env.RUIZHI_MODEL_PROVIDER_BASE_URL=runtimeModelProviderBaseUrl;
     process.env.RUIZHI_IMAGEGEN_EXE=path.join(resourcesRoot,"bin",imageGenHelper);
     process.env.LANG=${jsonLiteral(`${posixLocale}.UTF-8`)};
@@ -2579,6 +2755,21 @@ function ruizhiInit(){
       lines.splice(insertAt,0,next);
       return joinTomlLines(lines);
     }
+    function readTopLevelTomlString(source,key){
+      const lines=tomlLines(source);
+      let firstTable=lines.length;
+      for(let index=0;index<lines.length;index+=1){
+        if(isTomlHeader(lines[index])){firstTable=index;break;}
+      }
+      for(let index=0;index<firstTable;index+=1){
+        if(tomlKey(lines[index])===key)return tomlValue(lines[index]);
+      }
+      return "";
+    }
+    function backendApiBaseUrl(loginBaseUrl){
+      const base=String(loginBaseUrl||"").trim().replace(/\\/+$/,"");
+      return base.endsWith("/backend-api")?base:base+"/backend-api";
+    }
     function patchRuijieProviderConfig(source){
       const header="[model_providers.ruijie-uniapi]";
       const lines=tomlLines(source);
@@ -2614,8 +2805,6 @@ function ruizhiInit(){
       let baseUrlPatched=false;
       for(let index=start+1;index<end;index+=1){
         if(tomlKey(lines[index])==="base_url"){
-          const replacement=tomlKeyLine("base_url",ruijieProviderBaseUrl);
-          if(lines[index]!==replacement)lines[index]=replacement;
           baseUrlPatched=true;
           break;
         }
@@ -2686,7 +2875,9 @@ function ruizhiInit(){
       const existing=fs.readFileSync(configPath,"utf8");
       syncRuijieUniApiKeyEnvFromConfig(existing);
       const withLoginBase=insertTopLevelTomlKeyIfMissing(existing,"chatgpt_login_base_url",ruijieChatGptLoginBaseUrl);
-      const next=patchRuijieProviderConfig(withLoginBase);
+      const loginBase=readTopLevelTomlString(withLoginBase,"chatgpt_login_base_url")||ruijieChatGptLoginBaseUrl;
+      const withBackendBase=insertTopLevelTomlKeyIfMissing(withLoginBase,"chatgpt_base_url",backendApiBaseUrl(loginBase));
+      const next=patchRuijieProviderConfig(withBackendBase);
       if(next!==existing)fs.writeFileSync(configPath,next,"utf8");
     }
     function readPluginVersion(root){
@@ -3033,6 +3224,14 @@ function ruizhiStartBackgroundUpdateCheck(){
       setImmediate(()=>autoUpdater.quitAndInstall());
       return {ok:true};
     });
+    ${electronName}.ipcMain.handle("ruizhi:window:reload-ignoring-cache",event=>{
+      try{
+        event.sender.reloadIgnoringCache();
+        return {ok:true};
+      }catch(error){
+        return {ok:false,error:String(error?.message||error)};
+      }
+    });
     registerRuizhiAuthIpc();
     registerRuizhiEnhanceIpc();
   }
@@ -3187,6 +3386,43 @@ ${pageEnhanceRendererInstallerSource()}
   }
   onReady(injectRuizhiWalletDetails);
   onReady(injectRuizhiPageEnhance);
+  function installPostLoginAccessRefresh(){
+    const reloadKey="ruizhi.postLoginAccessRefresh.v2."+appVersion;
+    const hasAccessDeniedText=()=>{
+      const text=String(document.body?.innerText||"");
+      return /You don.?t have access to .*Codex yet/i.test(text)||/Contact your admin to request access/i.test(text);
+    };
+    const refreshIfAuthenticated=async()=>{
+      if(disposed||!hasAccessDeniedText())return false;
+      let status=null;
+      try{status=await ipcRenderer.invoke("ruizhi:auth:get");}catch{}
+      if(!status?.configured)return false;
+      try{
+        const attempts=Number(sessionStorage.getItem(reloadKey)||"0");
+        if(attempts>=8)return false;
+        sessionStorage.setItem(reloadKey,String(attempts+1));
+      }catch{}
+      try{
+        await ipcRenderer.invoke("ruizhi:window:reload-ignoring-cache");
+      }catch{
+        location.reload();
+      }
+      return true;
+    };
+    const timers=[];
+    const schedule=(delay)=>{
+      const timer=setTimeout(()=>{refreshIfAuthenticated().catch(()=>{});},delay);
+      timers.push(timer);
+    };
+    for(const delay of [500,1500,3000,6000,10000])schedule(delay);
+    const observer=new MutationObserver(()=>{refreshIfAuthenticated().catch(()=>{});});
+    if(document.body)observer.observe(document.body,{childList:true,subtree:true,characterData:true});
+    addCleanup(()=>{
+      for(const timer of timers)clearTimeout(timer);
+      observer.disconnect();
+    });
+  }
+  onReady(installPostLoginAccessRefresh);
 
   function onUpdateStateChanged(_event,next){
     if(disposed)return;
@@ -3351,6 +3587,8 @@ async function repackAppAsar() {
 
   patchPluginAccountGate();
   patchNativeWebviewFeatureGates();
+  patchNativeCodexAccessPolicy();
+  patchNativeProductModeSelectionPersistence();
   patchNativeStatsigNetwork();
   patchNativeStatsigBootstrap();
   patchNativeCesAnalyticsNetwork();
@@ -3368,6 +3606,7 @@ async function repackAppAsar() {
   patchNativeExternalLinkHrefFallback();
   patchNativeProfileDropdownUsageUpsell();
   patchDesktopAuthAllowedUrls(extractedDir, buildChatGptLoginBaseUrl, { log });
+  patchNativeAccountPaymentMethodsFallback(extractedDir, { log });
   patchNativeProfileApiCallLogging();
   try {
     patchPluginSkillLocalListFallback(extractedDir, { log });
@@ -3505,12 +3744,18 @@ function wrapMacosExecutableWithRuizhiUserData() {
   const wrapper = `#!/bin/sh
 APP_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 USER_DATA_DIR="\${CODEX_ELECTRON_USER_DATA_PATH:-$HOME/Library/Application Support/${electronUserDataDirName}}"
+REMOTE_DEBUGGING_PORT="\${RUIZHI_REMOTE_DEBUGGING_PORT:-9223}"
 HAS_USER_DATA_DIR=0
+HAS_REMOTE_DEBUGGING_PORT=0
 for ARG in "$@"; do
   case "$ARG" in
     --user-data-dir|--user-data-dir=*) HAS_USER_DATA_DIR=1 ;;
+    --remote-debugging-port|--remote-debugging-port=*) HAS_REMOTE_DEBUGGING_PORT=1 ;;
   esac
 done
+if [ "$HAS_REMOTE_DEBUGGING_PORT" = "0" ] && [ -n "$REMOTE_DEBUGGING_PORT" ] && [ "$REMOTE_DEBUGGING_PORT" != "0" ]; then
+  set -- "--remote-debugging-port=$REMOTE_DEBUGGING_PORT" "$@"
+fi
 if [ "$HAS_USER_DATA_DIR" = "1" ]; then
   exec "$APP_DIR/${wrappedExecutableName}" "$@"
 else
